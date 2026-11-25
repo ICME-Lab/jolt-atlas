@@ -267,23 +267,21 @@ impl Lookup {
                 .zip(mix)
                 .map(|((_, q), &w)| {
                     let addresses = q.witness().0;
-                    let cols: Vec<Vec<F>> = digits
+                    let cols: Vec<_> = digits
                         .iter()
                         .map(|(shift, weights)| {
-                            addresses
-                                .iter()
-                                .map(|&i| weights[(i >> shift) & (weights.len() - 1)])
-                                .collect()
+                            let shift = *shift;
+                            let weights = weights.clone();
+                            Column::source(addresses.len(), move |i| {
+                                weights[(addresses[i] >> shift) & (weights.len() - 1)]
+                            })
                         })
-                        .chain(std::iter::once(weights(&q.cell)))
+                        .chain(std::iter::once(Column::equality(&q.cell)))
                         .collect();
                     let sum = (0..addresses.len())
-                        .map(|i| cols.iter().map(|c| c[i]).product::<F>())
+                        .map(|i| cols.iter().map(|c| c.at(i)).product::<F>())
                         .sum::<F>();
-                    (
-                        w * sum,
-                        cols.into_iter().map(Column::owned).collect::<Vec<_>>(),
-                    )
+                    (w * sum, cols)
                 })
                 .unzip();
             columns = prepared;

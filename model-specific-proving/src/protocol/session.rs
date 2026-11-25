@@ -347,6 +347,7 @@ pub(crate) fn query_weight<F: JoltField>(claims: &[Claim<F>], mix: &[F], point: 
 pub(crate) enum Column<'a, F: Clone> {
     Field(Cow<'a, [F]>, usize, usize),
     Bits(&'a [u8], usize),
+    Source(Box<dyn Fn(usize) -> F + Send + Sync + 'a>, usize, Option<F>),
 }
 
 impl<'a, F: JoltField> Column<'a, F> {
@@ -363,10 +364,25 @@ impl<'a, F: JoltField> Column<'a, F> {
         Self::Field(values, 1, copies)
     }
 
+    pub(crate) fn source(len: usize, read: impl Fn(usize) -> F + Send + Sync + 'a) -> Self {
+        Self::Source(Box::new(read), len, None)
+    }
+
+    pub(crate) fn equality(point: &[F]) -> Self {
+        let (prefix, suffix) = point.split_at(point.len() / 2);
+        let high = weights(prefix);
+        let low = weights(suffix);
+        let width = low.len();
+        Self::source(high.len() * width, move |i| {
+            high[i / width] * low[i % width]
+        })
+    }
+
     fn len(&self) -> usize {
         match self {
             Self::Field(v, width, copies) => v.len() * width * copies,
             Self::Bits(v, copies) => v.len() * copies,
+            Self::Source(_, len, _) => *len,
         }
     }
 
@@ -377,6 +393,11 @@ impl<'a, F: JoltField> Column<'a, F> {
             Self::Field(v, _, _) => v[i & (v.len() - 1)],
             Self::Bits(v, 1) => F::from_bool(v[i] != 0),
             Self::Bits(v, _) => F::from_bool(v[i & (v.len() - 1)] != 0),
+            Self::Source(read, _, None) => read(i),
+            Self::Source(read, half, Some(r)) => {
+                let low = read(i);
+                low + *r * (read(i + half) - low)
+            }
         }
     }
 
@@ -385,13 +406,17 @@ impl<'a, F: JoltField> Column<'a, F> {
             Self::Field(_, _, copies) | Self::Bits(_, copies) if *copies > 1 => *copies /= 2,
             Self::Field(values, width, _) if values.len() == 1 => *width /= 2,
             Self::Field(values, _, _) => bind_halves(values.to_mut(), r),
-            bits => {
-                let half = bits.len() / 2;
+            Self::Source(_, len, first @ None) => {
+                *first = Some(r);
+                *len /= 2;
+            }
+            column => {
+                let half = column.len() / 2;
                 let bind = |i| {
-                    let a = bits.at(i);
-                    a + r * (bits.at(i + half) - a)
+                    let a = column.at(i);
+                    a + r * (column.at(i + half) - a)
                 };
-                *bits = Self::owned(if half >= PARALLEL_ROUND_SIZE {
+                *column = Self::owned(if half >= PARALLEL_ROUND_SIZE {
                     (0..half)
                         .into_par_iter()
                         .with_min_len(ROUND_CHUNK_SIZE)

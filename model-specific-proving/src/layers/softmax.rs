@@ -1,4 +1,3 @@
-use jolt_poly::MultilinearPoly;
 use jolt_transcript::Transcript;
 use rayon::prelude::*;
 
@@ -37,7 +36,7 @@ pub(crate) struct Softmax<'a> {
 
 pub(crate) struct SoftmaxTrace<F> {
     pub(crate) output: Vec<i32>,
-    cells: [Vec<F>; 6],
+    shifts: Vec<i64>,
     rows: [Vec<F>; 3],
     indices: Vec<usize>,
 }
@@ -108,6 +107,25 @@ impl<'a> Softmax<'a> {
         }
     }
 
+    fn masks_at<F: ProofField>(&self, point: &[F]) -> (F, F) {
+        let (row, col) = point.split_at(self.shape.row_vars());
+        let columns = weights(col);
+        let mut prefix = vec![F::zero()];
+        let mut total = F::zero();
+        for &weight in &columns {
+            total += weight;
+            prefix.push(total);
+        }
+        let mut mask = F::zero();
+        let mut first = F::zero();
+        for (row, weight) in weights(row).into_iter().take(self.shape.rows).enumerate() {
+            let active = self.active(row);
+            mask += weight * (prefix[active.end] - prefix[active.start]);
+            first += weight * columns[active.start];
+        }
+        (mask, first)
+    }
+
     pub(crate) fn bind(&self, t: &mut impl Transcript) {
         let mask = match self.mask {
             SoftmaxMask::Full => 0,
@@ -129,8 +147,10 @@ impl<'a> Softmax<'a> {
         let last = (self.tables.sums.len() - 1) as i64;
         let limit = i64::from(self.tables.limit);
         let mut output = Vec::with_capacity(x.len());
-        let mut raw_rows: [Vec<i128>; 3] = std::array::from_fn(|_| Vec::new());
-        let mut raw_cells: [Vec<i64>; 6] = std::array::from_fn(|_| Vec::new());
+        let mut raw_rows: [Vec<i64>; 3] = std::array::from_fn(|_| Vec::new());
+        let stride = self.shape.width.next_power_of_two();
+        let mut indices = vec![0; 1 << self.shape.vars()];
+        let mut excess = Vec::with_capacity(x.len());
         let sums = Table::Slice(self.tables.sums);
         for (r, row) in x.chunks_exact(self.shape.width).enumerate() {
             let active = self.active(r);
@@ -153,7 +173,7 @@ impl<'a> Softmax<'a> {
             let gap = limit - sum(lo, sums);
             let prev = sum(lo, self.previous) - limit - 1;
             for (c, v) in raw_rows.iter_mut().zip([lo, gap, prev]) {
-                c.push(i128::from(v));
+                c.push(v);
             }
             for (i, &score) in row.iter().enumerate() {
                 let real = active.contains(&i);
@@ -161,48 +181,23 @@ impl<'a> Softmax<'a> {
                 let index = difference.min(last) as usize;
                 let prob = self.tables.probabilities[index];
                 output.push(if real { prob } else { 0 });
-                for (c, v) in raw_cells.iter_mut().zip([
-                    i64::from(score),
-                    index as i64,
-                    i64::from(prob),
-                    i64::from(self.tables.sums[index]),
-                    i64::from(self.previous.at(index)),
-                    difference - index as i64,
-                ]) {
-                    c.push(v);
-                }
+                indices[r * stride + i] = index;
+                excess.push(difference - index as i64);
             }
         }
-        let indices = self.shape.padded(&raw_cells[1], 0, |i| i as usize);
         self.lookup.record(advice, &indices)?;
         self.rows
             .record(advice, &raw_rows.each_ref().map(Vec::as_slice))?;
-        let excess: Vec<_> = raw_cells[5].iter().copied().map(i128::from).collect();
         self.excess.record(advice, &[&excess])?;
-        let pad = [
-            0,
-            0,
-            self.tables.probabilities[0],
-            self.tables.sums[0],
-            self.previous.at(0),
-            0,
-        ];
-        let mut raw = raw_cells.into_iter();
-        let cells = pad.map(|value| {
-            self.shape.padded(
-                &raw.next().expect("one column per pad value"),
-                F::from_i32(value),
-                F::from_i64,
-            )
-        });
         let row_shape = Shape {
             rows: self.shape.rows,
             width: 1,
         };
-        let rows = raw_rows.map(|c| row_shape.padded(&c, F::zero(), F::from_i128));
+        let shifts = raw_rows[0].clone();
+        let rows = raw_rows.map(|c| row_shape.padded(&c, F::zero(), F::from_i64));
         Ok(SoftmaxTrace {
             output,
-            cells,
+            shifts,
             rows,
             indices,
         })
@@ -211,7 +206,7 @@ impl<'a> Softmax<'a> {
     pub(crate) fn reverse<'w, F: ProofField>(
         &self,
         claims: &[Claim<F>],
-        trace: impl Fn(usize) -> &'w SoftmaxTrace<F> + Sync,
+        trace: impl Fn(usize) -> (&'w SoftmaxTrace<F>, &'w [i32]) + Sync,
         io: &mut Session<'_, '_, F>,
     ) -> Result<Vec<(Claim<F>, SoftmaxRead<F>)>> {
         let vars = self.shape.vars();
@@ -223,13 +218,6 @@ impl<'a> Softmax<'a> {
         let total = io.challenge(rows)?;
         let limit = F::from_i32(self.tables.limit);
         let last = F::from_u64((self.tables.sums.len() - 1) as u64);
-        let mut mask = vec![F::zero(); 1 << vars];
-        let mut first = mask.clone();
-        for r in 0..self.shape.rows {
-            let active = self.active(r);
-            first[r * stride + active.start] = F::one();
-            mask[r * stride + active.start..r * stride + active.end].fill(F::one());
-        }
         let expression = |v: &[F]| {
             let condition = v[6] - v[0] - v[1] - v[5] + mix[0] * v[5] * (v[1] - last);
             let sum = v[9] * (mix[1] * v[3] + mix[2] * v[4])
@@ -239,14 +227,42 @@ impl<'a> Softmax<'a> {
         let batch = io.point(claims.len())?;
         let sum = dot(claims.iter().map(|q| q.value), batch.iter().copied());
         let columns = |i: usize| {
-            let t = trace(i);
+            let (t, scores) = trace(i);
+            let score = move |row, col| {
+                if row < self.shape.rows && col < self.shape.width {
+                    i64::from(scores[row * self.shape.width + col])
+                } else {
+                    0
+                }
+            };
+            let size = 1 << vars;
             std::array::from_fn::<_, 14, _>(|j| match j {
-                0..=5 => Column::borrowed(&t.cells[j]),
+                0 => Column::source(size, move |i| F::from_i64(score(i / stride, i % stride))),
+                1 => Column::source(size, move |i| F::from_u64(t.indices[i] as u64)),
+                2 => Column::source(size, move |i| {
+                    F::from_i32(self.tables.probabilities[t.indices[i]])
+                }),
+                3 => Column::source(size, move |i| F::from_i32(self.tables.sums[t.indices[i]])),
+                4 => Column::source(size, move |i| F::from_i32(self.previous.at(t.indices[i]))),
+                5 => Column::source(size, move |i| {
+                    let (row, col) = (i / stride, i % stride);
+                    if row < self.shape.rows && self.active(row).contains(&col) {
+                        F::from_i64(t.shifts[row] - score(row, col) - t.indices[i] as i64)
+                    } else {
+                        F::zero()
+                    }
+                }),
                 6..=8 => Column::rows(t.rows[j - 6].as_slice().into(), stride),
-                9 => Column::borrowed(&mask),
-                10 => Column::borrowed(&first),
-                11 => Column::owned(weights(&claims[i].point)),
-                12 => Column::owned(weights(&clamp)),
+                9 => Column::source(size, |i| {
+                    let row = i / stride;
+                    F::from_bool(row < self.shape.rows && self.active(row).contains(&(i % stride)))
+                }),
+                10 => Column::source(size, |i| {
+                    let row = i / stride;
+                    F::from_bool(row < self.shape.rows && self.active(row).start == i % stride)
+                }),
+                11 => Column::equality(&claims[i].point),
+                12 => Column::equality(&clamp),
                 _ => Column::rows(weights(&total).into(), stride),
             })
         };
@@ -260,9 +276,10 @@ impl<'a> Softmax<'a> {
         let point = &end.challenges;
         io.check_value(&end, || {
             let mut x = [F::zero(); 14];
+            let (mask, first) = self.masks_at(point);
             x[9..].copy_from_slice(&[
-                mask.as_slice().evaluate(point),
-                first.as_slice().evaluate(point),
+                mask,
+                first,
                 F::zero(),
                 eq(&clamp, point),
                 eq(&total, &point[..rows]),

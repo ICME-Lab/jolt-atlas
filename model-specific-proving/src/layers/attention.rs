@@ -342,10 +342,14 @@ impl<'a> AttentionPlan<'a> {
             probabilities.push(p);
             vals[group].push(v);
         }
-        let softmax =
-            self.heads[0]
-                .softmax
-                .reverse(&probabilities, |i| &t().heads[i].softmax, io)?;
+        let softmax = self.heads[0].softmax.reverse(
+            &probabilities,
+            |i| {
+                let head = &t().heads[i];
+                (&head.softmax, head.score.output.as_slice())
+            },
+            io,
+        )?;
         let mut reads = Vec::with_capacity(self.heads.len());
         for (i, (h, (score, read))) in self.heads.iter().zip(softmax).enumerate() {
             let group = i / self.group_size;

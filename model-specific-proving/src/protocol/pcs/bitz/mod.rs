@@ -1,4 +1,5 @@
 mod field;
+mod layout;
 
 use std::sync::OnceLock;
 
@@ -17,96 +18,140 @@ use field::{BitzField as F, Fq};
 
 const ROW_VARS: usize = 7;
 const ROWS: usize = 1 << ROW_VARS;
-const DOMAIN: &[u8] = b"atlas/model-specific/world-bitz";
+const DOMAIN: &[u8] = b"atlas/model-specific/world-bitz/groups/v1";
 
 pub struct BitzScheme;
+
+#[cfg(feature = "bitz-lookup-bits")]
+pub(super) use field::BitzField;
 
 impl ModelPcs for BitzScheme {
     type Field = F;
     const MIN_FIELD_BITS: u32 = 0;
     type AdviceProverSetup = ();
     type AdviceVerifierSetup = ();
-    type AdviceCommitments = [u8; 32];
-    type AdviceState = (Vec<F128>, ProverData, world_transcript::ProverState);
-    type AdviceOpening = (Messages<F>, WorldProof);
-
-    type AdvicePlan = (Vec<usize>, BitZParams<Fq>, Pcs);
+    type AdviceCommitments = Vec<[u8; 32]>;
+    type AdviceState = Vec<(Vec<F128>, ProverData, world_transcript::ProverState)>;
+    type AdviceOpening = (Messages<F>, Vec<WorldProof>);
+    type AdvicePlan = layout::Plan;
 
     fn plan(layout: &Layout) -> Result<Self::AdvicePlan> {
-        static GENERATOR: OnceLock<F128> = OnceLock::new();
-        let (vars, offsets) = layout.place(ROW_VARS)?;
-        let vars = vars.max(world_common::shape::MIN_LOG_BITS);
-        let shape = Shape::new(ROW_VARS, vars - ROW_VARS).map_err(|_| "invalid BitZ shape")?;
-        let params = BitZParams::new(shape, *GENERATOR.get_or_init(smallest_generator))
-            .map_err(|_| "invalid BitZ parameters")?;
-        let pcs = Pcs::new(&shape, SecurityLevel::Bits128).map_err(|_| "unsupported BitZ size")?;
-        Ok((offsets, params, pcs))
+        layout::Plan::new(layout)
     }
 
     fn commit(
         layout: &Layout,
         advice: &mut Advice,
-        (offsets, _, pcs): &Self::AdvicePlan,
+        plan: &Self::AdvicePlan,
         _: &(),
-    ) -> Result<([u8; 32], Self::AdviceState)> {
-        let mut packed = F128::zeroed_vec(pcs.packed_len());
-        for &slot in &layout.slots {
+    ) -> Result<(Self::AdviceCommitments, Self::AdviceState)> {
+        let mut packed: Vec<_> = plan
+            .groups
+            .iter()
+            .map(|(_, pcs)| F128::zeroed_vec(pcs.packed_len()))
+            .collect();
+        for slot in layout
+            .slots
+            .iter()
+            .copied()
+            .filter(|&slot| layout.active(slot))
+        {
             let cells = 1 << slot.cell_vars;
+            let (group, offset) = plan.slots[slot.id];
             advice.fill_bits(slot, |i| {
-                let i = offsets[slot.id] + i / cells * cells.max(ROWS) + i % cells;
-                let word = &mut packed[i / ROWS];
+                let i = offset + i / cells * cells.max(ROWS) + i % cells;
+                let word = &mut packed[group][i / ROWS];
                 *word = F128::from(word.to_u128() | (1 << (i % ROWS)));
             })?;
         }
-        let mut transcript = build_prover(DOMAIN, b"" as &[u8]);
-        let (root, data) = pcs
-            .commit(&packed, &mut transcript)
-            .map_err(|_| "BitZ commitment failed")?;
-        Ok((root.0, (packed, data, transcript)))
+        packed
+            .into_iter()
+            .zip(&plan.groups)
+            .map(|(packed, (_, pcs))| {
+                let mut transcript = build_prover(DOMAIN, b"" as &[u8]);
+                let (root, data) = pcs
+                    .commit(&packed, &mut transcript)
+                    .map_err(|_| "BitZ commitment failed")?;
+                Ok((root.0, (packed, data, transcript)))
+            })
+            .collect()
     }
 
-    fn bind(root: &[u8; 32], t: &mut impl Transcript) {
+    fn bind(roots: &Self::AdviceCommitments, t: &mut impl Transcript) {
         t.append_bytes(DOMAIN);
-        t.append_bytes(root);
+        t.append(&(roots.len() as u64));
+        for root in roots {
+            t.append_bytes(root);
+        }
     }
 
     fn open(
         layout: &Layout,
         openings: Vec<Opening<F>>,
-        _: &[u8; 32],
-        (packed, data, mut transcript): Self::AdviceState,
-        (offsets, params, pcs): &Self::AdvicePlan,
+        _: &Self::AdviceCommitments,
+        state: Self::AdviceState,
+        plan: &Self::AdvicePlan,
         _: &(),
         t: &mut ProverState<Keccak>,
     ) -> Result<Self::AdviceOpening> {
         let mut messages = Messages::default();
         let mut io = Session::prove(F::prover(t), &mut messages);
-        let claim = batch(layout, openings, offsets, params, Some(&packed), &mut io)?;
-        world_prover::BitZProver::new(*params, 8)
-            .prove(&claim, pcs, &data, packed, &mut transcript)
-            .map_err(|_| "BitZ opening failed")?;
-        Ok((messages, transcript.finish()))
+        let proofs = plan
+            .queries(openings)
+            .into_iter()
+            .zip(state)
+            .zip(&plan.groups)
+            .map(
+                |((requests, (packed, data, mut transcript)), (params, pcs))| {
+                    let claim = batch(
+                        layout,
+                        requests,
+                        &plan.slots,
+                        params,
+                        Some(&packed),
+                        &mut io,
+                    )?;
+                    world_prover::BitZProver::new(*params, 8)
+                        .prove(&claim, pcs, &data, packed, &mut transcript)
+                        .map_err(|_| "BitZ opening failed")?;
+                    Ok(transcript.finish())
+                },
+            )
+            .collect::<Result<_>>()?;
+        Ok((messages, proofs))
     }
 
     fn verify(
         layout: &Layout,
         openings: Vec<Opening<F>>,
-        root: &[u8; 32],
-        (messages, proof): &Self::AdviceOpening,
-        (offsets, params, pcs): &Self::AdvicePlan,
+        roots: &Self::AdviceCommitments,
+        (messages, proofs): &Self::AdviceOpening,
+        plan: &Self::AdvicePlan,
         _: &(),
         t: &mut VerifierState<'_, Keccak>,
     ) -> Result<()> {
+        if roots.len() != plan.groups.len() || proofs.len() != plan.groups.len() {
+            return Err("invalid BitZ group count");
+        }
         let mut io = messages.read(t);
-        let claim = batch(layout, openings, offsets, params, None, &mut io)?;
+        for (((requests, root), proof), (params, pcs)) in plan
+            .queries(openings)
+            .into_iter()
+            .zip(roots)
+            .zip(proofs)
+            .zip(&plan.groups)
+        {
+            let claim = batch(layout, requests, &plan.slots, params, None, &mut io)?;
+            let mut transcript = build_verifier(DOMAIN, b"" as &[u8], proof);
+            let root = pcs
+                .receive_commitment(Root(*root), &mut transcript)
+                .map_err(|_| "invalid BitZ commitment")?;
+            world_verifier::BitZVerifier::new(*params, 8)
+                .verify(&claim, pcs, &root, transcript)
+                .map_err(|_| "invalid BitZ opening")?;
+        }
         io.finish()?;
-        let mut transcript = build_verifier(DOMAIN, b"" as &[u8], proof);
-        let root = pcs
-            .receive_commitment(Root(*root), &mut transcript)
-            .map_err(|_| "invalid BitZ commitment")?;
-        world_verifier::BitZVerifier::new(*params, 8)
-            .verify(&claim, pcs, &root, transcript)
-            .map_err(|_| "invalid BitZ opening")
+        Ok(())
     }
 }
 
@@ -127,8 +172,15 @@ impl Query {
         let mut row_point = vec![F::zero(); ROW_VARS - low.len()];
         row_point.extend_from_slice(low);
         let mut axes = opening.planes.unwrap_or_else(|| weights(axis));
-        if let Kind::Bits { planes } = slot.kind {
-            axes.truncate(planes);
+        match slot.kind {
+            Kind::Bits { planes } => axes.truncate(planes),
+            Kind::Lookup {
+                address_vars,
+                packed: true,
+            } if cfg!(feature = "bitz-lookup-bits") => {
+                axes.truncate(address_vars);
+            }
+            _ => {}
         }
         for w in &mut axes {
             *w *= mix;
@@ -168,7 +220,7 @@ impl Query {
 fn batch(
     layout: &Layout,
     openings: Vec<Opening<F>>,
-    offsets: &[usize],
+    slots: &[(usize, usize)],
     params: &BitZParams<Fq>,
     words: Option<&[F128]>,
     io: &mut Session<'_, '_, F>,
@@ -182,7 +234,7 @@ fn batch(
     let queries: Vec<_> = openings
         .into_iter()
         .zip(mix)
-        .map(|(q, m)| Query::new(layout.slots[q.slot], offsets[q.slot], q, m))
+        .map(|(q, m)| Query::new(layout.slots[q.slot], slots[q.slot].1, q, m))
         .collect();
     let (end, []) = io.fold(
         instance(sum, ROW_VARS, 2),

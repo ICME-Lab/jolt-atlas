@@ -7,6 +7,9 @@ use jolt_poly::{TensorEqTable, UnivariatePoly};
 use jolt_sumcheck::prove_single;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 
+#[cfg(feature = "bitz-lookup-bits")]
+mod packed;
+
 const MAX_HISTOGRAM_SIZE: usize = 1 << 19;
 
 use super::{
@@ -228,13 +231,22 @@ impl Lookup {
             return Err("invalid lookup table size");
         }
         let address_vars = size.ilog2() as usize;
+        let packed = address_vars >= 17;
         let first = (address_vars - 1) % DIGIT_BITS + 1;
         let sizes = std::iter::once(first).chain(std::iter::repeat_n(
             DIGIT_BITS,
             (address_vars - first) / DIGIT_BITS,
         ));
         let cols = sizes
-            .map(|address_vars| layout.add(cells, Kind::Lookup { address_vars }))
+            .map(|address_vars| {
+                layout.add(
+                    cells,
+                    Kind::Lookup {
+                        address_vars,
+                        packed,
+                    },
+                )
+            })
             .collect::<Result<_>>()?;
         Ok(Self { cols, address_vars })
     }
@@ -421,6 +433,23 @@ impl Lookup {
             parts.len(),
             |v: &[F]| v.iter().copied().product(),
         )?;
+        #[cfg(feature = "bitz-lookup-bits")]
+        if self.address_vars >= 17 && super::pcs::packed_lookup::<F>() {
+            let actual: F = queries
+                .iter()
+                .zip(mix)
+                .zip(&evaluations)
+                .map(|(((_, q), &w), v)| {
+                    w * eq(&q.cell, &end.challenges)
+                        * v[..parts.len()].iter().copied().product::<F>()
+                })
+                .sum();
+            if actual != end.output_claim {
+                return Err("invalid lookup address link");
+            }
+            packed::link(&parts, queries, &end.challenges, &evaluations, io)?;
+            return Ok(value);
+        }
         let half = F::from_u64(2).inverse().expect("odd field");
         let ones: Vec<_> = parts
             .iter()

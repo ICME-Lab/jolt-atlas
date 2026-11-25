@@ -16,7 +16,7 @@ use super::{
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
     Bits { planes: usize },
-    Lookup { address_vars: usize },
+    Lookup { address_vars: usize, packed: bool },
 }
 
 #[derive(Clone, Copy)]
@@ -32,7 +32,7 @@ impl Slot {
         self.cell_vars
             + match self.kind {
                 Kind::Bits { planes } => planes.next_power_of_two().ilog2() as usize,
-                Kind::Lookup { address_vars } => address_vars,
+                Kind::Lookup { address_vars, .. } => address_vars,
             }
     }
 
@@ -65,26 +65,6 @@ impl Layout {
         }
         self.slots.push(slot);
         Ok(slot)
-    }
-
-    #[cfg(feature = "bitz")]
-    fn place(&self, row_vars: usize) -> Result<(usize, Vec<usize>)> {
-        let mut offsets = Vec::with_capacity(self.slots.len());
-        let mut end = 0usize;
-        for &slot in &self.slots {
-            let axes = match slot.kind {
-                Kind::Bits { planes } => planes,
-                _ => 1 << (slot.vars() - slot.cell_vars),
-            };
-            let cells = 1usize << slot.cell_vars.max(row_vars);
-            let span = cells.checked_mul(axes).ok_or("advice layout overflow")?;
-            offsets.push(end);
-            end = end.checked_add(span).ok_or("advice layout overflow")?;
-        }
-        let size = end
-            .checked_next_power_of_two()
-            .ok_or("advice layout overflow")?;
-        Ok((size.ilog2() as usize, offsets))
     }
 
     pub(crate) fn replace_bits(&mut self, slot: Slot) {
@@ -208,12 +188,20 @@ impl Advice {
                     }
                 }
             }
-            Kind::Lookup { .. } => {
+            Kind::Lookup { packed, .. } => {
                 let cells = 1 << slot.cell_vars;
                 let (addresses, shift, mask) = self.take_lookup(slot)?;
                 for cell in 0..addresses.len() {
                     let digit = addresses.digit(cell, shift, mask);
-                    set(usize::from(digit) * cells + cell);
+                    if packed && cfg!(feature = "bitz-lookup-bits") {
+                        for bit in 0..u8::BITS - digit.leading_zeros() {
+                            if digit & (1 << bit) != 0 {
+                                set(bit as usize * cells + cell);
+                            }
+                        }
+                    } else {
+                        set(usize::from(digit) * cells + cell);
+                    }
                 }
             }
         }
@@ -222,7 +210,7 @@ impl Advice {
 
     #[cfg(any(feature = "akita", feature = "bitz"))]
     fn take_lookup(&mut self, slot: Slot) -> Result<(Arc<Addresses>, usize, u32)> {
-        let Kind::Lookup { address_vars } = slot.kind else {
+        let Kind::Lookup { address_vars, .. } = slot.kind else {
             return Err("not a lookup advice slot");
         };
         match self.0[slot.id].take() {
@@ -495,3 +483,8 @@ pub use akita::AkitaAdviceSetup;
 mod bitz;
 #[cfg(feature = "bitz")]
 pub use bitz::BitzScheme;
+
+#[cfg(feature = "bitz-lookup-bits")]
+pub(super) fn packed_lookup<F: ProofField>() -> bool {
+    std::any::TypeId::of::<F>() == std::any::TypeId::of::<bitz::BitzField>()
+}

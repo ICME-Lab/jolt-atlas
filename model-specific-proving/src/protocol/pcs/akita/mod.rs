@@ -74,6 +74,7 @@ pub struct AkitaAdviceSetup {
     dense_catalog: Vec<u8>,
     one_hot_catalog: ValidatedScheduleCatalog,
     sparse: BTreeMap<usize, Vec<usize>>,
+    max_group_rows: usize,
     prover: Mutex<BTreeMap<Key, Arc<AkitaProverSetup>>>,
     verifier: Mutex<BTreeMap<Key, Arc<AkitaVerifierSetup>>>,
 }
@@ -111,11 +112,22 @@ impl AkitaAdviceSetup {
                 .and_then(|catalog| catalog.to_artifact_bytes())
                 .map_err(|_| "invalid Akita full-width dense schedules")?,
             sparse: shapes,
+            max_group_rows: usize::MAX,
             dense_catalog,
             one_hot_catalog: sparse,
             prover: Mutex::default(),
             verifier: Mutex::default(),
         })
+    }
+
+    /// Cap the sum of padded one-hot rows in each group. Prover and verifier
+    /// must use the same limit with the same schedule catalog.
+    pub fn with_group_row_limit(mut self, rows: usize) -> Result<Self> {
+        if rows == 0 {
+            return Err("empty Akita group row limit");
+        }
+        self.max_group_rows = rows;
+        Ok(self)
     }
 
     /// Use Jolt’s Metal kernels for supported Akita commitment and opening operations.
@@ -302,10 +314,15 @@ impl Plan {
                 .sparse
                 .range(minimum..)
                 .find_map(|(&rounds, widths)| {
-                    let packed = pack_cycles(slots.clone(), 1 << (rounds - ADDRESS_BITS));
-                    partition(packed.len(), widths).map(|widths| (rounds, packed, widths))
+                    let rows = 1 << (rounds - ADDRESS_BITS);
+                    let limit = setup.max_group_rows / rows;
+                    if limit == 0 {
+                        return None;
+                    }
+                    let packed = pack_cycles(slots.clone(), rows);
+                    partition(packed.len(), widths, limit).map(|widths| (rounds, packed, widths))
                 })
-                .ok_or("missing Akita group schedule")?;
+                .ok_or("missing Akita group schedule within row limit")?;
             let mut packed = packed.into_iter();
             for count in widths {
                 groups.push(Group {
@@ -592,13 +609,13 @@ impl Read {
     }
 }
 
-fn partition(count: usize, widths: &[usize]) -> Option<Vec<usize>> {
+fn partition(count: usize, widths: &[usize], limit: usize) -> Option<Vec<usize>> {
     let mut best = vec![None; count + 1];
     best[0] = Some((0, 0));
     for remaining in 1..=count {
         best[remaining] = widths
             .iter()
-            .filter(|&&width| width <= remaining)
+            .filter(|&&width| width <= remaining.min(limit))
             .filter_map(|&width| best[remaining - width].map(|(groups, _)| (groups + 1, width)))
             .min_by_key(|&(groups, _)| groups);
     }

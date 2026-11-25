@@ -7,6 +7,8 @@ pub(crate) mod nonlinear;
 pub(crate) mod softmax;
 
 pub use attention::Attention;
+#[cfg(feature = "akita")]
+pub use attention::{BlockedAttention, BlockedAttentionProof};
 pub use linear::{Projection, Rotary};
 pub use mlp::Mlp;
 pub use nonlinear::{Activation, NormalizationKind, NormalizationParameters};

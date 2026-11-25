@@ -26,6 +26,7 @@ pub enum SoftmaxMask {
 
 pub(crate) struct Softmax<'a> {
     shape: Shape,
+    row_start: usize,
     mask: SoftmaxMask,
     tables: SoftmaxTables<'a>,
     previous: Table<'a>,
@@ -56,6 +57,30 @@ impl<'a> Softmax<'a> {
         mask: SoftmaxMask,
         tables: SoftmaxTables<'a>,
     ) -> Result<Self> {
+        if !matches!(mask, SoftmaxMask::Full) && shape.rows != shape.width {
+            return Err("invalid Softmax parameters");
+        }
+        Self::with_row_start(layout, shape, mask, tables, 0)
+    }
+
+    #[cfg(feature = "akita")]
+    pub(crate) fn block(&self, layout: &mut Layout, start: usize, rows: usize) -> Result<Self> {
+        Self::with_row_start(
+            layout,
+            Shape::new(rows, self.shape.width)?,
+            self.mask,
+            self.tables,
+            start,
+        )
+    }
+
+    fn with_row_start(
+        layout: &mut Layout,
+        shape: Shape,
+        mask: SoftmaxMask,
+        tables: SoftmaxTables<'a>,
+        row_start: usize,
+    ) -> Result<Self> {
         let len = tables.sums.len();
         if !(2..=1 << 31).contains(&len)
             || len != tables.probabilities.len()
@@ -70,7 +95,7 @@ impl<'a> Softmax<'a> {
                 .any(|&x| x < 0)
             || tables.sums.windows(2).any(|w| w[0] < w[1])
             || matches!(mask, SoftmaxMask::Sliding(0))
-            || (!matches!(mask, SoftmaxMask::Full) && shape.rows != shape.width)
+            || (!matches!(mask, SoftmaxMask::Full) && row_start + shape.rows > shape.width)
         {
             return Err("invalid Softmax parameters");
         }
@@ -90,6 +115,7 @@ impl<'a> Softmax<'a> {
         let excess = Ranges::new(layout, shape, [Range::unsigned(34)])?;
         Ok(Self {
             shape,
+            row_start,
             mask,
             tables,
             previous,
@@ -100,6 +126,7 @@ impl<'a> Softmax<'a> {
     }
 
     fn active(&self, row: usize) -> std::ops::Range<usize> {
+        let row = self.row_start + row;
         match self.mask {
             SoftmaxMask::Full => 0..self.shape.width,
             SoftmaxMask::Causal => 0..row + 1,

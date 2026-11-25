@@ -15,6 +15,11 @@ use super::{
     softmax::{Softmax, SoftmaxMask, SoftmaxTables, SoftmaxTrace},
 };
 
+#[cfg(feature = "akita")]
+mod blocked;
+#[cfg(feature = "akita")]
+pub use blocked::{BlockedAttention, BlockedAttentionProof};
+
 pub struct Attention<'a> {
     pub queries: Vec<Projection<'a>>,
     pub groups: Vec<[Projection<'a>; 2]>,
@@ -142,6 +147,16 @@ impl<'a> AttentionPlan<'a> {
         bits: usize,
         p: Attention<'a>,
     ) -> Result<Self> {
+        Self::build(layout, input, bits, p, false)
+    }
+
+    fn build(
+        layout: &mut Layout,
+        input: Shape,
+        bits: usize,
+        p: Attention<'a>,
+        blocked: bool,
+    ) -> Result<Self> {
         if p.groups.is_empty()
             || p.queries.is_empty()
             || !p.queries.len().is_multiple_of(p.groups.len())
@@ -178,11 +193,17 @@ impl<'a> AttentionPlan<'a> {
             return Err("inconsistent head dimensions");
         }
         let square = Shape::new(input.rows, input.rows)?;
+        let mut block_template = Layout::default();
+        let head_layout = if blocked {
+            &mut block_template
+        } else {
+            &mut *layout
+        };
         let heads = (0..queries.len())
             .map(|_| {
                 Ok(Head {
                     score: Product::new(
-                        layout,
+                        head_layout,
                         square,
                         bits * 2,
                         ProductKind::Matrix {
@@ -191,9 +212,9 @@ impl<'a> AttentionPlan<'a> {
                             factor: p.factor,
                         },
                     )?,
-                    softmax: Softmax::new(layout, square, p.mask, p.tables)?,
+                    softmax: Softmax::new(head_layout, square, p.mask, p.tables)?,
                     value: Product::new(
-                        layout,
+                        head_layout,
                         value,
                         bits,
                         ProductKind::Matrix {

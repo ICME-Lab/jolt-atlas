@@ -123,6 +123,14 @@ impl<'a, F: ProofField> Session<'a, '_, F> {
         .map_err(|_| "invalid challenge")
     }
 
+    #[cfg(feature = "akita")]
+    pub(crate) fn bind_values(&mut self, values: &[F]) {
+        match &mut self.mode {
+            Mode::Prove(t, ..) => t.append_values(values),
+            Mode::Verify(t, ..) => t.append_values(values),
+        }
+    }
+
     pub(crate) fn point(&mut self, vars: usize) -> Result<Vec<F>> {
         self.pow(vars)?;
         self.challenge(vars)

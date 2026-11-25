@@ -61,7 +61,7 @@ impl Ranges {
         }
         let cells = 1 << self.shape.vars();
         let stride = self.shape.width.next_power_of_two();
-        let lanes = self.slot.bits_per_digit();
+        let lanes = 1 << self.slot.digit_vars();
         let mut digits = vec![0; (1 << self.slot.vars()) / lanes];
         let mut plane = 0;
         for (range, &values) in self.ranges.iter().zip(values) {
@@ -100,7 +100,7 @@ impl Ranges {
                 plane += count;
             }
         }
-        advice.put(self.slot, Part::Digits(digits))
+        advice.put(self.slot, Part::Digits(digits.into()))
     }
 
     pub(crate) fn check<F: ProofField, V: AsRef<[F]>>(

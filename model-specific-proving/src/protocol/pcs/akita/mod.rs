@@ -252,35 +252,13 @@ struct Group {
     polynomials: Vec<Vec<Block>>,
 }
 
-#[derive(Clone, Copy)]
-struct Digits {
-    planes: usize,
-    cell_vars: usize,
-    lane_vars: usize,
-}
-
-impl Digits {
-    fn new(slot: Slot) -> Result<Self> {
-        let Kind::Bits { planes } = slot.kind else {
-            return Err("expected a bit slot");
-        };
-        Ok(Self {
-            planes,
-            cell_vars: slot.cell_vars,
-            lane_vars: slot.bits_per_digit().ilog2() as usize,
-        })
-    }
-
-    fn lane_count(self) -> usize {
-        1 << self.lane_vars
-    }
-
-    fn reads(self, start: usize, q: Opening<F>, scale: F, reads: &mut Vec<Read>) {
+impl Slot {
+    fn read_digits(self, start: usize, q: Opening<F>, scale: F, reads: &mut Vec<Read>) {
         let (plane, cell) = q.claim.point.split_at(q.claim.point.len() - self.cell_vars);
-        let lanes = self.lane_count();
+        let lane_vars = self.digit_vars();
         if let Some(weights) = q.planes {
             // All digit terms share the opening's one random coefficient.
-            for (i, lane) in weights.chunks_exact(lanes).enumerate() {
+            for (i, lane) in weights.chunks_exact(1 << lane_vars).enumerate() {
                 reads.push(Read::new(
                     start + (i << self.cell_vars),
                     cell,
@@ -288,7 +266,7 @@ impl Digits {
                 ));
             }
         } else {
-            let (digit, lane) = plane.split_at(plane.len() - self.lane_vars);
+            let (digit, lane) = plane.split_at(plane.len() - lane_vars);
             reads.push(Read::new(
                 start,
                 &[digit, cell].concat(),
@@ -306,7 +284,7 @@ impl Plan {
             let local = slot.vars()
                 - match slot.kind {
                     Kind::Lookup { address_vars } => address_vars,
-                    Kind::Bits { .. } => Digits::new(slot)?.lane_vars,
+                    Kind::Bits { .. } => slot.digit_vars(),
                 };
             let (&minimum, _) = setup
                 .sparse
@@ -461,30 +439,13 @@ impl ModelPcs for AkitaScheme {
                 for block in blocks {
                     let slot = layout.slots[block.leaf];
                     let rows = &mut indices[block.start..][..block.cycles];
-                    match (slot.kind, advice.0[slot.id].as_mut()) {
-                        (Kind::Bits { .. }, Some(Part::Digits(digits)))
-                            if digits.len() == rows.len() =>
-                        {
-                            for (dst, digit) in rows.iter_mut().zip(std::mem::take(digits)) {
+                    match slot.kind {
+                        Kind::Bits { .. } => {
+                            for (dst, &digit) in rows.iter_mut().zip(advice.digits(slot)?.iter()) {
                                 *dst = Some(digit);
                             }
                         }
-                        (Kind::Bits { planes: 1 }, Some(Part::Bits(bits)))
-                            if bits.len() == rows.len() =>
-                        {
-                            for (dst, &bit) in rows.iter_mut().zip(bits.iter()) {
-                                if bit > 1 {
-                                    return Err("invalid advice bit");
-                                }
-                                *dst = Some(bit);
-                            }
-                        }
-                        (Kind::Lookup { .. }, Some(Part::Lookup(poly)))
-                            if poly.indices().len() == rows.len() =>
-                        {
-                            rows.copy_from_slice(poly.indices())
-                        }
-                        _ => return Err("invalid Akita advice source"),
+                        Kind::Lookup { .. } => rows.copy_from_slice(advice.lookup(slot)?.indices()),
                     }
                 }
                 polynomials.push(OneHotPolynomial::new(K, indices));
@@ -693,7 +654,7 @@ impl GroupQueries {
                 sum += opening.claim.value * mix;
                 let slot = layout.slots[opening.slot];
                 match slot.kind {
-                    Kind::Bits { .. } => Digits::new(slot)?.reads(start, opening, mix, &mut reads),
+                    Kind::Bits { .. } => slot.read_digits(start, opening, mix, &mut reads),
                     Kind::Lookup { address_vars } => {
                         let (address, rows) = opening.claim.point.split_at(address_vars);
                         let mut padded = vec![F::zero(); ADDRESS_BITS - address_vars];
@@ -719,21 +680,18 @@ impl GroupQueries {
 
             for block in blocks {
                 let leaf = layout.slots[block.leaf];
-                if matches!(leaf.kind, Kind::Lookup { .. }) {
+                let Kind::Bits { planes } = leaf.kind else {
                     continue;
-                }
-                let digits = Digits::new(leaf)?;
-                let cells = 1 << digits.cell_vars;
+                };
+                let cells = 1 << leaf.cell_vars;
+                let lanes = 1 << leaf.digit_vars();
                 for digit in 0..block.cycles / cells {
-                    let bits = digits
-                        .planes
-                        .saturating_sub(digit * digits.lane_count())
-                        .min(digits.lane_count());
+                    let bits = planes.saturating_sub(digit * lanes).min(lanes);
                     if bits == ADDRESS_BITS {
                         continue;
                     }
                     let start = block.start + digit * cells;
-                    let prefix = fixed_prefix(row_vars, start, digits.cell_vars);
+                    let prefix = fixed_prefix(row_vars, start, leaf.cell_vars);
                     let mix = valid_mix[i] * eq(&valid_rows[..prefix.len()], &prefix);
                     let address = std::array::from_fn(|a| {
                         if a < 1 << bits {

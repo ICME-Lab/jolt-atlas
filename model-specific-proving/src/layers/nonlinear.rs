@@ -1,5 +1,7 @@
 //! Fixed-table activation and normalization constraints.
 
+use std::sync::Arc;
+
 use jolt_poly::MultilinearPoly;
 use jolt_transcript::Transcript;
 
@@ -30,6 +32,7 @@ pub(crate) struct ActivationTrace<F> {
     pub(crate) output: Vec<i32>,
     columns: [Vec<F>; 5],
     indices: Vec<usize>,
+    signs: Arc<Vec<u8>>,
 }
 
 impl<'a> Activate<'a> {
@@ -94,12 +97,14 @@ impl<'a> Activate<'a> {
             return Err("activation domain must contain zero");
         }
         self.ranges.record(a, &[&magnitude, &excess])?;
-        a.put(self.sign, Part::Bits(signs))?;
+        let signs = Arc::new(signs);
+        a.put(self.sign, Part::Digits(Arc::clone(&signs)))?;
         self.lookup.record(a, &indices)?;
         Ok(ActivationTrace {
             output,
             columns,
             indices,
+            signs,
         })
     }
 
@@ -135,13 +140,14 @@ impl<'a> Activate<'a> {
         let (point, v) = io.relation(
             instance(q.value, vars, 4),
             || {
-                let [x, a, c, m, e] = &trace().0.columns;
+                let trace = trace().0;
+                let [x, a, c, m, e] = &trace.columns;
                 [
                     Column::borrowed(x),
                     Column::borrowed(a),
                     Column::borrowed(c),
                     Column::borrowed(m),
-                    Column::Bits(trace().1.bits(self.sign), 1),
+                    Column::Bits(&trace.signs, 1),
                     Column::borrowed(e),
                     Column::borrowed(&active),
                     Column::owned(weights(&q.point)),

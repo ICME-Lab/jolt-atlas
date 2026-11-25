@@ -1,5 +1,7 @@
 //! Flat slots for range bits and fixed-table addresses.
 
+use std::sync::Arc;
+
 use jolt_field::{CanonicalEncoding, Ring, Zero};
 #[cfg(feature = "bitz")]
 use jolt_poly::MultilinearPoly;
@@ -35,8 +37,8 @@ impl Slot {
             }
     }
 
-    pub(crate) fn bits_per_digit(self) -> usize {
-        1 << (self.vars() - self.cell_vars).min(2)
+    pub(crate) fn digit_vars(self) -> usize {
+        (self.vars() - self.cell_vars).min(2)
     }
 }
 
@@ -118,8 +120,7 @@ impl Layout {
 }
 
 pub(crate) enum Part {
-    Bits(Vec<u8>),
-    Digits(Vec<u8>),
+    Digits(Arc<Vec<u8>>),
     Lookup(OneHotPolynomial),
 }
 
@@ -134,28 +135,25 @@ impl Advice {
         Ok(())
     }
 
+    #[cfg(any(feature = "akita", feature = "bitz"))]
+    fn digits(&mut self, slot: Slot) -> Result<Arc<Vec<u8>>> {
+        match self.0[slot.id].take() {
+            Some(Part::Digits(digits))
+                if digits.len() == 1 << (slot.vars() - slot.digit_vars()) =>
+            {
+                Ok(digits)
+            }
+            _ => Err("invalid digit count"),
+        }
+    }
+
     #[cfg(feature = "bitz")]
     fn fill_bits<F: ProofField>(&mut self, slot: Slot, mut set: impl FnMut(usize)) -> Result<()> {
-        match (slot.kind, self.0[slot.id].as_mut()) {
-            (Kind::Bits { planes }, Some(Part::Bits(bits))) if bits.len() == 1 << slot.vars() => {
-                let used = planes << slot.cell_vars;
-                if bits[used..].iter().any(|&bit| bit != 0) {
-                    return Err("nonzero padding in advice bits");
-                }
-                for (i, &bit) in bits[..used].iter().enumerate() {
-                    match bit {
-                        0 => (),
-                        1 => set(i),
-                        _ => return Err("invalid advice bit"),
-                    }
-                }
-            }
-            (Kind::Bits { planes }, Some(Part::Digits(digits)))
-                if digits.len() == (1 << slot.vars()) / slot.bits_per_digit() =>
-            {
+        match slot.kind {
+            Kind::Bits { planes } => {
                 let cells = 1 << slot.cell_vars;
-                let lanes = slot.bits_per_digit();
-                let digits = std::mem::take(digits);
+                let lanes = 1 << slot.digit_vars();
+                let digits = self.digits(slot)?;
                 for (digit, rows) in digits.chunks_exact(cells).enumerate() {
                     let first = digit * lanes;
                     let used = planes.saturating_sub(first).min(lanes);
@@ -172,21 +170,24 @@ impl Advice {
                     }
                 }
             }
-            (Kind::Lookup { .. }, Some(Part::Lookup(poly)))
-                if poly.indices().len() == 1 << slot.cell_vars
-                    && poly.num_vars() == slot.vars() =>
-            {
+            Kind::Lookup { .. } => {
+                let poly = self.lookup(slot)?;
                 <OneHotPolynomial as MultilinearPoly<F>>::for_each_one(poly, &mut set);
             }
-            _ => return Err("invalid advice shape"),
         }
         Ok(())
     }
 
-    pub(crate) fn bits(&self, slot: Slot) -> &[u8] {
-        match self.0[slot.id].as_ref().expect("declared advice") {
-            Part::Bits(bits) => bits,
-            _ => unreachable!("expected bit planes"),
+    #[cfg(any(feature = "akita", feature = "bitz"))]
+    fn lookup(&self, slot: Slot) -> Result<&OneHotPolynomial> {
+        match &self.0[slot.id] {
+            Some(Part::Lookup(poly))
+                if poly.indices().len() == 1 << slot.cell_vars
+                    && poly.num_vars() == slot.vars() =>
+            {
+                Ok(poly)
+            }
+            _ => Err("invalid lookup advice shape"),
         }
     }
 

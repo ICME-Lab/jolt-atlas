@@ -211,12 +211,53 @@ full is the first step of the search.
 A candidate is dropped when it fails a criterion on paper, and prototyped at kernel level on
 the GPU when it does not. The search ends with one core written into the protocol spec.
 
+### 5.6 The floor, and measuring against it
+
+A protocol that met every criterion of 5.5 perfectly would still have to do five things. Each
+is a pass over data that can be timed with no protocol at all:
+
+| Pass | Irreducible work | Grows with |
+|---|---|---|
+| Inference | Run the integer model | weights × tokens |
+| Weight pass | About two ring multiply-adds per weight (a fold halves its input each round), for the matrix products and again to open the weight commitment | weights |
+| Witness pass | The same fold over every activation value | activations |
+| Commit pass | Encode and hash every committed bit once | committed bits over the code rate |
+| Lookup pass | A table read and a few ring operations per lookup | lookups |
+
+The verifier's floor is reading the prompt and output and checking a few hundred hash paths;
+Magnetar's 600 KiB and 11 to 13 ms at 120 provable bits is the reference for a hash-based
+proof.
+
+There are two floors. The **hard floor** is every pass at memory bandwidth; nothing beats it.
+The **arithmetic floor** is every pass at the measured rate of its cheapest operation on our
+GPU, and is what a perfect protocol would reach.
+
+We measure against it from the start:
+
+1. **A floor suite**: one kernel per pass, on the GPU, with no protocol; the arithmetic
+   kernels once per candidate ring of 5.5.
+2. **A floor calculator**: from a model's shape, the token count and the bit widths, the
+   count of weights, activations, lookups and committed bits, and so the floor per pass.
+3. **A ratio in every gate**: each build of the prover reports its time per stage over that
+   stage's floor. A ratio that rises is a regression.
+
+This is the floor of the designs we know. A protocol that commits fewer bits or skips a pass
+lowers the floor, and the calculator is revised when one does.
+
+A first estimate for the 7B model at 1,000 tokens, from assumed rates (2×10^10 128-bit
+multiply-adds a second, 2×10^11 word-sized ones, 10 GB a second of hashing; none measured):
+about 3 s with a 128-bit ring and about 1.8 s with 64-bit words, with hashing the committed
+bits the largest term in both. If that holds, committing fewer bits matters more than faster
+arithmetic, and word-sized arithmetic is worth about ten times on the arithmetic passes.
+
 ## 6. Phases
 
 Each phase ends at a gate. A phase's specs are written when it starts.
 
 **Phase 0: measure and decide.** No protocol code.
 - GPU instance up; the gate harness runs on it.
+- The floor suite and calculator of 5.6. This is the first code in `gpu/`, and it turns
+  every assumed rate in this plan into a measured one.
 - The search of 5.5: each candidate read in full, then dropped on paper or prototyped.
 - Kernel microbenchmarks on that GPU for what survives: `F_{2^128}` multiplication with
   `clmad`; wrapping 32- and 64-bit ring arithmetic; each candidate prime; encoding and the
@@ -230,8 +271,9 @@ Each phase ends at a gate. A phase's specs are written when it starts.
 - The wider literature pass, recency first: Sable and FlashProve in full, GPU sumcheck work
   (zkDuel, arXiv 2610.37710; the DATE 2026 binary-tower paper), and whatever the candidates
   cite, with every number read sceptically.
-- *Gate:* every open decision of 5.2 that phase 2 depends on (1, 2, 3, 5, 7, 8) made and
-  written into a top-level protocol spec; a target rate.
+- *Gate:* the floor measured for Qwen2-0.5B and the 7B model; every open decision of 5.2
+  that phase 2 depends on (1, 2, 3, 5, 7, 8) made and written into a top-level protocol
+  spec; a target rate stated as a multiple of the floor.
 
 **Phase 1: the integer model.** Runs alongside phase 2.
 - The numeric contract; the Llama block defined in integers; weights from safetensors; the

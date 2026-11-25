@@ -64,12 +64,13 @@ impl Layout {
         Ok(slot)
     }
 
-    fn place(&self, row_vars: usize, compact: bool) -> Result<(usize, Vec<usize>)> {
+    #[cfg(feature = "bitz")]
+    fn place(&self, row_vars: usize) -> Result<(usize, Vec<usize>)> {
         let mut offsets = Vec::with_capacity(self.slots.len());
         let mut end = 0usize;
         for &slot in &self.slots {
             let axes = match slot.kind {
-                Kind::Bits { planes } if compact => planes,
+                Kind::Bits { planes } => planes,
                 _ => 1 << (slot.vars() - slot.cell_vars),
             };
             let cells = 1usize << slot.cell_vars.max(row_vars);
@@ -89,10 +90,6 @@ impl Layout {
 
     pub(crate) fn remove_last(&mut self) -> Result<()> {
         self.slots.pop().map(|_| ()).ok_or("empty advice layout")
-    }
-
-    pub fn num_vars(&self) -> Result<usize> {
-        Ok(self.place(0, false)?.0)
     }
 
     pub(crate) fn witness(&self) -> Advice {
@@ -407,8 +404,6 @@ pub(crate) fn bind_i32(t: &mut impl Transcript, values: &[i32]) {
 
 #[cfg(feature = "akita")]
 mod akita;
-#[cfg(feature = "akita-cluster")]
-pub use akita::cluster::serve_worker;
 #[cfg(feature = "akita")]
 pub use akita::AkitaAdviceSetup;
 

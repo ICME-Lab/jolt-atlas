@@ -7,8 +7,3 @@ pub mod models;
 pub mod protocol;
 #[cfg(feature = "safetensors-weights")]
 pub mod weights;
-
-#[doc(hidden)]
-pub mod proofs {
-    pub use crate::{layers::*, protocol::*};
-}

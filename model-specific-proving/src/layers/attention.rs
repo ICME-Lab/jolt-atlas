@@ -16,11 +16,7 @@ use super::{
     softmax::{ClipPlan, ClipSpec, Softmax, SoftmaxMask, SoftmaxTables, SoftmaxTrace},
 };
 
-#[cfg(feature = "akita")]
-mod blocked;
 mod causal;
-#[cfg(feature = "akita")]
-pub use blocked::{BlockedAttention, BlockedAttentionProof};
 use causal::{Causal, Remainders};
 
 pub struct Attention<'a> {
@@ -193,18 +189,6 @@ impl<'a> AttentionPlan<'a> {
         input_bound: Option<u128>,
         qk_norm: Option<[NormalizationParameters<'a>; 2]>,
     ) -> Result<Self> {
-        Self::build(layout, input, bits, p, false, input_bound, qk_norm)
-    }
-
-    fn build(
-        layout: &mut Layout,
-        input: Shape,
-        bits: usize,
-        p: Attention<'a>,
-        blocked: bool,
-        input_bound: Option<u128>,
-        qk_norm: Option<[NormalizationParameters<'a>; 2]>,
-    ) -> Result<Self> {
         if p.groups.is_empty()
             || p.queries.is_empty()
             || !p.queries.len().is_multiple_of(p.groups.len())
@@ -275,21 +259,12 @@ impl<'a> AttentionPlan<'a> {
             return Err("inconsistent head dimensions");
         }
         let square = Shape::new(input.rows, input.rows)?;
-        let mut block_template = Layout::default();
-        let head_layout = if blocked {
-            &mut block_template
-        } else {
-            &mut *layout
-        };
         let heads = (0..queries.len())
             .map(|_| {
-                let compact = !blocked
-                    && matches!(p.mask, SoftmaxMask::Causal)
-                    && input.rows.is_power_of_two();
-                let softmax =
-                    Softmax::new(head_layout, square, p.mask, p.tables, score_bound, compact)?;
+                let compact = matches!(p.mask, SoftmaxMask::Causal) && input.rows.is_power_of_two();
+                let softmax = Softmax::new(layout, square, p.mask, p.tables, score_bound, compact)?;
                 let causal = compact
-                    .then(|| Causal::new(head_layout, key, bits * 2, p.factor, &softmax))
+                    .then(|| Causal::new(layout, key, bits * 2, p.factor, &softmax))
                     .transpose()?;
                 Ok(Head {
                     // Without clipping, Softmax binds the integer score to its
@@ -298,7 +273,7 @@ impl<'a> AttentionPlan<'a> {
                         .is_none()
                         .then(|| {
                             Product::with_output_range(
-                                head_layout,
+                                layout,
                                 square,
                                 bits * 2,
                                 ProductKind::Matrix {
@@ -313,7 +288,7 @@ impl<'a> AttentionPlan<'a> {
                     causal,
                     softmax,
                     value: Product::new(
-                        head_layout,
+                        layout,
                         value,
                         bits,
                         ProductKind::Matrix {

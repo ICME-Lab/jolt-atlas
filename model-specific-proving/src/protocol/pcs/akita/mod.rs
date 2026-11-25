@@ -26,8 +26,6 @@ use jolt_transcript::{FieldTranscript, ProverTranscript, VerifierTranscript};
 use rayon::prelude::*;
 
 use super::*;
-#[cfg(feature = "akita-cluster")]
-pub(crate) mod cluster;
 #[cfg(all(test, feature = "akita-metal", target_os = "macos"))]
 mod metal;
 mod packed;
@@ -69,8 +67,6 @@ impl Key {
 /// Schedule artifacts and reusable setup data for grouped model advice.
 /// The same public configuration is used for both proving and verifying.
 pub struct AkitaAdviceSetup {
-    #[cfg(feature = "akita-cluster")]
-    workers: Option<Arc<cluster::Workers>>,
     #[cfg(all(feature = "akita-metal", target_os = "macos"))]
     metal: bool,
     dense_profile: AkitaChunkProfile,
@@ -78,8 +74,6 @@ pub struct AkitaAdviceSetup {
     dense_catalog: Vec<u8>,
     one_hot_catalog: ValidatedScheduleCatalog,
     sparse: BTreeMap<usize, Vec<usize>>,
-    max_group_rows: usize,
-    sparse_rounds: usize,
     prover: Mutex<BTreeMap<Key, Arc<AkitaProverSetup>>>,
     verifier: Mutex<BTreeMap<Key, Arc<AkitaVerifierSetup>>>,
 }
@@ -109,8 +103,6 @@ impl AkitaAdviceSetup {
             widths.dedup();
         }
         Ok(Self {
-            #[cfg(feature = "akita-cluster")]
-            workers: None,
             #[cfg(all(feature = "akita-metal", target_os = "macos"))]
             metal: false,
             dense_profile: artifacts.dense_profile(),
@@ -119,32 +111,11 @@ impl AkitaAdviceSetup {
                 .and_then(|catalog| catalog.to_artifact_bytes())
                 .map_err(|_| "invalid Akita full-width dense schedules")?,
             sparse: shapes,
-            max_group_rows: usize::MAX,
-            sparse_rounds: packed::SPARSE_ROUNDS,
             dense_catalog,
             one_hot_catalog: sparse,
             prover: Mutex::default(),
             verifier: Mutex::default(),
         })
-    }
-
-    /// Cap the sum of padded one-hot rows in each group. Prover and verifier
-    /// must use the same limit with the same schedule catalog.
-    pub fn with_group_row_limit(mut self, rows: usize) -> Result<Self> {
-        if rows == 0 {
-            return Err("empty Akita group row limit");
-        }
-        self.max_group_rows = rows;
-        Ok(self)
-    }
-
-    /// Number of row rounds to keep packed before expanding each polynomial.
-    pub fn with_sparse_rounds(mut self, rounds: usize) -> Result<Self> {
-        if !(1..=packed::SPARSE_ROUNDS).contains(&rounds) {
-            return Err("invalid Akita sparse round count");
-        }
-        self.sparse_rounds = rounds;
-        Ok(self)
     }
 
     /// Use Jolt’s Metal kernels for supported Akita commitment and opening operations.
@@ -155,25 +126,10 @@ impl AkitaAdviceSetup {
         Ok(self)
     }
 
-    /// Use the supplied TCP workers for supported Akita trace folds.
-    #[cfg(feature = "akita-cluster")]
-    pub fn with_workers(mut self, workers: Vec<std::net::SocketAddr>) -> Result<Self> {
-        self.workers = Some(Arc::new(cluster::Workers::new(workers)?));
-        self.prover = Mutex::default();
-        Ok(self)
-    }
-
     fn setup(&self, key: Key) -> Result<Arc<AkitaProverSetup>> {
         cached(&self.prover, key, || {
             let (pk, _) =
                 AkitaScheme::setup(self.params(key)?).map_err(|_| "Akita prover setup failed")?;
-            #[cfg(feature = "akita-cluster")]
-            if let Some(workers) = &self.workers {
-                let workers = Arc::clone(workers);
-                return pk
-                    .with_trace_compute_kernel(|_| Ok(workers))
-                    .map_err(|_| "Akita worker setup failed");
-            }
             #[cfg(all(feature = "akita-metal", target_os = "macos"))]
             if self.native_metal(key) {
                 return pk
@@ -361,15 +317,13 @@ impl Plan {
                 .or_default()
                 .push((slot.id, 0, 1 << local));
         }
-        // The small lookup buckets can amortize an opening over more tiles. Only
-        // grow a bucket when the larger shape fits the memory limit and its tail.
+        // Large buckets of small tiles can amortize opening across more rows.
         let larger: usize = 20;
         let capacity = 1 << (larger - ADDRESS_BITS);
-        if setup.max_group_rows >= 56 * capacity
-            && setup
-                .sparse
-                .get(&larger)
-                .is_some_and(|shapes| shapes.contains(&56))
+        if setup
+            .sparse
+            .get(&larger)
+            .is_some_and(|shapes| shapes.contains(&56))
             && buckets.get(&16).is_some_and(|slots| {
                 slots.iter().map(|&(_, _, rows)| rows).sum::<usize>() >= 2 * 56 * capacity
             })
@@ -398,20 +352,16 @@ impl Plan {
                 .range(minimum..)
                 .find_map(|(&rounds, widths)| {
                     let rows = 1 << (rounds - ADDRESS_BITS);
-                    let limit = setup.max_group_rows / rows;
-                    if limit == 0 {
-                        return None;
-                    }
                     let packed = pack_cycles(slots.clone(), rows);
                     let compact = pack_cycles(pieces.clone(), rows);
                     let count = compact.len();
                     // Keep all pieces of each original claim in a single group.
-                    if count < packed.len() && count <= limit && widths.contains(&count) {
+                    if count < packed.len() && widths.contains(&count) {
                         return Some((rounds, compact, vec![count]));
                     }
-                    partition(packed.len(), widths, limit).map(|widths| (rounds, packed, widths))
+                    partition(packed.len(), widths).map(|widths| (rounds, packed, widths))
                 })
-                .ok_or("missing Akita group schedule within row limit")?;
+                .ok_or("missing Akita group schedule")?;
             let mut packed = packed.into_iter();
             for count in widths {
                 groups.push(Group {
@@ -543,7 +493,7 @@ impl ModelPcs for AkitaScheme {
         let mut groups = Vec::with_capacity(plan.0.len());
         for group in &plan.0 {
             let mut polynomials: Vec<_> = (0..group.key.count)
-                .map(|_| Indices::shared(1 << (group.key.rounds - ADDRESS_BITS)))
+                .map(|_| Indices::new(1 << (group.key.rounds - ADDRESS_BITS)))
                 .collect();
             let mut slots = BTreeMap::<_, Vec<_>>::new();
             for (i, blocks) in group.polynomials.iter().enumerate() {
@@ -701,10 +651,6 @@ fn digit_weights(lanes: &[F], scale: F) -> [F; K] {
 }
 
 /// A separable public weight on an aligned interval of the committed row axis.
-#[cfg_attr(
-    feature = "akita-cluster",
-    derive(serde::Serialize, serde::Deserialize)
-)]
 struct Read {
     start: usize,
     rows: Vec<F>,
@@ -732,13 +678,13 @@ impl Read {
     }
 }
 
-fn partition(count: usize, widths: &[usize], limit: usize) -> Option<Vec<usize>> {
+fn partition(count: usize, widths: &[usize]) -> Option<Vec<usize>> {
     let mut best = vec![None; count + 1];
     best[0] = Some((0, 0));
     for remaining in 1..=count {
         best[remaining] = widths
             .iter()
-            .filter(|&&width| width <= remaining.min(limit))
+            .filter(|&&width| width <= remaining)
             .filter_map(|&width| best[remaining - width].map(|(groups, _)| (groups + 1, width)))
             .min_by_key(|&(groups, _)| groups);
     }
@@ -960,46 +906,20 @@ fn prove_group(
     let key = group.key;
     pow(GroupQueries::dimension(key, &claims), t)?;
     let queries = GroupQueries::read(layout, group, claims, t)?;
-    let local = |t: &mut _| {
-        let mut fold = GroupFold {
-            rounds: key.rounds,
-            packed: witness
-                .polynomials
-                .iter()
-                .zip(&queries.reads)
-                .zip(&queries.bit_mix)
-                .map(|((poly, reads), &mix)| {
-                    PackedFold::new(poly, reads, &queries.bit_check, mix)
-                        .with_sparse_rounds(setup.sparse_rounds)
-                })
-                .collect(),
-        };
-        let (reduction, reduced) =
-            prove_single(&mut fold, &instance(queries.sum, key.rounds, 3), t)
-                .map_err(|_| "Akita lookup group reduction failed")?;
-        let evaluations: Vec<_> = fold.packed.iter().map(|fold| fold.value(0)).collect();
-        Ok::<_, &'static str>((reduction, reduced, evaluations))
+    let mut fold = GroupFold {
+        rounds: key.rounds,
+        packed: witness
+            .polynomials
+            .iter()
+            .zip(&queries.reads)
+            .zip(&queries.bit_mix)
+            .map(|((poly, reads), &mix)| PackedFold::new(poly, reads, &queries.bit_check, mix))
+            .collect(),
     };
-    #[cfg(feature = "akita-cluster")]
-    let (reduction, reduced, evaluations) = match &setup.workers {
-        Some(workers) => {
-            let mut fold = workers
-                .sumcheck(
-                    key.rounds,
-                    &witness.polynomials,
-                    &queries,
-                    setup.sparse_rounds,
-                )
-                .map_err(|_| "Akita worker sumcheck setup failed")?;
-            let (reduction, reduced) =
-                prove_single(&mut fold, &instance(queries.sum, key.rounds, 3), t)
-                    .map_err(|_| "Akita worker sumcheck failed")?;
-            (reduction, reduced, fold.evaluations)
-        }
-        None => local(t)?,
-    };
-    #[cfg(not(feature = "akita-cluster"))]
-    let (reduction, reduced, evaluations) = local(t)?;
+    let (reduction, reduced) = prove_single(&mut fold, &instance(queries.sum, key.rounds, 3), t)
+        .map_err(|_| "Akita lookup group reduction failed")?;
+    let evaluations: Vec<_> = fold.packed.iter().map(|fold| fold.value(0)).collect();
+    drop(fold);
     let point = group_point(&reduced.challenges);
     t.append_values(&evaluations);
     let polynomials = witness

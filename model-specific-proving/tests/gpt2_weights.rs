@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use jolt_akita::{AkitaChunkProfile, AkitaScheduleArtifacts, AkitaScheme};
-use model_specific_proving::{models::ModelWeights, protocol::AkitaAdviceSetup};
+use model_specific_proving::{protocol::AkitaAdviceSetup, weights::ModelWeights};
 
 #[test]
 fn proves_gpt2_tiny_from_exported_weights() {

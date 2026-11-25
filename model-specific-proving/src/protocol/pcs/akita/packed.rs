@@ -8,7 +8,7 @@ pub(super) const SPARSE_ROUNDS: usize = 4;
 
 /// Row-major K=16 indices. Code zero is an empty row; 1 through 16 select a column.
 pub(super) struct Indices {
-    pub(super) bytes: Vec<u8>,
+    bytes: Vec<u8>,
     len: usize,
     pub(super) prefix: usize,
     shared: Vec<(usize, SharedRows)>,
@@ -20,17 +20,7 @@ enum SharedRows {
 }
 
 impl Indices {
-    #[cfg(any(test, feature = "akita-cluster"))]
     pub(super) fn new(len: usize) -> Self {
-        Self {
-            bytes: vec![0; (len * 5).div_ceil(8) + 1],
-            len,
-            prefix: 0,
-            shared: Vec::new(),
-        }
-    }
-
-    pub(super) fn shared(len: usize) -> Self {
         Self {
             bytes: Vec::new(),
             len,
@@ -62,20 +52,6 @@ impl Indices {
 
     pub(super) fn prepare(&mut self) {
         self.shared.sort_unstable_by_key(|s| s.0);
-    }
-
-    #[cfg(feature = "akita-cluster")]
-    pub(super) fn wire_bytes(&self) -> std::borrow::Cow<'_, [u8]> {
-        if self.shared.is_empty() && self.bytes.len() == (self.len * 5).div_ceil(8) + 1 {
-            return self.bytes.as_slice().into();
-        }
-        let mut packed = Self::new(self.len);
-        for row in 0..self.prefix {
-            if let Some(col) = self.get(row) {
-                packed.insert(row, col);
-            }
-        }
-        packed.bytes.into()
     }
 
     pub(super) fn insert(&mut self, row: usize, column: u8) {
@@ -202,7 +178,6 @@ pub(super) struct PackedFold<'a> {
     row_weights: Vec<[F; K]>,
     values: Option<Vec<F>>,
     remaining: usize,
-    sparse_rounds: usize,
 }
 
 impl<'a> PackedFold<'a> {
@@ -233,7 +208,6 @@ impl<'a> PackedFold<'a> {
             row_weights: Vec::new(),
             values: None,
             remaining: indices.len(),
-            sparse_rounds: SPARSE_ROUNDS,
         }
     }
 
@@ -351,11 +325,6 @@ impl<'a> PackedFold<'a> {
             )
     }
 
-    pub(super) fn with_sparse_rounds(mut self, rounds: usize) -> Self {
-        self.sparse_rounds = rounds;
-        self
-    }
-
     pub(super) fn bind_row(&mut self, challenge: F) {
         let half = self.remaining / 2;
         self.bit_rows.0.bind(challenge);
@@ -387,7 +356,7 @@ impl<'a> PackedFold<'a> {
                 .collect();
         }
         self.remaining = half;
-        if self.values.is_none() && self.row_weights.len() == 1 << self.sparse_rounds {
+        if self.values.is_none() && self.row_weights.len() == 1 << SPARSE_ROUNDS {
             self.values = Some(
                 (0..half)
                     .into_par_iter()
@@ -478,10 +447,8 @@ mod tests {
         let packed = pack(&indices);
         assert!((0..indices.len()).all(|i| packed.get(i) == indices[i]));
         let mut sparse = PackedFold::new(&packed, &reads, &point, mix);
-        let mut early = PackedFold::new(&packed, &reads, &point, mix).with_sparse_rounds(1);
         for bit in (0..ADDRESS_BITS).rev() {
             sparse.bind_address(F::from_u64((bit + 3) as u64), bit);
-            early.bind_address(F::from_u64((bit + 3) as u64), bit);
         }
 
         let values: Vec<_> = indices
@@ -517,11 +484,9 @@ mod tests {
         for round in 0..rows {
             let expected = dense.prove_round(challenge, round, claim).unwrap();
             assert_eq!(UnivariatePoly::from_evals(&sparse.row_samples()), expected);
-            assert_eq!(UnivariatePoly::from_evals(&early.row_samples()), expected);
             let next = F::from_u64(if round == 4 { 0 } else { round as u64 + 11 });
             claim = expected.evaluate(next);
             sparse.bind_row(next);
-            early.bind_row(next);
             challenge = Some(next);
             assert_eq!(
                 sparse.values.as_ref().map(Vec::len),
@@ -530,7 +495,6 @@ mod tests {
         }
         dense.finish_rounds(challenge.unwrap()).unwrap();
         assert_eq!(sparse.value(0), dense.columns[0].at(0));
-        assert_eq!(early.value(0), dense.columns[0].at(0));
     }
 
     #[test]

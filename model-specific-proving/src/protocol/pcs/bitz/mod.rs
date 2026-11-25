@@ -34,7 +34,7 @@ impl ModelPcs for BitzScheme {
 
     fn plan(layout: &Layout) -> Result<Self::AdvicePlan> {
         static GENERATOR: OnceLock<F128> = OnceLock::new();
-        let (vars, offsets) = layout.place(ROW_VARS, true)?;
+        let (vars, offsets) = layout.place(ROW_VARS)?;
         let vars = vars.max(world_common::shape::MIN_LOG_BITS);
         let shape = Shape::new(ROW_VARS, vars - ROW_VARS).map_err(|_| "invalid BitZ shape")?;
         let params = BitZParams::new(shape, *GENERATOR.get_or_init(smallest_generator))

@@ -22,12 +22,10 @@ pub struct SoftmaxTables<'a> {
 pub enum SoftmaxMask {
     Full,
     Causal,
-    Sliding(usize),
 }
 
 pub(crate) struct Softmax<'a> {
     shape: Shape,
-    row_start: usize,
     mask: SoftmaxMask,
     tables: SoftmaxTables<'a>,
     previous: Table<'a>,
@@ -208,34 +206,6 @@ impl<'a> Softmax<'a> {
         score_bound: Option<u128>,
         compact: bool,
     ) -> Result<Self> {
-        if !matches!(mask, SoftmaxMask::Full) && shape.rows != shape.width {
-            return Err("invalid Softmax parameters");
-        }
-        Self::with_row_start(layout, shape, mask, tables, 0, score_bound, compact)
-    }
-
-    #[cfg(feature = "akita")]
-    pub(crate) fn block(&self, layout: &mut Layout, start: usize, rows: usize) -> Result<Self> {
-        Self::with_row_start(
-            layout,
-            Shape::new(rows, self.shape.width)?,
-            self.mask,
-            self.tables,
-            start,
-            None,
-            false,
-        )
-    }
-
-    fn with_row_start(
-        layout: &mut Layout,
-        shape: Shape,
-        mask: SoftmaxMask,
-        tables: SoftmaxTables<'a>,
-        row_start: usize,
-        score_bound: Option<u128>,
-        compact: bool,
-    ) -> Result<Self> {
         let len = tables.sums.len();
         if !(2..=1 << 31).contains(&len)
             || len != tables.probabilities.len()
@@ -249,16 +219,12 @@ impl<'a> Softmax<'a> {
                 .chain(tables.probabilities)
                 .any(|&x| x < 0)
             || tables.sums.windows(2).any(|w| w[0] < w[1])
-            || matches!(mask, SoftmaxMask::Sliding(0))
-            || (!matches!(mask, SoftmaxMask::Full) && row_start + shape.rows > shape.width)
+            || (matches!(mask, SoftmaxMask::Causal) && shape.rows != shape.width)
         {
             return Err("invalid Softmax parameters");
         }
         let previous = Table::Prepend(tables.limit + 1, &tables.sums[..len - 1]);
-        let active = match mask {
-            SoftmaxMask::Sliding(n) => n.min(shape.width),
-            _ => shape.width,
-        };
+        let active = shape.width;
         let bound =
             active as u64 * (tables.sums[0].max(tables.limit + 1) as u64) - tables.limit as u64 - 1;
         let bits = |bound: u64| Range::unsigned((64 - bound.leading_zeros()).max(1) as usize);
@@ -296,11 +262,7 @@ impl<'a> Softmax<'a> {
             .transpose()?;
         let mut tiles = Vec::new();
         let mut levels = Vec::new();
-        if matches!(mask, SoftmaxMask::Causal)
-            && row_start == 0
-            && shape.rows == shape.width
-            && shape.width > TILE
-        {
+        if matches!(mask, SoftmaxMask::Causal) && shape.rows == shape.width && shape.width > TILE {
             for start in (0..shape.rows).step_by(TILE) {
                 tiles.push(Tile::new(
                     layout,
@@ -329,7 +291,6 @@ impl<'a> Softmax<'a> {
         }
         Ok(Self {
             shape,
-            row_start,
             mask,
             tables,
             previous,
@@ -473,11 +434,9 @@ impl<'a> Softmax<'a> {
     }
 
     fn active(&self, row: usize) -> std::ops::Range<usize> {
-        let row = self.row_start + row;
         match self.mask {
             SoftmaxMask::Full => 0..self.shape.width,
             SoftmaxMask::Causal => 0..row + 1,
-            SoftmaxMask::Sliding(n) => (row + 1).saturating_sub(n)..row + 1,
         }
     }
 
@@ -561,12 +520,7 @@ impl<'a> Softmax<'a> {
     }
 
     pub(crate) fn bind(&self, t: &mut impl Transcript) {
-        let mask = match self.mask {
-            SoftmaxMask::Full => 0,
-            SoftmaxMask::Causal => 1,
-            SoftmaxMask::Sliding(n) => n as u64 + 1,
-        };
-        t.append(&mask);
+        t.append(&u64::from(matches!(self.mask, SoftmaxMask::Causal)));
         t.append(&u64::from(self.has_excess()));
         t.append(&(self.tables.limit as u64));
         bind_i32(t, self.tables.sums);

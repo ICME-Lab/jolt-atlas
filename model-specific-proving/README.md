@@ -90,7 +90,7 @@ The `safetensors-weights` feature reads `config.json` and a single
 
 ```sh
 cargo run --release --manifest-path model-specific-proving/Cargo.toml \
-  --features akita-metal,safetensors-weights --bin prove-gpt2 -- \
+  --features akita-metal,safetensors-weights --bin prove-model -- \
   --metal models/gpt2-tiny 14 17 42
 ```
 

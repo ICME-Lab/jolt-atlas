@@ -32,9 +32,9 @@ use crate::{
     weights::{Affine, Family},
 };
 
-pub use crate::protocol::{Candidate, TopKConfig};
+use crate::protocol::{Candidate, TopKConfig};
 #[cfg(feature = "safetensors-weights")]
-pub use crate::weights::ModelWeights;
+use crate::weights::ModelWeights;
 
 #[derive(Clone, Copy)]
 pub struct PublicEmbeddings<'a> {
@@ -258,10 +258,6 @@ impl<'a> Model<'a> {
             head,
             layout,
         })
-    }
-
-    pub fn setup_num_vars(&self) -> usize {
-        self.layout.num_vars().expect("valid model layout")
     }
 
     pub fn cls<'b>(&self, output: &'b [i32]) -> Result<&'b [i32]> {
@@ -642,10 +638,6 @@ impl Model<'_> {
     ) {
         self.bind(t, tokens, None, &[]);
         top_k::bind(t, cfg, candidates);
-    }
-
-    pub fn top_k_setup_num_vars(&self, cfg: &TopKConfig) -> Result<usize> {
-        self.top_k_plan(cfg)?.layout.num_vars()
     }
 
     pub fn prove_top_k<C: ModelPcs>(

@@ -7,8 +7,6 @@ pub(crate) mod session;
 pub(crate) mod tensor;
 pub(crate) mod top_k;
 
-#[cfg(feature = "akita-cluster")]
-pub use pcs::serve_worker;
 #[cfg(feature = "akita")]
 pub use pcs::AkitaAdviceSetup;
 pub use pcs::{Layout, ModelPcs, Proof};

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use model_specific_proving::{models::ModelWeights, protocol::BitzScheme};
+use model_specific_proving::{protocol::BitzScheme, weights::ModelWeights};
 
 #[test]
 fn proves_gpt2_tiny_with_world_bitz() {

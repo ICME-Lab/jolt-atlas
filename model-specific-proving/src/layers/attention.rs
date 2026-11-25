@@ -146,8 +146,9 @@ impl<'a> AttentionPlan<'a> {
         input: Shape,
         bits: usize,
         p: Attention<'a>,
+        input_bound: Option<u128>,
     ) -> Result<Self> {
-        Self::build(layout, input, bits, p, false)
+        Self::build(layout, input, bits, p, false, input_bound)
     }
 
     fn build(
@@ -156,6 +157,7 @@ impl<'a> AttentionPlan<'a> {
         bits: usize,
         p: Attention<'a>,
         blocked: bool,
+        input_bound: Option<u128>,
     ) -> Result<Self> {
         if p.groups.is_empty()
             || p.queries.is_empty()
@@ -165,6 +167,40 @@ impl<'a> AttentionPlan<'a> {
         {
             return Err("invalid attention configuration");
         }
+        let score_bound = input_bound
+            .filter(|_| matches!(p.mask, SoftmaxMask::Causal))
+            .and_then(|bound| {
+                let scale = 1u128 << bits;
+                let rotary = p.rotary.map_or(scale, |r| {
+                    r.cos
+                        .iter()
+                        .zip(r.sin)
+                        .map(|(&c, &s)| u128::from(c.unsigned_abs()) + u128::from(s.unsigned_abs()))
+                        .max()
+                        .unwrap_or(scale)
+                });
+                let project_bound = |proj: Projection<'_>| {
+                    (proj.output_bound(input.width, bound, scale) * rotary)
+                        .div_ceil(scale)
+                        .min(1 << 31)
+                };
+                let q = p
+                    .queries
+                    .iter()
+                    .copied()
+                    .map(project_bound)
+                    .max()
+                    .expect("queries");
+                let k = p
+                    .groups
+                    .iter()
+                    .map(|pair| project_bound(pair[0]))
+                    .max()
+                    .expect("keys");
+                (q * k * p.queries[0].bias.len() as u128)
+                    .checked_mul(p.factor as u128)
+                    .map(|product| product.div_ceil(scale * scale))
+            });
         let group_size = p.queries.len() / p.groups.len();
         let queries = p
             .queries
@@ -201,8 +237,11 @@ impl<'a> AttentionPlan<'a> {
         };
         let heads = (0..queries.len())
             .map(|_| {
+                let softmax = Softmax::new(head_layout, square, p.mask, p.tables, score_bound)?;
                 Ok(Head {
-                    score: Product::new(
+                    // Without clipping, Softmax binds the integer score to its
+                    // bounded row shift and table index at every used position.
+                    score: Product::with_output_range(
                         head_layout,
                         square,
                         bits * 2,
@@ -211,8 +250,9 @@ impl<'a> AttentionPlan<'a> {
                             transpose: true,
                             factor: p.factor,
                         },
+                        softmax.has_excess(),
                     )?,
-                    softmax: Softmax::new(head_layout, square, p.mask, p.tables)?,
+                    softmax,
                     value: Product::new(
                         head_layout,
                         value,

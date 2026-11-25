@@ -208,6 +208,30 @@ pub struct NormalizationParameters<'a> {
     pub epsilon_variance_units: i64,
 }
 
+impl NormalizationParameters<'_> {
+    pub(crate) fn output_bound(self, width: usize, bits: u8) -> Option<u128> {
+        let min_dev = u128::try_from(self.epsilon_variance_units).ok()?.isqrt();
+        if min_dev == 0 {
+            return None;
+        }
+        // Sum of centered squares is below width * (dev + 1)^2.
+        let width = width as u128;
+        let root = width.isqrt();
+        let root = root + u128::from(root * root < width);
+        let scale = 1u128 << bits;
+        let centered = (root * scale * (min_dev + 1)).div_ceil(min_dev);
+        self.gain
+            .iter()
+            .zip(self.bias)
+            .map(|(&gain, &bias)| {
+                (centered * u128::from(gain.unsigned_abs())).div_ceil(scale)
+                    + u128::from(bias.unsigned_abs())
+            })
+            .max()
+            .map(|bound| bound.min(1 << 31))
+    }
+}
+
 pub(crate) struct Norm<'a> {
     shape: Shape,
     bits: usize,

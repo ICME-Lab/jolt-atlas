@@ -18,21 +18,25 @@ pub(crate) struct Rounded {
 struct Rounding {
     shape: Shape,
     bits: usize,
-    public: bool,
+    check_output: bool,
     ranges: Ranges,
 }
 
 impl Rounding {
-    fn new(layout: &mut Layout, shape: Shape, bits: usize, public: bool) -> Result<Self> {
+    fn new(layout: &mut Layout, shape: Shape, bits: usize, check_output: bool) -> Result<Self> {
         if bits > 30 {
             return Err("invalid fixed-point scale");
         }
-        let first = if public { Range::unsigned(0) } else { I32 };
+        let first = if check_output {
+            I32
+        } else {
+            Range::unsigned(0)
+        };
         let ranges = Ranges::new(layout, shape, [first, Range::unsigned(bits)])?;
         Ok(Self {
             shape,
             bits,
-            public,
+            check_output,
             ranges,
         })
     }
@@ -49,7 +53,7 @@ impl Rounding {
             output.push(i32::try_from(v.div_euclid(scale)).map_err(|_| "fixed-point overflow")?);
             remainder.push(v.rem_euclid(scale) as i32);
         }
-        let values = if self.public { &[][..] } else { &output };
+        let values: &[i32] = if self.check_output { &output } else { &[][..] };
         self.ranges.record(advice, &[values, &remainder])?;
         Ok(Rounded { output, remainder })
     }
@@ -61,7 +65,11 @@ impl Rounding {
         io: &mut Session<'_, '_, F>,
     ) -> Result<F> {
         let [rem] = io.values(|| [self.shape.eval(&witness().remainder, &q.point)])?;
-        let output = if self.public { F::zero() } else { q.value };
+        let output = if self.check_output {
+            q.value
+        } else {
+            F::zero()
+        };
         self.ranges.check(&[(&q.point, [output, rem])], io)?;
         Ok(F::from_u64(1 << self.bits) * q.value + rem)
     }
@@ -72,6 +80,21 @@ impl Rounding {
 pub struct Projection<'a> {
     pub weights: &'a [i32],
     pub bias: &'a [i32],
+}
+
+impl Projection<'_> {
+    pub(super) fn output_bound(self, input: usize, bound: u128, scale: u128) -> u128 {
+        self.weights
+            .chunks_exact(input)
+            .zip(self.bias)
+            .map(|(row, &bias)| {
+                let norm: u128 = row.iter().map(|w| u128::from(w.unsigned_abs())).sum();
+                (norm * bound).div_ceil(scale) + u128::from(bias.unsigned_abs())
+            })
+            .max()
+            .unwrap_or(0)
+            .min(1 << 31)
+    }
 }
 
 pub(crate) struct Linear<'a> {
@@ -98,7 +121,7 @@ impl<'a> Linear<'a> {
         Ok(Self {
             weights: projection,
             input,
-            rounding: Rounding::new(layout, output, bits, public)?,
+            rounding: Rounding::new(layout, output, bits, !public)?,
         })
     }
 
@@ -170,15 +193,37 @@ impl Product {
         bits: usize,
         kind: ProductKind,
     ) -> Result<Self> {
-        if let ProductKind::Matrix { inner, factor, .. } = kind {
-            let bits = inner.next_power_of_two().ilog2()
+        Self::with_output_range(layout, shape, bits, kind, true)
+    }
+
+    pub(super) fn with_output_range(
+        layout: &mut Layout,
+        shape: Shape,
+        mut bits: usize,
+        mut kind: ProductKind,
+        check_output: bool,
+    ) -> Result<Self> {
+        if bits > 30 {
+            return Err("invalid fixed-point scale");
+        }
+        if let ProductKind::Matrix {
+            inner,
+            ref mut factor,
+            ..
+        } = kind
+        {
+            // Cancel the common power of two before proving Euclidean division.
+            let shift = (factor.trailing_zeros() as usize).min(bits);
+            *factor >>= shift;
+            bits -= shift;
+            let integer_bits = inner.next_power_of_two().ilog2()
                 + (u32::BITS - factor.unsigned_abs().leading_zeros())
                 + 65;
-            layout.integer_bits = layout.integer_bits.max(bits);
+            layout.integer_bits = layout.integer_bits.max(integer_bits);
         }
         Ok(Self {
             kind,
-            rounding: Rounding::new(layout, shape, bits, false)?,
+            rounding: Rounding::new(layout, shape, bits, check_output)?,
         })
     }
 
@@ -347,7 +392,7 @@ impl<'a> Rotate<'a> {
         }
         Ok(Self {
             coefficients: c,
-            rounding: Rounding::new(layout, shape, bits, false)?,
+            rounding: Rounding::new(layout, shape, bits, true)?,
         })
     }
 
@@ -407,5 +452,32 @@ impl<'a> Rotate<'a> {
             row[shape.width..].fill(F::zero());
         }
         io.public_dot(sum, &w, || shape.padded(trace().0, F::zero(), F::from_i32))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matrix_rounding_cancels_the_public_scale_for_negative_scores() {
+        let mut layout = Layout::default();
+        let product = Product::new(
+            &mut layout,
+            Shape::new(1, 2).unwrap(),
+            5,
+            ProductKind::Matrix {
+                inner: 1,
+                transpose: true,
+                factor: 12,
+            },
+        )
+        .unwrap();
+        let trace = product
+            .execute(&[1], &[-3, 3], &mut layout.witness())
+            .unwrap();
+        assert_eq!(product.rounding.bits, 3);
+        assert_eq!(trace.output, [-2, 1]);
+        assert_eq!(trace.remainder, [7, 1]);
     }
 }

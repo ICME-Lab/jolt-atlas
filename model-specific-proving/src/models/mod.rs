@@ -167,7 +167,12 @@ impl<'a> Model<'a> {
         let mut layout = Layout::default();
         let mut plans = Vec::with_capacity(layers.len());
         for p in layers {
-            let attention = AttentionPlan::new(&mut layout, shape, bits.into(), p.attention)?;
+            let input_bound = match &architecture {
+                Architecture::Decoder { .. } => p.attention_norm.output_bound(shape.width, bits),
+                Architecture::Encoder { .. } => None,
+            };
+            let attention =
+                AttentionPlan::new(&mut layout, shape, bits.into(), p.attention, input_bound)?;
             let mlp = MlpPlan::new(&mut layout, shape, bits.into(), p.mlp)?;
             let attention_norm = Norm::new(&mut layout, shape, bits.into(), p.attention_norm)?;
             let mlp_norm = Norm::new(&mut layout, shape, bits.into(), p.mlp_norm)?;

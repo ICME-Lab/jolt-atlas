@@ -279,6 +279,15 @@ struct Block {
     leaf: usize,
     start: usize,
     cycles: usize,
+    offset: usize,
+}
+
+impl Block {
+    fn digits(&self, slot: Slot, planes: usize) -> std::ops::Range<usize> {
+        let first = self.offset >> slot.cell_vars;
+        let end = (self.offset + self.cycles) >> slot.cell_vars;
+        first..end.min(slot.digit_count(planes))
+    }
 }
 struct Group {
     key: Key,
@@ -286,30 +295,35 @@ struct Group {
 }
 
 impl Slot {
-    fn read_digits(self, start: usize, q: Opening<F>, scale: F, reads: &mut Vec<Read>) {
+    fn read_digits(self, block: &Block, q: &Opening<F>, scale: F, reads: &mut Vec<Read>) {
         let (plane, cell) = q.claim.point.split_at(q.claim.point.len() - self.cell_vars);
         let lane_vars = self.digit_vars();
-        if let Some(weights) = q.planes {
+        if let Some(weights) = &q.planes {
             let Kind::Bits { planes } = self.kind else {
                 unreachable!("range slot is a bit slot");
             };
-            // All digit terms share the opening's one random coefficient.
+            let digits = block.digits(self, planes);
+            // Split digits share the original opening's random coefficient.
             for (i, lane) in weights
                 .chunks_exact(1 << lane_vars)
-                .take(self.digit_count(planes))
+                .skip(digits.start)
+                .take(digits.len())
                 .enumerate()
             {
                 reads.push(Read::new(
-                    start + (i << self.cell_vars),
+                    block.start + (i << self.cell_vars),
                     cell,
                     digit_weights(lane, scale),
                 ));
             }
         } else {
             let (digit, lane) = plane.split_at(plane.len() - lane_vars);
+            let free = block.cycles.ilog2() as usize - self.cell_vars;
+            let prefix = fixed_prefix(digit.len(), block.offset >> self.cell_vars, free);
+            let scale = scale * eq(&digit[..prefix.len()], &prefix);
             reads.push(Read::new(
-                start,
-                &[digit, cell].concat(),
+                block.start,
+                &[&digit[prefix.len()..], cell].concat(),
                 digit_weights(&weights(lane), scale),
             ));
         }
@@ -334,10 +348,24 @@ impl Plan {
             buckets
                 .entry(minimum)
                 .or_default()
-                .push((slot.id, 1 << local));
+                .push((slot.id, 0, 1 << local));
         }
         let mut groups = Vec::new();
         for (minimum, slots) in buckets {
+            let mut pieces = Vec::new();
+            for &(leaf, _, cycles) in &slots {
+                let slot = layout.slots[leaf];
+                let used = match slot.kind {
+                    Kind::Bits { planes } => slot.digit_count(planes) << slot.cell_vars,
+                    Kind::Lookup { .. } => cycles,
+                };
+                let mut offset = 0;
+                while offset < used {
+                    let len = 1 << (used - offset).ilog2();
+                    pieces.push((leaf, offset, len));
+                    offset += len;
+                }
+            }
             let (rounds, packed, widths) = setup
                 .sparse
                 .range(minimum..)
@@ -348,6 +376,12 @@ impl Plan {
                         return None;
                     }
                     let packed = pack_cycles(slots.clone(), rows);
+                    let compact = pack_cycles(pieces.clone(), rows);
+                    let count = compact.len();
+                    // Keep all pieces of each original claim in a single group.
+                    if count < packed.len() && count <= limit && widths.contains(&count) {
+                        return Some((rounds, compact, vec![count]));
+                    }
                     partition(packed.len(), widths, limit).map(|widths| (rounds, packed, widths))
                 })
                 .ok_or("missing Akita group schedule within row limit")?;
@@ -362,10 +396,14 @@ impl Plan {
         Ok(Self(groups))
     }
 
-    fn requests(&self, layout: &Layout, requests: Vec<Opening<F>>) -> Vec<Vec<Vec<Request>>> {
+    fn requests<'a>(
+        &'a self,
+        layout: &Layout,
+        requests: &'a [Opening<F>],
+    ) -> Vec<Vec<Vec<Request<'a>>>> {
         let mut slots: Vec<Vec<_>> = layout.slots.iter().map(|_| Vec::new()).collect();
-        for opening in requests {
-            slots[opening.slot].push(opening);
+        for (id, opening) in requests.iter().enumerate() {
+            slots[opening.slot].push((id, opening));
         }
         self.0
             .iter()
@@ -377,12 +415,11 @@ impl Plan {
                         blocks
                             .iter()
                             .flat_map(|block| {
-                                std::mem::take(&mut slots[block.leaf])
-                                    .into_iter()
-                                    .map(|opening| Request {
-                                        start: block.start,
-                                        opening,
-                                    })
+                                slots[block.leaf].iter().map(move |&(id, opening)| Request {
+                                    id,
+                                    block,
+                                    opening,
+                                })
                             })
                             .collect()
                     })
@@ -478,25 +515,37 @@ impl ModelPcs for AkitaScheme {
         let mut commitments = Vec::with_capacity(plan.0.len());
         let mut groups = Vec::with_capacity(plan.0.len());
         for group in &plan.0 {
-            let mut polynomials = Vec::with_capacity(group.key.count);
-            for blocks in &group.polynomials {
-                let mut indices = Indices::new(1 << (group.key.rounds - ADDRESS_BITS));
+            let mut polynomials: Vec<_> = (0..group.key.count)
+                .map(|_| Indices::new(1 << (group.key.rounds - ADDRESS_BITS)))
+                .collect();
+            let mut slots = BTreeMap::<_, Vec<_>>::new();
+            for (i, blocks) in group.polynomials.iter().enumerate() {
                 for block in blocks {
-                    let slot = layout.slots[block.leaf];
-                    match slot.kind {
-                        Kind::Bits { .. } => {
-                            for (row, &digit) in advice.digits(slot)?.iter().enumerate() {
-                                indices.insert(block.start + row, digit);
-                            }
-                        }
-                        Kind::Lookup { .. } => {
-                            for (row, column) in advice.take_lookup(slot)?.enumerate() {
-                                indices.insert(block.start + row, column);
+                    slots.entry(block.leaf).or_default().push((i, block));
+                }
+            }
+            for (leaf, blocks) in slots {
+                let slot = layout.slots[leaf];
+                match slot.kind {
+                    Kind::Bits { .. } => {
+                        let digits = advice.digits(slot)?;
+                        for (i, block) in blocks {
+                            for (row, &digit) in
+                                digits[block.offset..].iter().take(block.cycles).enumerate()
+                            {
+                                polynomials[i].insert(block.start + row, digit);
                             }
                         }
                     }
+                    Kind::Lookup { .. } => {
+                        let [(i, block)] = blocks.as_slice() else {
+                            unreachable!("lookup slot is kept in one block");
+                        };
+                        for (row, column) in advice.take_lookup(slot)?.enumerate() {
+                            polynomials[*i].insert(block.start + row, column);
+                        }
+                    }
                 }
-                polynomials.push(indices);
             }
             let polynomials: Arc<[_]> = polynomials.into();
             let (commitment, hint) = setup.commit_group(group.key, &polynomials)?;
@@ -522,7 +571,7 @@ impl ModelPcs for AkitaScheme {
         setup: &AkitaAdviceSetup,
         t: &mut ProverState<Keccak>,
     ) -> Result<Vec<GroupProof>> {
-        let reads = state.plan.requests(layout, claims);
+        let reads = state.plan.requests(layout, &claims);
         state
             .plan
             .0
@@ -549,7 +598,7 @@ impl ModelPcs for AkitaScheme {
         if commitments.len() != plan.0.len() || proof.len() != plan.0.len() {
             return Err("invalid Akita group count");
         }
-        let reads = plan.requests(layout, claims);
+        let reads = plan.requests(layout, &claims);
         for (((group, reads), commitment), proof) in
             plan.0.iter().zip(reads).zip(commitments).zip(proof)
         {
@@ -560,12 +609,12 @@ impl ModelPcs for AkitaScheme {
     }
 }
 
-fn pack_cycles(mut leaves: Vec<(usize, usize)>, capacity: usize) -> Vec<Vec<Block>> {
-    leaves.sort_by_key(|&(leaf, cycles)| (std::cmp::Reverse(cycles), leaf));
+fn pack_cycles(mut leaves: Vec<(usize, usize, usize)>, capacity: usize) -> Vec<Vec<Block>> {
+    leaves.sort_by_key(|&(leaf, offset, cycles)| (std::cmp::Reverse(cycles), leaf, offset));
     let mut packed = Vec::new();
     let mut blocks = Vec::new();
     let mut start = 0;
-    for (leaf, cycles) in leaves {
+    for (leaf, offset, cycles) in leaves {
         if start + cycles > capacity {
             packed.push(std::mem::take(&mut blocks));
             start = 0;
@@ -575,6 +624,7 @@ fn pack_cycles(mut leaves: Vec<(usize, usize)>, capacity: usize) -> Vec<Vec<Bloc
             leaf,
             start,
             cycles,
+            offset,
         });
         start += cycles;
     }
@@ -595,9 +645,10 @@ fn address_weights(point: &[F]) -> [F; K] {
     weights(point).try_into().expect("K=16 address")
 }
 
-struct Request {
-    start: usize,
-    opening: Opening<F>,
+struct Request<'a> {
+    id: usize,
+    block: &'a Block,
+    opening: &'a Opening<F>,
 }
 
 fn digit_weights(lanes: &[F], scale: F) -> [F; K] {
@@ -672,14 +723,19 @@ struct GroupQueries {
 }
 
 impl GroupQueries {
-    fn dimension(key: Key, claims: &[Vec<Request>]) -> usize {
-        3 * key.rounds - ADDRESS_BITS + 3 * key.count + claims.iter().map(Vec::len).sum::<usize>()
+    fn dimension(key: Key, claims: &[Vec<Request<'_>>]) -> usize {
+        let count = claims
+            .iter()
+            .flatten()
+            .filter(|r| r.block.offset == 0)
+            .count();
+        3 * key.rounds - ADDRESS_BITS + 3 * key.count + count
     }
 
     fn read(
         layout: &Layout,
         group: &Group,
-        claims: Vec<Vec<Request>>,
+        claims: Vec<Vec<Request<'_>>>,
         t: &mut impl FieldTranscript<F>,
     ) -> Result<Self> {
         let key = group.key;
@@ -692,27 +748,33 @@ impl GroupQueries {
         let (mass_check, random) = random.split_at(row_vars);
         let (bit_mix, random) = random.split_at(key.count);
         let (valid_mix, random) = random.split_at(key.count);
-        let (mass_mix, mut request_weights) = random.split_at(key.count);
+        let (mass_mix, request_weights) = random.split_at(key.count);
+        let mut request_weights = request_weights.iter().copied();
+        let mut coefficients = BTreeMap::new();
         let valid_address = address_weights(&valid_check[..ADDRESS_BITS]);
         let valid_rows = &valid_check[ADDRESS_BITS..];
 
         let mut groups = Vec::with_capacity(key.count);
         let mut sum = F::zero();
         for (i, (requests, blocks)) in claims.into_iter().zip(&group.polynomials).enumerate() {
-            let (mix, rest) = request_weights.split_at(requests.len());
-            request_weights = rest;
             let mut reads = Vec::new();
-            for (Request { start, opening }, &mix) in requests.into_iter().zip(mix) {
-                sum += opening.claim.value * mix;
+            for Request { id, block, opening } in requests {
+                let mix = *coefficients.entry(id).or_insert_with(|| {
+                    let mix = request_weights
+                        .next()
+                        .expect("one coefficient per original claim");
+                    sum += opening.claim.value * mix;
+                    mix
+                });
                 let slot = layout.slots[opening.slot];
                 match slot.kind {
-                    Kind::Bits { .. } => slot.read_digits(start, opening, mix, &mut reads),
+                    Kind::Bits { .. } => slot.read_digits(block, opening, mix, &mut reads),
                     Kind::Lookup { address_vars } => {
                         let (address, rows) = opening.claim.point.split_at(address_vars);
                         let mut padded = vec![F::zero(); ADDRESS_BITS - address_vars];
                         padded.extend_from_slice(address);
                         reads.push(Read::new(
-                            start,
+                            block.start,
                             rows,
                             address_weights(&padded).map(|a| mix * a),
                         ));
@@ -736,7 +798,7 @@ impl GroupQueries {
                             block_weight
                                 * weights(digit_point)
                                     .into_iter()
-                                    .take(slot.digit_count(planes))
+                                    .take(block.digits(slot, planes).len())
                                     .sum::<F>()
                         }
                         Kind::Lookup { .. } => block_weight,
@@ -753,12 +815,12 @@ impl GroupQueries {
                 };
                 let cells = 1 << leaf.cell_vars;
                 let lanes = 1 << leaf.digit_vars();
-                for digit in 0..leaf.digit_count(planes) {
+                for (position, digit) in block.digits(leaf, planes).enumerate() {
                     let bits = planes.saturating_sub(digit * lanes).min(lanes);
                     if bits == ADDRESS_BITS {
                         continue;
                     }
-                    let start = block.start + digit * cells;
+                    let start = block.start + position * cells;
                     let prefix = fixed_prefix(row_vars, start, leaf.cell_vars);
                     let mix = valid_mix[i] * eq(&valid_rows[..prefix.len()], &prefix);
                     let address = std::array::from_fn(|a| {
@@ -852,7 +914,7 @@ fn opening_statement(
 fn prove_group(
     layout: &Layout,
     group: &Group,
-    claims: Vec<Vec<Request>>,
+    claims: Vec<Vec<Request<'_>>>,
     witness: CommittedGroup,
     commitment: &AkitaCommitment,
     setup: &AkitaAdviceSetup,
@@ -919,7 +981,7 @@ fn prove_group(
 fn verify_group(
     layout: &Layout,
     group: &Group,
-    claims: Vec<Vec<Request>>,
+    claims: Vec<Vec<Request<'_>>>,
     commitment: &AkitaCommitment,
     proof: &GroupProof,
     setup: &jolt_akita::AkitaVerifierSetup,
@@ -954,4 +1016,35 @@ fn verify_group(
     let statement = opening_statement(commitment, &group_point(p), &proof.evaluations);
     AkitaNativeBatching::verify_batch(setup, &statement, &proof.opening, t)
         .map_err(|_| "invalid Akita lookup group opening")
+}
+
+#[cfg(test)]
+#[test]
+fn packs_used_range_digits_into_a_single_supported_group() {
+    let artifacts =
+        AkitaScheduleArtifacts::shared_from_default_directory(AkitaChunkProfile::new(8, 2));
+    let setup = AkitaAdviceSetup::new(artifacts).unwrap();
+    let mut layout = Layout::default();
+    for _ in 0..32 {
+        layout.add(20, Kind::Bits { planes: 60 }).unwrap();
+        layout.add(20, Kind::Bits { planes: 34 }).unwrap();
+    }
+    let plan = Plan::new(&layout, &setup).unwrap();
+    assert_eq!(plan.0.len(), 1);
+    let group = &plan.0[0];
+    assert_eq!((group.key.rounds, group.key.count), (28, 48));
+    for slot in layout.slots {
+        let Kind::Bits { planes } = slot.kind else {
+            unreachable!()
+        };
+        let mut digits = group
+            .polynomials
+            .iter()
+            .flatten()
+            .filter(|block| block.leaf == slot.id)
+            .flat_map(|block| block.digits(slot, planes))
+            .collect::<Vec<_>>();
+        digits.sort_unstable();
+        assert_eq!(digits, (0..slot.digit_count(planes)).collect::<Vec<_>>());
+    }
 }

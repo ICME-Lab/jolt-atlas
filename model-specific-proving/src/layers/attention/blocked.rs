@@ -64,7 +64,8 @@ impl<'a> BlockedAttention<'a> {
         }
         let input = Shape::new(rows, width)?;
         let mut layout = Layout::default();
-        let attention = AttentionPlan::build(&mut layout, input, bits.into(), attention, true)?;
+        let attention =
+            AttentionPlan::build(&mut layout, input, bits.into(), attention, true, None)?;
         let mut ranges = |shape, count| {
             (0..count)
                 .map(|_| Ranges::new(&mut layout, shape, [I32]))
@@ -518,7 +519,7 @@ mod tests {
         let input = [4, 2, 4, -2, -2, 3, 2, 0, 2, 1];
         let mut layout = Layout::default();
         let reference =
-            AttentionPlan::new(&mut layout, Shape::new(5, 2).unwrap(), 2, config()).unwrap();
+            AttentionPlan::new(&mut layout, Shape::new(5, 2).unwrap(), 2, config(), None).unwrap();
         let expected = reference
             .execute::<F>(&input, &mut layout.witness())
             .unwrap();

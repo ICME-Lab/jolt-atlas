@@ -32,7 +32,7 @@ pub(crate) struct Softmax<'a> {
     tables: SoftmaxTables<'a>,
     previous: Table<'a>,
     rows: Ranges,
-    excess: Ranges,
+    excess: Option<Ranges>,
     lookup: Lookup,
 }
 
@@ -57,11 +57,12 @@ impl<'a> Softmax<'a> {
         shape: Shape,
         mask: SoftmaxMask,
         tables: SoftmaxTables<'a>,
+        score_bound: Option<u128>,
     ) -> Result<Self> {
         if !matches!(mask, SoftmaxMask::Full) && shape.rows != shape.width {
             return Err("invalid Softmax parameters");
         }
-        Self::with_row_start(layout, shape, mask, tables, 0)
+        Self::with_row_start(layout, shape, mask, tables, 0, score_bound)
     }
 
     #[cfg(feature = "akita")]
@@ -72,6 +73,7 @@ impl<'a> Softmax<'a> {
             self.mask,
             self.tables,
             start,
+            None,
         )
     }
 
@@ -81,6 +83,7 @@ impl<'a> Softmax<'a> {
         mask: SoftmaxMask,
         tables: SoftmaxTables<'a>,
         row_start: usize,
+        score_bound: Option<u128>,
     ) -> Result<Self> {
         let len = tables.sums.len();
         if !(2..=1 << 31).contains(&len)
@@ -113,7 +116,17 @@ impl<'a> Softmax<'a> {
             Shape::new(shape.rows, 1)?,
             [Range::signed(34), bits(tables.limit as u64), bits(bound)],
         )?;
-        let excess = Ranges::new(layout, shape, [Range::unsigned(34)])?;
+        // At row_max + step, every entry is at least step below the shift,
+        // and even the longest row has sum at most the public limit.
+        let step = tables
+            .sums
+            .partition_point(|&v| (v as u64) * active as u64 > tables.limit as u64);
+        let no_clip = score_bound.is_some_and(|bound| {
+            bound <= i32::MAX as u128 && 2 * bound + (step as u128) < len as u128
+        });
+        let excess = (!no_clip)
+            .then(|| Ranges::new(layout, shape, [Range::unsigned(34)]))
+            .transpose()?;
         Ok(Self {
             shape,
             row_start,
@@ -124,6 +137,10 @@ impl<'a> Softmax<'a> {
             excess,
             lookup: Lookup::new(layout, shape.vars(), len)?,
         })
+    }
+
+    pub(super) fn has_excess(&self) -> bool {
+        self.excess.is_some()
     }
 
     fn active(&self, row: usize) -> std::ops::Range<usize> {
@@ -161,6 +178,7 @@ impl<'a> Softmax<'a> {
             SoftmaxMask::Sliding(n) => n as u64 + 1,
         };
         t.append(&mask);
+        t.append(&u64::from(self.has_excess()));
         t.append(&(self.tables.limit as u64));
         bind_i32(t, self.tables.sums);
         bind_i32(t, self.tables.probabilities);
@@ -178,7 +196,7 @@ impl<'a> Softmax<'a> {
         let mut raw_rows: [Vec<i64>; 3] = std::array::from_fn(|_| Vec::new());
         let stride = self.shape.width.next_power_of_two();
         let mut indices = vec![0; 1 << self.shape.vars()];
-        let mut excess = Vec::with_capacity(x.len());
+        let mut excess = self.excess.as_ref().map(|_| Vec::with_capacity(x.len()));
         let sums = Table::Slice(self.tables.sums);
         for (r, row) in x.chunks_exact(self.shape.width).enumerate() {
             let active = self.active(r);
@@ -210,14 +228,20 @@ impl<'a> Softmax<'a> {
                 let prob = self.tables.probabilities[index];
                 output.push(if real { prob } else { 0 });
                 indices[r * stride + i] = index as u32;
-                excess.push(difference - index as i64);
+                if let Some(excess) = &mut excess {
+                    excess.push(difference - index as i64);
+                } else if difference != index as i64 {
+                    return Err("Softmax exceeds the public score bound");
+                }
             }
         }
         let indices = Arc::new(indices);
         self.lookup.record(advice, Arc::clone(&indices))?;
         self.rows
             .record(advice, &raw_rows.each_ref().map(Vec::as_slice))?;
-        self.excess.record(advice, &[&excess])?;
+        if let (Some(ranges), Some(excess)) = (&self.excess, excess) {
+            ranges.record(advice, &[&excess])?;
+        }
         let row_shape = Shape {
             rows: self.shape.rows,
             width: 1,
@@ -248,7 +272,12 @@ impl<'a> Softmax<'a> {
         let limit = F::from_i32(self.tables.limit);
         let last = F::from_u64((self.tables.sums.len() - 1) as u64);
         let expression = |v: &[F]| {
-            let condition = v[6] - v[0] - v[1] - v[5] + mix[0] * v[5] * (v[1] - last);
+            let condition = v[6] - v[0] - v[1]
+                + if self.has_excess() {
+                    v[5] * (mix[0] * (v[1] - last) - F::one())
+                } else {
+                    F::zero()
+                };
             let sum = v[9] * (mix[1] * v[3] + mix[2] * v[4])
                 + v[10] * (mix[1] * (v[7] - limit) - mix[2] * (v[8] + limit + F::one()));
             v[11] * v[9] * v[2] + v[12] * v[9] * condition + v[13] * sum
@@ -277,6 +306,7 @@ impl<'a> Softmax<'a> {
                 4 => Column::source(size, move |i| {
                     F::from_i32(self.previous.at(t.indices[i] as usize))
                 }),
+                5 if !self.has_excess() => Column::repeat(vec![F::zero()].into(), size),
                 5 => Column::source(size, move |i| {
                     let (row, col) = (i / stride, i % stride);
                     if row < self.shape.rows && self.active(row).contains(&col) {
@@ -300,7 +330,7 @@ impl<'a> Softmax<'a> {
             })
         };
         let (end, values) = io.fold_weighted(
-            instance(sum, vars, 4),
+            instance(sum, vars, if self.has_excess() { 4 } else { 3 }),
             &batch,
             || (0..claims.len()).into_par_iter().map(columns).collect(),
             [0, 1, 2, 3, 4, 5, 6, 7, 8],
@@ -359,7 +389,9 @@ impl<'a> Softmax<'a> {
         for (i, (op, read)) in reads.into_iter().enumerate() {
             op.rows
                 .check(&[(&read.cell[..op.shape.row_vars()], read.row_ranges)], io)?;
-            op.excess.check(&[(&read.cell, [read.excess])], io)?;
+            if let Some(excess) = &op.excess {
+                excess.check(&[(&read.cell, [read.excess])], io)?;
+            }
             lookups.push(
                 &[
                     Table::Slice(op.tables.probabilities),

@@ -100,6 +100,7 @@ code: everything in `gpu/` is written here and owned end to end.
 | First model | **Qwen2-0.5B**: the same block as the 7B targets, and the CPU backend's 2.7 s to compare against. Which 7B follows is still open (5.2) |
 | Where it lives | **`gpu/` in this repository**, its own workspace (4.1) |
 | Ownership | **All code written here.** No dependency on this repository's crates, on upstream Jolt, or on outside proof-system crates |
+| Not the commodity stack | **We do not build on a small prime field with a FRI-family commitment** (Goldilocks or a 31-bit field with WHIR, BaseFold or FRI). Sable, FlashProve and SP1 already do, so it differentiates nothing, and Magnetar (5.4) proves 24 to 66 times faster than SP1 Hypercube on the same 12 CPU cores, at 120 bits of provable security against SP1's 100. That stack is the baseline we measure against, not a candidate |
 
 ### 5.2 Open
 
@@ -109,8 +110,8 @@ by argument alone.
 | # | Decision | Options | Recommendation | Settled by |
 |---|---|---|---|---|
 | 1 | Numeric representation | (a) 32-bit fixed point everywhere, as today; (b) per-tensor widths, e.g. 8-bit weights and 16-bit activations; (c) floating point | (b), with the widths chosen by experiment. (c) has no affordable proof. See 5.3 | Accuracy experiment, phase 0 |
-| 2 | Field | 31-bit prime with an extension; 64-bit prime (Goldilocks) with an extension; Fp128; a binary field | A small prime field. Which one follows from decision 1: a matrix product of 8-bit by 16-bit values over 11,008 terms needs about 38 bits, which a 31-bit field cannot hold without splitting values | GPU multiply, NTT and sumcheck-round rates, phase 0 |
-| 3 | Commitment scheme | Hash-based multilinear over the chosen field (WHIR, BaseFold/FRI, Ligerito); BitZ's design re-targeted; a lattice scheme | Hash-based over the small field. PR #409 measured Akita with Metal at 12% faster than CPU Akita on a supported group, and 14 to 15 times slower than BitZ overall, so a GPU does not rescue it | Literature pass and a commit-plus-open microbenchmark, phase 0 |
+| 2 | Commitment | Packed bits in `F_{2^128}` under a hash tree, opened with ring switching and Ligerito: what BitZ and Magnetar both do, and what we own; a lattice scheme | Packed bits, laid out as one polynomial with one opening. It prices a value by its bits and gives range checks for free, which is why BitZ beat Akita here by 14 to 15 times (PR #409). The unknown is binary-field arithmetic on a GPU, which has no carry-less multiply instruction | GPU rates for `F_{2^128}` multiplication by each known method (bit-sliced, tower, table, integer-multiply), for the encoding and the hash tree, and for the BitZ grand product's inner loop, phase 0 |
+| 3 | Field of the sumchecks | A prime field, with BitZ's bridge from a commitment of bits to a claim over that field (which prime: Fp128 as today, a Mersenne prime, a smaller prime with an extension); `F_{2^128}` throughout, with integer arithmetic as bit constraints, as Magnetar does | A prime field. A sumcheck for a matrix product touches each weight once only in a field where integers add and multiply; as bit constraints each multiply-add costs a few hundred constraints (an estimate), and Qwen2-0.5B at 16 tokens is several billion multiply-adds against under half a billion weights. Which prime is open, and the bridge (the grand product, our largest opening cost today) is what the choice has to pay for | GPU sumcheck-round rates per candidate prime; the bridge's cost on the GPU; the widths of decision 1 (an 8-bit by 16-bit product over 11,008 terms needs about 38 bits) |
 | 4 | The 7B model | Llama-2-7B; Mistral-7B; Qwen2.5-7B; Llama-3.1-8B | One config-driven block serves all four, so this is a licence question: Llama 2 is under Meta's community licence and gated; Mistral-7B and Qwen2.5-7B are Apache 2.0 | Licence review, before phase 4 |
 | 5 | GPU kernels | CUDA through a Rust backend trait, with which toolchain (C++ kernels over FFI, or Rust-side code generation) | CUDA C++ kernels behind the trait; benchmark an existing proving library only as the bar to beat | Phase 0 |
 | 6 | Statement | What is public (prompt, output, sampling seed); greedy or sampled decoding | Public prompt and output, greedy decoding first; one proof covers a whole sequence, since a causal model's forward pass over N tokens checks every next-token choice | Product owner |
@@ -135,19 +136,60 @@ tensor, and to choosing the defaults from an experiment: perplexity of the integ
 against the half-precision original at several weight and activation widths (32/32, 16/16,
 8/16, 8/8), on the target model.
 
+### 5.4 What Magnetar shows, and what it does not
+
+Magnetar (Setty, ePrint 2026/2423) is a zkVM for RV64I built entirely over `F_2` and
+`F_{2^128}`: BinarySpartan for the constraints, Twist and Shout over binary fields for memory,
+and MosaicPCS over Ligerito for the one commitment. On 12 cores of an M4 Max it proves 7.2 to
+8.7 million cycles a second at 2^22 cycles, with 600 KiB proofs verified in 11 to 13 ms.
+
+**What we take:**
+
+- **One commitment and one opening.** Every committed vector sits on an aligned subcube of
+  one bit polynomial, so a claim on a part lifts to a claim on the whole by appending fixed
+  coordinates, with no adapter sumcheck. `specs/bitz-commitment.md` already took this.
+- **Commit only what nothing else establishes.** A segment another argument proves correct is
+  read through an evaluation claim and never committed. For us: no intermediate tensor
+  between layers is committed.
+- **No argument whose soundness error grows with the instance.** A permutation or grand-sum
+  argument loses about the instance's size over the field's; a sumcheck loses its logarithm.
+  That is how Magnetar keeps 120 bits in a 128-bit field while SP1 Hypercube and RISC Zero,
+  with such arguments over roughly 124-bit extensions, target 96 to 100. Our lookup argument
+  follows Shout, not LogUp, for this reason, and every argument we add, BitZ's bridge
+  included, states its error bound against it.
+- **Provable security from standard hashes**: no algebraic hash, and no conjectured
+  proximity gap for the code. This is the bar for open decision 7.
+- **Two relations over one witness**: bit constraints where bits are cheap and packed
+  field constraints where words are, tied by the single commitment.
+- **Recursion as the answer to memory**: prove chunks and compose the proofs, cheap when the
+  verifier is hashing and binary-field arithmetic. Magnetar proposes this and has not built
+  it; it is an option for the 7B model's memory bound, not a plan.
+
+**What does not transfer:**
+
+- **Its arithmetisation.** RV64I has no multiply instruction, and Magnetar's adder is bit
+  constraints. Our workload is integer multiply-add, by the billion (open decision 3).
+- **Its speed, to a GPU.** Every figure is from a CPU with a carry-less multiply
+  instruction. The paper has no GPU measurement, and it measured SP1 on that CPU too, not on
+  the GPUs SP1 is built for.
+
 ## 6. Phases
 
 Each phase ends at a gate. A phase's specs are written when it starts.
 
 **Phase 0: measure and decide.** No protocol code.
 - GPU instance up; the gate harness runs on it.
-- Kernel microbenchmarks on that GPU for each candidate field: multiply, NTT or encoding,
-  Merkle hashing, one sumcheck round over 2^28 values.
+- Kernel microbenchmarks on that GPU: binary-field multiplication by each known method;
+  Reed–Solomon encoding and the hash tree over packed bits; the BitZ grand product's inner
+  loop; one sumcheck round over 2^28 values in each candidate field of decision 3.
+- The baseline to beat on the same GPU: a small prime field with a FRI-family commitment, at
+  the same sizes, from an existing implementation.
 - The accuracy experiment of 5.3, on Qwen2-0.5B first.
 - A cost model for Qwen2-0.5B and for the 7B target at 1,000 tokens: values per token,
   committed values, lookups, the batched weight opening, GPU memory at each step.
-- A recency-first literature pass: GPU sumcheck and commitment work and the zkML systems of the
-  last few months, with their numbers read sceptically.
+- A recency-first literature pass: Magnetar and BinarySpartan in full, bit packing in
+  sumcheck (ePrint 2026/2770), binary-field proving on GPUs, and the zkML systems of the last
+  few months, with their numbers read sceptically.
 - *Gate:* every open decision of 5.2 that phase 2 depends on (1, 2, 3, 5, 7, 8) made and
   written into a top-level protocol spec; a target rate.
 
@@ -210,10 +252,22 @@ each model.
   the commitment scheme is chosen.
 - **Two backends, one team.** The CPU backend is frozen in scope so it does not compete for
   time; the padded-lane gaps pinned on 2026-11-19 stay pinned there.
-- **Paying per value again.** A small prime field prices a 2-bit digit as a whole element,
-  which BitZ avoided. Fewer and narrower committed values (open decision 1, and sumcheck
-  chaining with no intermediate commitments) have to make up for it; the cost model checks
-  that they do.
+- **Binary-field arithmetic on a GPU.** The packed-bit design rests on multiplication in
+  `F_{2^128}`, which CPUs do in one instruction and GPUs do not have. Magnetar's and BitZ's
+  speeds are CPU measurements. If no method reaches a useful rate, decision 2 reopens; this
+  is the first number phase 0 produces.
+- **A field that can count.** Our relations are integer products. Either the sumchecks stay
+  in a prime field, whose cost on a GPU decision 3 measures, or integer arithmetic becomes
+  binary constraints, whose cost for a matrix product nobody has priced for us.
+
+## Sources
+
+Magnetar: Setty, ePrint 2026/2423, read in full (sections 1.3, 2.2, 5.2 and 6 are what this
+plan relies on). BinarySpartan: Setty, ePrint 2026/1656. Ring switching: Diamond and Posen,
+ePrint 2024/504. Ligerito: Novakovic and Angeris, ePrint 2025/1187. Sumcheck bit packing:
+Frigo and shelat, ePrint 2026/2770 (not yet read). BitZ: ePrint 2026/2141 and
+`specs/bitz-commitment.md`. Sable, FlashProve and the positions of other systems:
+`docs/prover-plan.md` section 4.
 
 ## Appendix: the 7B target in numbers
 

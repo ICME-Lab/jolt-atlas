@@ -20,8 +20,8 @@ impl LutLayers {
                 .map(|i| {
                     let low = index + i * len;
                     let high = low + n;
-                    self.pairs[low >> self.log_trees]
-                        [self.nibble(low) + self.nibble(high) * LUT_ENTRIES]
+                    self.luts[low >> self.log_trees][self.nibble(low)]
+                        * self.luts[high >> self.log_trees][self.nibble(high)]
                 })
                 .reduce(|a, b| a * b)
                 .expect("a tree node has children");

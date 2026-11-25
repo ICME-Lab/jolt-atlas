@@ -276,7 +276,6 @@ struct LutLayers {
     /// The nibbles of the layer-2 nodes; see [`LutLayers::new`].
     matrix: BitMatrix<'static>,
     luts: Vec<[Field; LUT_ENTRIES]>,
-    pairs: Vec<[Field; LUT_ENTRIES * LUT_ENTRIES]>,
     /// `s`: a lookup table's run of nibbles holds one per tree.
     log_trees: usize,
 }
@@ -305,19 +304,9 @@ impl LutLayers {
             1 << log_trees >= NIBBLES_IN_WORD,
             "each lookup table needs at least a word of nibbles"
         );
-        let luts = lower_luts(images);
-        let (left, right) = luts.split_at(luts.len() / 2);
-        let pairs = left
-            .iter()
-            .zip(right)
-            .map(|(left, right)| {
-                std::array::from_fn(|i| left[i % LUT_ENTRIES] * right[i / LUT_ENTRIES])
-            })
-            .collect();
         Self {
             matrix,
-            luts,
-            pairs,
+            luts: lower_luts(images),
             log_trees,
         }
     }
@@ -869,11 +858,10 @@ fn layer3(lut_layers: &LutLayers) -> Vec<Field> {
         .par_chunks_mut(lut_layers.piece())
         .zip(lut_layers.pieces(half))
         .for_each(|(nodes, positions)| {
-            let table = &lut_layers.pairs[positions.start >> lut_layers.log_trees];
-            let (_, pairs) = lut_layers.pairs::<LAYER1>(positions);
+            let ([lut0, lut1, ..], pairs) = lut_layers.pairs::<LAYER1>(positions);
             for (nodes, word) in nodes.chunks_exact_mut(NIBBLES_IN_WORD).zip(pairs) {
                 for (node, [n0, n1, ..]) in nodes.iter_mut().zip(word) {
-                    *node = table[n0 + n1 * LUT_ENTRIES];
+                    *node = lut0[n0] * lut1[n1];
                 }
             }
         });

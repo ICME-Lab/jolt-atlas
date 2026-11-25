@@ -56,7 +56,7 @@ model definition (Rust)        Llama block: RMSNorm, attention + RoPE, gated MLP
         │
 integer inference engine       runs the model on the GPU in exact integers, keeps the witness
         │
-prover (GPU)                   layer relations → batched sumchecks → one commitment opening
+prover (GPU)                   commit the witness → one batched sumcheck → one opening (4.2)
         │  proof bytes
 verifier (CPU, own crate)      compiled from the model definition; reads the proof once
 ```
@@ -90,6 +90,54 @@ code: everything in `gpu/` is written here and owned end to end.
 - The crates inside `gpu/` are named and split by the phase 2 specs. The verifier is one of
   them from the start.
 
+### 4.2 The skeleton of the proof
+
+The whole proof is two commitments, one batched sumcheck and one opening. Everything else in
+this plan fills in one of these steps.
+
+Once per model:
+
+0. **Commit the weights.** The verifier keeps the commitment, not the weights.
+
+For each proof:
+
+1. **Run the integer model** and keep the witness: every tensor the verifier cannot
+   recompute. That is each op's output, each rescale's remainder and each lookup's address.
+2. **Commit the witness.**
+3. **One batched sumcheck.** The verifier draws one random point, and the sumcheck proves
+   every op's relation at that point at once:
+   - a matrix product, `Σ_k W[i,k]·a[k] = 2^s·q[i] + r[i]`, with `q` the rescaled output and
+     `r` its remainder;
+   - a lookup, `b[i] = T[a[i]]`;
+   - an addition or a residual, which is linear and costs almost nothing.
+
+   It ends in a handful of claims: the weights' polynomial has this value at this point, the
+   witness's polynomial has that value at that point.
+4. **One opening**: a joint proof that those claims agree with the two commitments.
+
+The verifier checks the sumcheck's rounds, evaluates the public parts itself (the prompt, the
+output, the tables) and checks the opening.
+
+**Where the prover's time goes.** For a matrix product the sumcheck is about 14 rounds over
+the layer's width, however many weights or tokens there are. The work is the two weighted
+passes before it, one over the weights and one over the activations: the weight pass and the
+witness pass of the floor (5.7). A prover built on this skeleton is the floor plus what its
+commitment costs.
+
+**What the count depends on.**
+
+- **One sumcheck needs every tensor between ops committed.** Then every relation is local
+  and independent of the others, and they batch into one. With less committed, the layers
+  are proven in sequence, each sumcheck feeding the next, as the CPU backend does; its serial
+  steps between sumchecks are 1.15 s of the 3.05 s it spends in sumchecks on Qwen at 16
+  tokens. This is open decision 9.
+- **One opening needs both commitments under one scheme.** If the weights and the witness
+  are committed differently, as 5.6 hypothesises, there are two openings.
+- **The claims land at different points.** A short second sumcheck brings them to one point
+  per commitment, unless the opening takes several points.
+- **Range checks** are free where the witness is committed as bits, and are further terms of
+  the batched sumcheck where it is not.
+
 ## 5. Decisions
 
 ### 5.1 Made (2026-11-25)
@@ -117,6 +165,7 @@ by argument alone.
 | 6 | Statement | What is public (prompt, output, sampling seed); greedy or sampled decoding | Public prompt and output, greedy decoding first; one proof covers a whole sequence, since a causal model's forward pass over N tokens checks every next-token choice | Product owner |
 | 7 | Security level | 128 bits as today; 100 bits as the Gemma result; proven or conjectured soundness for the commitment | Decide explicitly and state it next to every benchmark | Phase 0 spec |
 | 8 | Padding | Pad every dimension to a power of two; lay tensors out without it | Do not assume power-of-two padding: Llama's MLP width 11,008 pads to 16,384, half as many weight cells again in every MLP matrix | Phase 0 cost model |
+| 9 | What the witness holds | (a) Every tensor between ops, so one batched sumcheck proves every relation (4.2); (b) only what nothing else establishes, with the layers proven in sequence, as the CPU backend does and as 5.4 took from Magnetar | Leaning to (a), not decided. It commits roughly 16 more bits per activation (an estimate) and removes all depth from the proof; on a GPU more bits run in parallel and depth does not | The committed bits per activation under each, from the floor calculator; GPU rates for the commit pass against the serial steps |
 
 ### 5.3 On quantized weights
 
@@ -149,8 +198,9 @@ and MosaicPCS over Ligerito for the one commitment. On 12 cores of an M4 Max it 
   one bit polynomial, so a claim on a part lifts to a claim on the whole by appending fixed
   coordinates, with no adapter sumcheck. `specs/bitz-commitment.md` already took this.
 - **Commit only what nothing else establishes.** A segment another argument proves correct is
-  read through an evaluation claim and never committed. For us: no intermediate tensor
-  between layers is committed.
+  read through an evaluation claim and never committed. For us this would mean no
+  intermediate tensor between layers is committed; whether we take it is open decision 9,
+  since it is what puts the layers in sequence.
 - **No argument whose soundness error grows with the instance.** A permutation or grand-sum
   argument loses about the instance's size over the field's; a sumcheck loses its logarithm.
   That is how Magnetar keeps 120 bits in a 128-bit field while SP1 Hypercube and RISC Zero,

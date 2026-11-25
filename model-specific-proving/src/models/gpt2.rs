@@ -51,6 +51,7 @@ pub(crate) fn load(cfg: &Config, tensors: &Tensors<'_>, hidden: usize) -> LoadRe
             bias: qkv.bias[i * width..][..width].to_vec(),
         };
         layers.push(LayerWeights {
+            qk_norm: None,
             query: part(0),
             key: part(1),
             value: part(2),

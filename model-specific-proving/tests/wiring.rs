@@ -30,6 +30,19 @@ fn proves_qwen2_with_rotary_grouped_attention_and_gated_mlp() {
 }
 
 #[test]
+fn proves_qwen3_with_head_normalization() {
+    let weights = ModelWeights::from_safetensors(&model("qwen3-tiny"), 14).unwrap();
+    let tokens = [17, 42, 23, 61];
+    let decoder = weights.model(tokens.len()).unwrap();
+    let setup = setup();
+    let (output, proof) = decoder.prove::<AkitaScheme>(&tokens, None, &setup).unwrap();
+    assert_eq!(output.len(), tokens.len() * 1024);
+    decoder
+        .verify(&tokens, None, &output, &proof, &setup)
+        .unwrap();
+}
+
+#[test]
 fn proves_bert_with_post_normalization() {
     let weights = ModelWeights::from_safetensors(&model("bge-tiny"), 14).unwrap();
     let encoder = weights.model(2).unwrap();

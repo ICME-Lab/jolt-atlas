@@ -12,7 +12,7 @@ use atlas_trace::{
 use safetensors::{Dtype, SafeTensors};
 use serde::Deserialize;
 
-use crate::models::{bert, gpt2, qwen2};
+use crate::models::{bert, gpt2, qwen};
 
 pub(crate) type LoadResult<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -20,6 +20,7 @@ pub(crate) type LoadResult<T> = std::result::Result<T, Box<dyn Error>>;
 pub(crate) enum Family {
     Gpt2,
     Qwen2,
+    Qwen3,
     Bert,
 }
 
@@ -37,6 +38,7 @@ pub(crate) struct LayerWeights {
     pub(crate) down: Affine,
     pub(crate) norm1: Affine,
     pub(crate) norm2: Affine,
+    pub(crate) qk_norm: Option<[Affine; 2]>,
 }
 
 pub(crate) struct Parameters {
@@ -160,6 +162,12 @@ pub(crate) struct Config {
     pub(crate) type_vocab_size: usize,
     #[serde(default)]
     pub(crate) num_key_value_heads: Option<usize>,
+    #[serde(default)]
+    pub(crate) head_dim: Option<usize>,
+    #[serde(default)]
+    pub(crate) attention_bias: bool,
+    #[serde(default)]
+    pub(crate) layer_types: Option<Vec<String>>,
     #[serde(
         default,
         alias = "layer_norm_epsilon",
@@ -187,6 +195,17 @@ pub(crate) struct Config {
     pub(crate) is_decoder: bool,
 }
 
+impl Config {
+    pub(crate) fn head_width(&self) -> usize {
+        if self.model_type == "qwen3" {
+            if let Some(width) = self.head_dim {
+                return width;
+            }
+        }
+        self.hidden_size / self.num_attention_heads
+    }
+}
+
 fn default_scale_attn_weights() -> bool {
     true
 }
@@ -197,7 +216,8 @@ impl ModelWeights {
         type Load = fn(&Config, &Tensors<'_>, usize) -> LoadResult<Parameters>;
         let (family, act, load): (_, _, Load) = match cfg.model_type.as_str() {
             "gpt2" => (Family::Gpt2, gpt2::ACTIVATION, gpt2::load),
-            "qwen2" => (Family::Qwen2, qwen2::ACTIVATION, qwen2::load),
+            "qwen2" => (Family::Qwen2, qwen::ACTIVATION, qwen::load),
+            "qwen3" => (Family::Qwen3, qwen::ACTIVATION, qwen::load),
             "bert" => (Family::Bert, bert::ACTIVATION, bert::load),
             _ => return Err("unsupported model family".into()),
         };
@@ -205,7 +225,9 @@ impl ModelWeights {
             || cfg.hidden_act != act
             || cfg.hidden_size == 0
             || cfg.num_attention_heads == 0
-            || !cfg.hidden_size.is_multiple_of(cfg.num_attention_heads)
+            || ((family != Family::Qwen3 || cfg.head_dim.is_none())
+                && !cfg.hidden_size.is_multiple_of(cfg.num_attention_heads))
+            || cfg.head_width() == 0
             || cfg.num_hidden_layers == 0
             || !cfg.epsilon.is_finite()
             || cfg.epsilon <= 0.0
@@ -213,7 +235,7 @@ impl ModelWeights {
             return Err("unsupported model configuration".into());
         }
         let width = cfg.hidden_size;
-        let head = width / cfg.num_attention_heads;
+        let head = cfg.head_width();
         let hidden = cfg
             .intermediate_size
             .unwrap_or(width.checked_mul(4).ok_or("MLP width overflow")?);

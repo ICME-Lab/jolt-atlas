@@ -12,6 +12,7 @@ use crate::protocol::{
 
 use super::{
     linear::{Linear, Product, ProductKind, Projection, Rotary, Rotate, Rounded},
+    nonlinear::{Norm, NormTrace, NormalizationParameters},
     softmax::{ClipPlan, ClipSpec, Softmax, SoftmaxMask, SoftmaxTables, SoftmaxTrace},
 };
 
@@ -46,16 +47,24 @@ pub(crate) struct AttentionPlan<'a> {
 
 struct Project<'a> {
     linear: Linear<'a>,
+    norm: Option<Norm<'a>>,
     rotary: Option<Rotate<'a>>,
 }
-struct ProjectTrace {
+struct ProjectTrace<F> {
     linear: Rounded,
+    norm: Option<NormTrace<F>>,
     rotary: Option<Rounded>,
 }
 
-impl ProjectTrace {
+impl<F> ProjectTrace<F> {
     fn output(&self) -> &[i32] {
         self.rotary
+            .as_ref()
+            .map_or_else(|| self.before_rope(), |t| &t.output)
+    }
+
+    fn before_rope(&self) -> &[i32] {
+        self.norm
             .as_ref()
             .map_or(&self.linear.output, |t| &t.output)
     }
@@ -67,37 +76,58 @@ impl<'a> Project<'a> {
         input: Shape,
         bits: usize,
         w: Projection<'a>,
+        norm: Option<NormalizationParameters<'a>>,
         rotary: Option<Rotary<'a>>,
     ) -> Result<Self> {
         let linear = Linear::new(layout, input, w, bits, false)?;
+        let norm = norm
+            .map(|p| Norm::new(layout, linear.shape(), bits, p))
+            .transpose()?;
         let rotary = rotary
             .map(|r| Rotate::new(layout, linear.shape(), bits, r))
             .transpose()?;
-        Ok(Self { linear, rotary })
+        Ok(Self {
+            linear,
+            norm,
+            rotary,
+        })
     }
 
     fn bind(&self, t: &mut impl Transcript) {
         self.linear.bind(t);
+        t.append(&u64::from(self.norm.is_some()));
+        if let Some(norm) = &self.norm {
+            norm.bind(t);
+        }
         t.append(&u64::from(self.rotary.is_some()));
         if let Some(r) = &self.rotary {
             r.bind(t);
         }
     }
 
-    fn execute(&self, x: &[i32], a: &mut Advice) -> Result<ProjectTrace> {
+    fn execute<F: ProofField>(&self, x: &[i32], a: &mut Advice) -> Result<ProjectTrace<F>> {
         let linear = self.linear.execute(x, a)?;
+        let norm = self
+            .norm
+            .as_ref()
+            .map(|n| n.execute(&linear.output, a))
+            .transpose()?;
         let rotary = self
             .rotary
             .as_ref()
-            .map(|r| r.execute(&linear.output, a))
+            .map(|r| r.execute(norm.as_ref().map_or(&linear.output, |n| &n.output), a))
             .transpose()?;
-        Ok(ProjectTrace { linear, rotary })
+        Ok(ProjectTrace {
+            linear,
+            norm,
+            rotary,
+        })
     }
 
     fn reverse<'w, F: ProofField>(
         &self,
         mut q: Claim<F>,
-        trace: impl Fn() -> (&'w [i32], &'w ProjectTrace),
+        trace: impl Fn() -> (&'w [i32], &'w ProjectTrace<F>),
         io: &mut Session<'_, '_, F>,
     ) -> Result<Claim<F>> {
         if let Some(r) = &self.rotary {
@@ -105,9 +135,19 @@ impl<'a> Project<'a> {
                 q,
                 || {
                     let (_, w) = trace();
+                    (w.before_rope(), w.rotary.as_ref().expect("RoPE trace"))
+                },
+                io,
+            )?;
+        }
+        if let Some(norm) = &self.norm {
+            q = norm.reverse(
+                &[q],
+                || {
+                    let (_, w) = trace();
                     (
                         w.linear.output.as_slice(),
-                        w.rotary.as_ref().expect("RoPE trace"),
+                        w.norm.as_ref().expect("QK norm trace"),
                     )
                 },
                 io,
@@ -131,8 +171,8 @@ struct HeadTrace<F> {
     value: Rounded,
 }
 pub(crate) struct AttentionTrace<F> {
-    queries: Vec<ProjectTrace>,
-    groups: Vec<(ProjectTrace, ProjectTrace)>,
+    queries: Vec<ProjectTrace<F>>,
+    groups: Vec<(ProjectTrace<F>, ProjectTrace<F>)>,
     heads: Vec<HeadTrace<F>>,
     joined: Vec<i32>,
     output: Rounded,
@@ -151,8 +191,9 @@ impl<'a> AttentionPlan<'a> {
         bits: usize,
         p: Attention<'a>,
         input_bound: Option<u128>,
+        qk_norm: Option<[NormalizationParameters<'a>; 2]>,
     ) -> Result<Self> {
-        Self::build(layout, input, bits, p, false, input_bound)
+        Self::build(layout, input, bits, p, false, input_bound, qk_norm)
     }
 
     fn build(
@@ -162,6 +203,7 @@ impl<'a> AttentionPlan<'a> {
         p: Attention<'a>,
         blocked: bool,
         input_bound: Option<u128>,
+        qk_norm: Option<[NormalizationParameters<'a>; 2]>,
     ) -> Result<Self> {
         if p.groups.is_empty()
             || p.queries.is_empty()
@@ -172,7 +214,7 @@ impl<'a> AttentionPlan<'a> {
             return Err("invalid attention configuration");
         }
         let score_bound = input_bound
-            .filter(|_| matches!(p.mask, SoftmaxMask::Causal))
+            .filter(|_| qk_norm.is_none() && matches!(p.mask, SoftmaxMask::Causal))
             .and_then(|bound| {
                 let scale = 1u128 << bits;
                 let rotary = p.rotary.map_or(scale, |r| {
@@ -209,15 +251,15 @@ impl<'a> AttentionPlan<'a> {
         let queries = p
             .queries
             .into_iter()
-            .map(|q| Project::new(layout, input, bits, q, p.rotary))
+            .map(|q| Project::new(layout, input, bits, q, qk_norm.map(|n| n[0]), p.rotary))
             .collect::<Result<Vec<_>>>()?;
         let groups = p
             .groups
             .into_iter()
             .map(|[k, v]| {
                 Ok((
-                    Project::new(layout, input, bits, k, p.rotary)?,
-                    Project::new(layout, input, bits, v, None)?,
+                    Project::new(layout, input, bits, k, qk_norm.map(|n| n[1]), p.rotary)?,
+                    Project::new(layout, input, bits, v, None, None)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;

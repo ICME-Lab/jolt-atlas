@@ -25,7 +25,7 @@ pub(crate) mod bert;
 #[cfg(feature = "safetensors-weights")]
 pub(crate) mod gpt2;
 #[cfg(feature = "safetensors-weights")]
-pub(crate) mod qwen2;
+pub(crate) mod qwen;
 #[cfg(feature = "safetensors-weights")]
 use crate::{
     layers::{Activation, NormalizationKind, Rotary, SoftmaxMask, SoftmaxTables},
@@ -171,19 +171,36 @@ impl<'a> Model<'a> {
         layers: Vec<Layer<'a>>,
         architecture: Architecture<'a>,
     ) -> Result<Self> {
+        Self::build(rows, bits, embeddings, layers, architecture, &[])
+    }
+
+    fn build(
+        rows: usize,
+        bits: u8,
+        embeddings: PublicEmbeddings<'a>,
+        layers: Vec<Layer<'a>>,
+        architecture: Architecture<'a>,
+        qk_norms: &[Option<[NormalizationParameters<'a>; 2]>],
+    ) -> Result<Self> {
         let shape = Shape::new(rows, embeddings.width)?;
         if layers.is_empty() || bits > 15 {
             return Err("invalid model dimensions");
         }
         let mut layout = Layout::default();
         let mut plans = Vec::with_capacity(layers.len());
-        for p in layers {
+        for (i, p) in layers.into_iter().enumerate() {
             let input_bound = match &architecture {
                 Architecture::Decoder { .. } => p.attention_norm.output_bound(shape.width, bits),
                 Architecture::Encoder { .. } => None,
             };
-            let attention =
-                AttentionPlan::new(&mut layout, shape, bits.into(), p.attention, input_bound)?;
+            let attention = AttentionPlan::new(
+                &mut layout,
+                shape,
+                bits.into(),
+                p.attention,
+                input_bound,
+                qk_norms.get(i).copied().flatten(),
+            )?;
             let mlp_norm = match &architecture {
                 Architecture::Decoder { .. } => p.mlp_norm,
                 Architecture::Encoder { .. } => p.attention_norm,
@@ -716,7 +733,7 @@ impl ModelWeights {
         }
         match self.family {
             Family::Gpt2 => gpt2::model(self, rows),
-            Family::Qwen2 => qwen2::model(self, rows),
+            Family::Qwen2 | Family::Qwen3 => qwen::model(self, rows),
             Family::Bert => bert::model(self, rows),
         }
     }
@@ -797,7 +814,20 @@ impl ModelWeights {
             positions: self.parameters.positions.as_deref(),
             segments: self.parameters.segments.as_deref(),
         };
-        Model::new(rows, self.bits, embeddings, layers, architecture)
+        let qk_norms: Vec<_> = self
+            .parameters
+            .layers
+            .iter()
+            .map(|layer| {
+                layer.qk_norm.as_ref().map(|norm| {
+                    [
+                        self.normalization(&norm[0], NormalizationKind::Rms),
+                        self.normalization(&norm[1], NormalizationKind::Rms),
+                    ]
+                })
+            })
+            .collect();
+        Model::build(rows, self.bits, embeddings, layers, architecture, &qk_norms)
     }
 }
 

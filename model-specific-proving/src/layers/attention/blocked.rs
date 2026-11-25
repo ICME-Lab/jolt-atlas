@@ -40,8 +40,8 @@ struct Block<'a> {
 }
 
 struct Projections {
-    queries: Vec<ProjectTrace>,
-    groups: Vec<(ProjectTrace, ProjectTrace)>,
+    queries: Vec<ProjectTrace<F>>,
+    groups: Vec<(ProjectTrace<F>, ProjectTrace<F>)>,
 }
 
 struct Trace {
@@ -65,7 +65,7 @@ impl<'a> BlockedAttention<'a> {
         let input = Shape::new(rows, width)?;
         let mut layout = Layout::default();
         let attention =
-            AttentionPlan::build(&mut layout, input, bits.into(), attention, true, None)?;
+            AttentionPlan::build(&mut layout, input, bits.into(), attention, true, None, None)?;
         let mut ranges = |shape, count| {
             (0..count)
                 .map(|_| Ranges::new(&mut layout, shape, [I32]))
@@ -310,7 +310,7 @@ impl<'a> BlockedAttention<'a> {
         let mut project = |plan: &Project<'_>,
                            range: &Ranges,
                            claims: &[Claim<F>],
-                           witness: &dyn Fn() -> &'w ProjectTrace| {
+                           witness: &dyn Fn() -> &'w ProjectTrace<F>| {
             let shape = plan.linear.shape();
             let q = io.merge(claims, || {
                 shape.padded(witness().output(), F::zero(), F::from_i32)
@@ -542,9 +542,15 @@ mod tests {
         for rows in [4, 5] {
             let input = &input[..rows * 2];
             let mut layout = Layout::default();
-            let reference =
-                AttentionPlan::new(&mut layout, Shape::new(rows, 2).unwrap(), 2, config(), None)
-                    .unwrap();
+            let reference = AttentionPlan::new(
+                &mut layout,
+                Shape::new(rows, 2).unwrap(),
+                2,
+                config(),
+                None,
+                None,
+            )
+            .unwrap();
             let expected = reference
                 .execute::<F>(input, &mut layout.witness())
                 .unwrap();

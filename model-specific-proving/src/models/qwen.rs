@@ -1,5 +1,4 @@
-//! Qwen2 uses a pre-RMSNorm decoder with causal grouped-query attention and RoPE.
-//! Its MLP multiplies the SiLU-activated gate projection by the up projection.
+//! Qwen decoders use causal grouped-query attention, RoPE, and a gated SiLU MLP.
 
 use atlas_trace::{semantics::tables::TableKind, Scale};
 
@@ -23,7 +22,8 @@ pub(super) fn model(weights: &ModelWeights, rows: usize) -> Result<Model<'_>> {
 }
 
 pub(crate) fn load(cfg: &Config, tensors: &Tensors<'_>, hidden: usize) -> LoadResult<Parameters> {
-    let head = cfg.hidden_size / cfg.num_attention_heads;
+    let head = cfg.head_width();
+    let qwen3 = cfg.model_type == "qwen3";
     let groups = cfg.num_key_value_heads.unwrap_or(cfg.num_attention_heads);
     let theta = cfg.rope_theta.unwrap_or(0.0);
     if groups == 0
@@ -31,14 +31,24 @@ pub(crate) fn load(cfg: &Config, tensors: &Tensors<'_>, hidden: usize) -> LoadRe
         || !head.is_multiple_of(2)
         || cfg.tie_word_embeddings != Some(true)
         || cfg.use_sliding_window
+        || (qwen3
+            && cfg.layer_types.as_ref().is_some_and(|types| {
+                types.len() != cfg.num_hidden_layers
+                    || types.iter().any(|kind| kind != "full_attention")
+            }))
         || cfg.rope_scaling.is_some()
         || !theta.is_finite()
         || theta <= 0.0
     {
-        return Err("unsupported Qwen2 attention".into());
+        return Err("unsupported Qwen attention".into());
     }
     let width = cfg.hidden_size;
-    let kv = groups * head;
+    let query = cfg
+        .num_attention_heads
+        .checked_mul(head)
+        .ok_or("Qwen query width overflow")?;
+    let kv = groups.checked_mul(head).ok_or("Qwen KV width overflow")?;
+    let qkv_bias = !qwen3 || cfg.attention_bias;
     let tokens = tensors.embeddings("model.embed_tokens.weight", &[cfg.vocab_size, width])?;
     let norm = tensors.norm("model.norm", width, false)?;
     let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -48,10 +58,23 @@ pub(crate) fn load(cfg: &Config, tensors: &Tensors<'_>, hidden: usize) -> LoadRe
             tensors.affine(&format!("{name}.{p}"), &[output, input], output, bias)
         };
         layers.push(LayerWeights {
-            query: linear("self_attn.q_proj", width, width, true)?,
-            key: linear("self_attn.k_proj", width, kv, true)?,
-            value: linear("self_attn.v_proj", width, kv, true)?,
-            out: linear("self_attn.o_proj", width, width, false)?,
+            query: linear("self_attn.q_proj", width, query, qkv_bias)?,
+            key: linear("self_attn.k_proj", width, kv, qkv_bias)?,
+            value: linear("self_attn.v_proj", width, kv, qkv_bias)?,
+            out: linear(
+                "self_attn.o_proj",
+                query,
+                width,
+                qwen3 && cfg.attention_bias,
+            )?,
+            qk_norm: if qwen3 {
+                Some([
+                    tensors.norm(&format!("{name}.self_attn.q_norm"), head, false)?,
+                    tensors.norm(&format!("{name}.self_attn.k_norm"), head, false)?,
+                ])
+            } else {
+                None
+            },
             up: linear("mlp.up_proj", width, hidden, false)?,
             down: linear("mlp.down_proj", hidden, width, false)?,
             gate: Some(linear("mlp.gate_proj", width, hidden, false)?),

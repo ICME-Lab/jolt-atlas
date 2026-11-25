@@ -55,6 +55,7 @@ pub(crate) fn load(cfg: &Config, tensors: &Tensors<'_>, hidden: usize) -> LoadRe
             tensors.affine(&format!("{name}.{p}"), &[output, input], output, true)
         };
         layers.push(LayerWeights {
+            qk_norm: None,
             query: linear("attention.self.query", width, width)?,
             key: linear("attention.self.key", width, width)?,
             value: linear("attention.self.value", width, width)?,

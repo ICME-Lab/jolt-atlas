@@ -129,7 +129,7 @@ struct LayerPlan<'a> {
 
 struct LayerTrace<F> {
     attention: AttentionTrace<F>,
-    mlp: MlpTrace<F>,
+    mlp: MlpTrace,
     attention_norm: NormTrace<F>,
     mlp_norm: NormTrace<F>,
     attention_sum: Vec<i32>,

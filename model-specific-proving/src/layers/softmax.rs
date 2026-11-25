@@ -702,11 +702,7 @@ impl<'a> Softmax<'a> {
         let batch = io.point(claims.len())?;
         let sum = dot(claims.iter().map(|q| q.value), batch.iter().copied());
         // Re-read compact Softmax sources until the shared fold has shrunk.
-        let replay_rounds = if io.replay_sources {
-            vars.saturating_sub(18).clamp(1, 4)
-        } else {
-            1
-        };
+        let replay_rounds = io.source_replay_rounds(vars);
         let columns = |i: usize| {
             let (t, scores) = trace(i);
             let score = move |row, col| {

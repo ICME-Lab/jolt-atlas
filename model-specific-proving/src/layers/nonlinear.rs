@@ -32,15 +32,10 @@ enum ActivationProof {
     Clamp { ranges: Ranges, sign: Slot },
 }
 
-pub(crate) struct ActivationTrace<F> {
+pub(crate) struct ActivationTrace {
     pub(crate) output: Vec<i32>,
     indices: Arc<Addresses>,
-    clamp: Option<ClampTrace<F>>,
-}
-
-struct ClampTrace<F> {
-    columns: [Vec<F>; 5],
-    signs: Arc<Vec<u8>>,
+    signs: Option<Arc<Vec<u8>>>,
 }
 
 impl<'a> Activate<'a> {
@@ -92,11 +87,7 @@ impl<'a> Activate<'a> {
         t.append(&u64::from(matches!(self.proof, ActivationProof::Direct(_))));
     }
 
-    pub(crate) fn execute<F: ProofField>(
-        &self,
-        x: &[i32],
-        a: &mut Advice,
-    ) -> Result<ActivationTrace<F>> {
+    pub(crate) fn execute(&self, x: &[i32], a: &mut Advice) -> Result<ActivationTrace> {
         self.shape.check(x)?;
         let lower = i64::from(self.table.lower);
         let upper = lower + (self.table.correction.len() - 1) as i64;
@@ -119,40 +110,33 @@ impl<'a> Activate<'a> {
                 return Ok(ActivationTrace {
                     output,
                     indices,
-                    clamp: None,
+                    signs: None,
                 });
             }
             ActivationProof::Clamp { ranges, sign } => (ranges, *sign),
         };
-        let mut output = Vec::new();
-        let mut magnitude = Vec::new();
-        let mut excess = Vec::new();
-        let mut indices = Vec::new();
-        let mut columns: [Vec<F>; 5] = std::array::from_fn(|_| Vec::new());
-        let mut signs = Vec::with_capacity(1 << self.shape.vars());
-        let stride = self.shape.width.next_power_of_two();
-        for (i, x) in self.shape.padded(x, 0, i64::from).into_iter().enumerate() {
-            let index = x.clamp(lower, upper) - lower;
-            let correction = i64::from(self.table.correction[index as usize]);
-            let outside = (x - upper).max(0) + (lower - x).max(0);
-            indices.push(index as u32);
-            let real = i / stride < self.shape.rows && i % stride < self.shape.width;
-            signs.push(u8::from(real && x >= 0));
-            let values = [x, index, correction, x.abs(), outside];
-            for (c, v) in columns.iter_mut().zip(values) {
-                c.push(F::from_i64(v));
-            }
-            if real {
-                output
-                    .push(i32::try_from(x.max(0) + correction).map_err(|_| "activation overflow")?);
-                magnitude.push(i128::from(x.abs()));
-                excess.push(i128::from(outside));
-            }
-        }
-        // Padded cells are outside the output domain, but their clamp equation still holds.
-        // Their excess must be zero for the chosen table's domain around input zero.
         if lower > 0 || upper < 0 {
             return Err("activation domain must contain zero");
+        }
+        let mut output = Vec::with_capacity(x.len());
+        let mut magnitude = Vec::with_capacity(x.len());
+        let mut excess = Vec::with_capacity(x.len());
+        let size = 1 << self.shape.vars();
+        let stride = self.shape.width.next_power_of_two();
+        let mut indices = vec![(-lower) as u32; size];
+        let mut signs = vec![0; size];
+        for (row, values) in x.chunks_exact(self.shape.width).enumerate() {
+            for (col, &value) in values.iter().enumerate() {
+                let x = i64::from(value);
+                let index = (x.clamp(lower, upper) - lower) as u32;
+                let correction = i64::from(self.table.correction[index as usize]);
+                indices[row * stride + col] = index;
+                signs[row * stride + col] = u8::from(x >= 0);
+                output
+                    .push(i32::try_from(x.max(0) + correction).map_err(|_| "activation overflow")?);
+                magnitude.push(x.unsigned_abs() as u32);
+                excess.push((x - lower - i64::from(index)).unsigned_abs() as u32);
+            }
         }
         ranges.record(a, &[&magnitude, &excess])?;
         let signs = Arc::new(signs);
@@ -162,14 +146,14 @@ impl<'a> Activate<'a> {
         Ok(ActivationTrace {
             output,
             indices,
-            clamp: Some(ClampTrace { columns, signs }),
+            signs: Some(signs),
         })
     }
 
     pub(crate) fn reverse<'s, 'w, F: ProofField>(
         &'s self,
         q: Claim<F>,
-        trace: impl Fn() -> &'w ActivationTrace<F> + Sync,
+        trace: impl Fn() -> (&'w [i32], &'w ActivationTrace) + Sync,
         io: &mut Session<'_, '_, F>,
 
         lookups: &mut Batches<'s, 'w, F>,
@@ -187,7 +171,7 @@ impl<'a> Activate<'a> {
                             dot(
                                 (0..cols.len()).map(|col| {
                                     F::from_u64(u64::from(
-                                        trace().indices.get(row * cols.len() + col),
+                                        trace().1.indices.get(row * cols.len() + col),
                                     ))
                                 }),
                                 cols.iter().copied(),
@@ -211,7 +195,7 @@ impl<'a> Activate<'a> {
                         cell: q.point,
                         address,
                         output: Box::new([output]),
-                        witness: io.proving().then(|| trace().indices.as_ref()),
+                        witness: io.proving().then(|| trace().1.indices.as_ref()),
                     },
                 );
                 return Ok(claim);
@@ -234,32 +218,48 @@ impl<'a> Activate<'a> {
                 mix.iter().copied(),
             )
         };
-        let active = self.shape.padded(
-            &vec![true; self.shape.rows * self.shape.width],
-            F::zero(),
-            F::from_bool,
-        );
+        let shape = self.shape;
+        let width = shape.width.next_power_of_two();
+        let size = 1 << vars;
+        let active = |i: usize| i / width < shape.rows && i % width < shape.width;
+        let replay = io.source_replay_rounds(vars);
         let (point, v) = io.relation(
             instance(q.value, vars, 4),
             || {
-                let trace = trace().clamp.as_ref().expect("activation clamp witness");
-                let [x, a, c, m, e] = &trace.columns;
+                let (input, trace) = trace();
+                let x = move |i: usize| {
+                    if active(i) {
+                        i64::from(input[(i / width) * shape.width + i % width])
+                    } else {
+                        0
+                    }
+                };
+                let address = move |i| trace.indices.get(i);
                 [
-                    Column::borrowed(x),
-                    Column::borrowed(a),
-                    Column::borrowed(c),
-                    Column::borrowed(m),
-                    Column::Bits(&trace.signs, 1),
-                    Column::borrowed(e),
-                    Column::borrowed(&active),
+                    Column::source(size, move |i| F::from_i64(x(i))),
+                    Column::source(size, move |i| F::from_u64(u64::from(address(i)))),
+                    Column::source(size, move |i| {
+                        F::from_i32(self.table.correction[address(i) as usize])
+                    }),
+                    Column::source(size, move |i| F::from_i64(x(i).abs())),
+                    Column::Bits(trace.signs.as_deref().expect("activation sign witness"), 1),
+                    Column::source(size, move |i| {
+                        F::from_i64(
+                            (x(i) - i64::from(self.table.lower) - i64::from(address(i))).abs(),
+                        )
+                    }),
+                    Column::source(size, move |i| F::from_bool(active(i))),
                     Column::equality(&q.point),
                     Column::equality(&random),
                 ]
+                .map(|column| column.replay(replay))
             },
             |v| v[6] * v[7] * (v[4] * v[3] + v[2]) + v[8] * clamp(v),
             |p, v: &[F; 6]| {
-                active.as_slice().evaluate(p) * eq(&q.point, p) * (v[4] * v[3] + v[2])
-                    + eq(&random, p) * clamp(v)
+                let (row, col) = p.split_at(shape.row_vars());
+                let active = weights::<F>(row).into_iter().take(shape.rows).sum::<F>()
+                    * weights::<F>(col).into_iter().take(shape.width).sum::<F>();
+                active * eq(&q.point, p) * (v[4] * v[3] + v[2]) + eq(&random, p) * clamp(v)
             },
         )?;
         ranges.check(&[(&point, [v[3], v[5]])], io)?;
@@ -277,7 +277,7 @@ impl<'a> Activate<'a> {
                 cell: point.clone(),
                 address: v[1],
                 output: Box::new([v[2]]),
-                witness: io.proving().then(|| trace().indices.as_ref()),
+                witness: io.proving().then(|| trace().1.indices.as_ref()),
             },
         );
         Ok(Claim { point, value: v[0] })

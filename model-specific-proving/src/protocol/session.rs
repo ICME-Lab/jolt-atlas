@@ -95,6 +95,14 @@ impl<'a, F: ProofField> Session<'a, '_, F> {
         }
     }
 
+    pub(crate) fn source_replay_rounds(&self, vars: usize) -> usize {
+        if self.replay_sources {
+            vars.saturating_sub(18).clamp(1, 4)
+        } else {
+            1
+        }
+    }
+
     pub(crate) fn proving(&self) -> bool {
         matches!(self.mode, Mode::Prove(..))
     }

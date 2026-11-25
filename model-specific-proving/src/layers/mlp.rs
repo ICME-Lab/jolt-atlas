@@ -30,14 +30,14 @@ pub(crate) struct MlpPlan<'a> {
     down: Linear<'a>,
 }
 
-pub(crate) struct MlpTrace<F> {
+pub(crate) struct MlpTrace {
     activation_input: Rounded,
     multiplier: Option<(Rounded, Rounded)>,
-    activation: ActivationTrace<F>,
+    activation: ActivationTrace,
     down: Rounded,
 }
 
-impl<F> MlpTrace<F> {
+impl MlpTrace {
     pub(crate) fn output(&self) -> &[i32] {
         &self.down.output
     }
@@ -90,7 +90,7 @@ impl<'a> MlpPlan<'a> {
         self.down.bind(t);
     }
 
-    pub(crate) fn execute<F: ProofField>(&self, x: &[i32], a: &mut Advice) -> Result<MlpTrace<F>> {
+    pub(crate) fn execute(&self, x: &[i32], a: &mut Advice) -> Result<MlpTrace> {
         let activation_input = self.activation_input.execute(x, a)?;
         let activation = self.activation.execute(&activation_input.output, a)?;
         let multiplier = self
@@ -118,7 +118,7 @@ impl<'a> MlpPlan<'a> {
         &'s self,
         q: Claim<F>,
         x: impl Fn() -> &'w [i32],
-        t: impl Fn() -> &'w MlpTrace<F> + Sync,
+        t: impl Fn() -> &'w MlpTrace + Sync,
         io: &mut Session<'_, '_, F>,
 
         lookups: &mut Batches<'s, 'w, F>,
@@ -144,9 +144,12 @@ impl<'a> MlpPlan<'a> {
         } else {
             (q, None)
         };
-        let q = self
-            .activation
-            .reverse(q, || &t().activation, io, lookups)?;
+        let q = self.activation.reverse(
+            q,
+            || (&t().activation_input.output, &t().activation),
+            io,
+            lookups,
+        )?;
         let source = self
             .activation_input
             .reverse(q, || (x(), &t().activation_input), io)?;

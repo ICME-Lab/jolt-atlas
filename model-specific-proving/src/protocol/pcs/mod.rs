@@ -16,7 +16,7 @@ use super::{
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
     Bits { planes: usize },
-    Lookup { address_vars: usize, packed: bool },
+    Lookup { address_vars: usize },
 }
 
 #[derive(Clone, Copy)]
@@ -32,7 +32,7 @@ impl Slot {
         self.cell_vars
             + match self.kind {
                 Kind::Bits { planes } => planes.next_power_of_two().ilog2() as usize,
-                Kind::Lookup { address_vars, .. } => address_vars,
+                Kind::Lookup { address_vars } => address_vars,
             }
     }
 
@@ -188,20 +188,12 @@ impl Advice {
                     }
                 }
             }
-            Kind::Lookup { packed, .. } => {
+            Kind::Lookup { .. } => {
                 let cells = 1 << slot.cell_vars;
                 let (addresses, shift, mask) = self.take_lookup(slot)?;
                 for cell in 0..addresses.len() {
                     let digit = addresses.digit(cell, shift, mask);
-                    if packed && cfg!(feature = "bitz-lookup-bits") {
-                        for bit in 0..u8::BITS - digit.leading_zeros() {
-                            if digit & (1 << bit) != 0 {
-                                set(bit as usize * cells + cell);
-                            }
-                        }
-                    } else {
-                        set(usize::from(digit) * cells + cell);
-                    }
+                    set(usize::from(digit) * cells + cell);
                 }
             }
         }
@@ -210,7 +202,7 @@ impl Advice {
 
     #[cfg(any(feature = "akita", feature = "bitz"))]
     fn take_lookup(&mut self, slot: Slot) -> Result<(Arc<Addresses>, usize, u32)> {
-        let Kind::Lookup { address_vars, .. } = slot.kind else {
+        let Kind::Lookup { address_vars } = slot.kind else {
             return Err("not a lookup advice slot");
         };
         match self.0[slot.id].take() {
@@ -483,8 +475,3 @@ pub use akita::AkitaAdviceSetup;
 mod bitz;
 #[cfg(feature = "bitz")]
 pub use bitz::BitzScheme;
-
-#[cfg(feature = "bitz-lookup-bits")]
-pub(super) fn packed_lookup<F: ProofField>() -> bool {
-    std::any::TypeId::of::<F>() == std::any::TypeId::of::<bitz::BitzField>()
-}

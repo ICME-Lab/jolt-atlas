@@ -11,10 +11,6 @@ pub struct Plan {
 fn span(slot: Slot) -> Result<usize> {
     let axes = match slot.kind {
         Kind::Bits { planes } => planes,
-        Kind::Lookup {
-            address_vars,
-            packed: true,
-        } if cfg!(feature = "bitz-lookup-bits") => address_vars,
         _ => 1 << (slot.vars() - slot.cell_vars),
     };
     (1usize << slot.cell_vars.max(ROW_VARS))
@@ -46,7 +42,7 @@ impl Plan {
             placement[id] = (0, offset);
             offset += size;
         }
-        if cfg!(feature = "bitz-onehot-groups") && total > GROUP_BITS {
+        if total > GROUP_BITS {
             let mut slots = slots;
             slots.sort_unstable_by_key(|&(id, size)| (std::cmp::Reverse(size), id));
             let mut groups: Vec<(usize, usize)> = Vec::new();
@@ -69,31 +65,6 @@ impl Plan {
                 .into_iter()
                 .map(|(_, used)| (used.next_power_of_two().ilog2() as usize).max(MIN_VARS))
                 .collect();
-        } else if cfg!(feature = "bitz-lookup-groups") && single > MIN_VARS {
-            let mut slots = slots;
-            slots.sort_unstable_by_key(|&(id, size)| (std::cmp::Reverse(size), id));
-            let large = 1usize << (single - 1);
-            for small_vars in MIN_VARS..single - 1 {
-                let caps = [large, 1 << small_vars];
-                if total > caps.iter().sum() {
-                    continue;
-                }
-                let mut used = [0; 2];
-                let mut trial = placement.clone();
-                let fits = slots.iter().all(|&(id, size)| {
-                    let Some(group) = (0..2).find(|&i| size <= caps[i] - used[i]) else {
-                        return false;
-                    };
-                    trial[id] = (group, used[group]);
-                    used[group] += size;
-                    true
-                });
-                if fits {
-                    capacity = vec![single - 1, small_vars];
-                    placement = trial;
-                    break;
-                }
-            }
         }
         let groups = capacity
             .into_iter()
@@ -122,64 +93,20 @@ impl Plan {
     }
 }
 
-#[cfg(all(test, feature = "bitz-lookup-groups"))]
+#[cfg(test)]
 #[test]
-fn routes_both_groups_through_the_verifier() {
+fn default_layout_keeps_a_large_slot_and_small_tail_separate() {
     let mut layout = Layout::default();
-    let mut requests = Vec::new();
-    for vars in [MIN_VARS + 1, MIN_VARS] {
-        let slot = layout.add(vars, Kind::Bits { planes: 1 }).unwrap();
-        requests.push(Opening::new(
-            slot,
-            Claim {
-                point: vec![F::zero(); vars],
-                value: F::one(),
-            },
-        ));
-    }
-    let make_requests = || {
-        requests
-            .iter()
-            .map(|q| Opening {
-                slot: q.slot,
-                claim: q.claim.clone(),
-                planes: None,
-            })
-            .collect()
-    };
+    let large = layout
+        .add(GROUP_BITS.ilog2() as usize, Kind::Bits { planes: 1 })
+        .unwrap();
+    let tail = layout.add(10, Kind::Bits { planes: 1 }).unwrap();
     let plan = Plan::new(&layout).unwrap();
-    assert_eq!(plan.groups.len(), 2);
-    let mut advice = layout.witness();
-    for slot in layout.slots.iter().copied() {
-        let mut bits = vec![0; 1 << slot.cell_vars];
-        bits[0] = 1;
-        advice.put(slot, Part::Digits(bits.into())).unwrap();
-    }
-    let (roots, state) = BitzScheme::commit(&layout, &mut advice, &plan, &()).unwrap();
-    let domain = jolt_transcript::protocol_tag(b"atlas/bitz-groups/test");
-    let mut prover = prover_transcript::<Keccak>(&domain, b"");
-    BitzScheme::bind(&roots, &mut prover);
-    let proof = BitzScheme::open(
-        &layout,
-        make_requests(),
-        &roots,
-        state,
-        &plan,
-        &(),
-        &mut prover,
-    )
-    .unwrap();
-    let mut verifier = verifier_transcript::<Keccak>(&domain, b"", prover.narg_string());
-    BitzScheme::bind(&roots, &mut verifier);
-    BitzScheme::verify(
-        &layout,
-        make_requests(),
-        &roots,
-        &proof,
-        &plan,
-        &(),
-        &mut verifier,
-    )
-    .unwrap();
-    verifier.check_eof().unwrap();
+    assert_eq!(plan.slots[large.id], (0, 0));
+    assert_eq!(plan.slots[tail.id], (1, 0));
+    assert_eq!(
+        plan.groups[0].0.shape().log_bits(),
+        GROUP_BITS.ilog2() as usize
+    );
+    assert_eq!(plan.groups[1].0.shape().log_bits(), MIN_VARS);
 }

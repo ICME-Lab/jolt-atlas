@@ -22,9 +22,6 @@ const DOMAIN: &[u8] = b"atlas/model-specific/world-bitz/groups/v1";
 
 pub struct BitzScheme;
 
-#[cfg(feature = "bitz-lookup-bits")]
-pub(super) use field::BitzField;
-
 impl ModelPcs for BitzScheme {
     type Field = F;
     const MIN_FIELD_BITS: u32 = 0;
@@ -172,15 +169,8 @@ impl Query {
         let mut row_point = vec![F::zero(); ROW_VARS - low.len()];
         row_point.extend_from_slice(low);
         let mut axes = opening.planes.unwrap_or_else(|| weights(axis));
-        match slot.kind {
-            Kind::Bits { planes } => axes.truncate(planes),
-            Kind::Lookup {
-                address_vars,
-                packed: true,
-            } if cfg!(feature = "bitz-lookup-bits") => {
-                axes.truncate(address_vars);
-            }
-            _ => {}
+        if let Kind::Bits { planes } = slot.kind {
+            axes.truncate(planes);
         }
         for w in &mut axes {
             *w *= mix;

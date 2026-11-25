@@ -304,7 +304,7 @@ impl Plan {
         for &slot in layout.slots.iter().filter(|&&slot| layout.active(slot)) {
             let local = slot.vars()
                 - match slot.kind {
-                    Kind::Lookup { address_vars, .. } => address_vars,
+                    Kind::Lookup { address_vars } => address_vars,
                     Kind::Bits { .. } => slot.digit_vars(),
                 };
             let (&minimum, _) = setup
@@ -805,7 +805,7 @@ impl GroupQueries {
                 let slot = layout.slots[opening.slot];
                 match slot.kind {
                     Kind::Bits { .. } => slot.read_digits(block, opening, mix, &mut reads),
-                    Kind::Lookup { address_vars, .. } => {
+                    Kind::Lookup { address_vars } => {
                         let (address, rows) = opening.claim.point.split_at(address_vars);
                         let mut padded = vec![F::zero(); ADDRESS_BITS - address_vars];
                         padded.extend_from_slice(address);

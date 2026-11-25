@@ -136,24 +136,6 @@ impl<'a> MlpPlan<'a> {
             },
             io,
         )?;
-        if cfg!(feature = "batch-mlp-projections") {
-            if let Some((gate, product)) = &self.multiplier {
-                let [activation, multiplier] =
-                    product.reverse(q, || (&t().activation.output, &g().0.output, &g().1), io)?;
-                let activation = self.activation.reverse(
-                    activation,
-                    || (&t().activation_input.output, &t().activation),
-                    io,
-                    lookups,
-                )?;
-                return Linear::reverse_pair(
-                    [(&self.activation_input, activation), (gate, multiplier)],
-                    x,
-                    (|| &t().activation_input, || &g().0),
-                    io,
-                );
-            }
-        }
         let (q, gate) = if let Some((gate, product)) = &self.multiplier {
             let [p, q] =
                 product.reverse(q, || (&t().activation.output, &g().0.output, &g().1), io)?;

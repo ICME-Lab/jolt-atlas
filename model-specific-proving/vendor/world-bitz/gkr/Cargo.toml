@@ -1,0 +1,22 @@
+[package]
+name = "gkr"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+bytemuck = "1.25"
+field = { git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+transcript = { git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+common = { git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+poly = { git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+tracing = "0.1"
+num-traits = "0.2"
+rayon = "1.10"
+
+[dev-dependencies]
+proptest = "1.11.0"
+
+[profile.test]
+opt-level = 3

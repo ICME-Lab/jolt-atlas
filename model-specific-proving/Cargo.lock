@@ -940,7 +940,6 @@ dependencies = [
 [[package]]
 name = "gkr"
 version = "0.1.0"
-source = "git+https://github.com/worldfnd/BitZ.git?rev=34addacd27d63b0929512bcc90fe95d256362b74#34addacd27d63b0929512bcc90fe95d256362b74"
 dependencies = [
  "bytemuck",
  "common",
@@ -1671,7 +1670,6 @@ dependencies = [
 [[package]]
 name = "post_gkr"
 version = "0.1.0"
-source = "git+https://github.com/worldfnd/BitZ.git?rev=34addacd27d63b0929512bcc90fe95d256362b74#34addacd27d63b0929512bcc90fe95d256362b74"
 dependencies = [
  "common",
  "field",

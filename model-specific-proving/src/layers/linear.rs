@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 
-use jolt_poly::MultilinearPoly;
 use jolt_transcript::Transcript;
 use rayon::prelude::*;
 
@@ -211,21 +210,7 @@ impl<'a> Linear<'a> {
         trace: impl Fn() -> (&'w [i32], &'w Rounded),
         io: &mut Session<'_, '_, F>,
     ) -> Result<Claim<F>> {
-        let (row, sum, public) = self.reduction(q, || trace().1, io)?;
-        let mut claim = io.public_dot(sum, &public, || {
-            bind_rows(self.input.width, trace().0, &row)
-        })?;
-        claim.point = [row, claim.point].concat();
-        Ok(claim)
-    }
-
-    fn reduction<'w, F: ProofField>(
-        &self,
-        q: Claim<F>,
-        trace: impl FnOnce() -> &'w Rounded,
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<(Vec<F>, F, Vec<F>)> {
-        let raw = self.rounding.reverse(&q, trace, io)?;
+        let raw = self.rounding.reverse(&q, || trace().1, io)?;
         let (row, col) = q.point.split_at(self.input.row_vars());
         let active: F = weights::<F>(row).into_iter().take(self.input.rows).sum();
         let bias = dot(
@@ -234,57 +219,10 @@ impl<'a> Linear<'a> {
         );
         let sum = raw - F::from_u64(1 << self.rounding.bits) * active * bias;
         let public = bind_rows(self.input.width, self.weights.weights, col);
-        Ok((row.to_vec(), sum, public))
-    }
-
-    pub(crate) fn reverse_pair<'w, F: ProofField>(
-        terms: [(&Self, Claim<F>); 2],
-        x: impl FnOnce() -> &'w [i32],
-        traces: (impl FnOnce() -> &'w Rounded, impl FnOnce() -> &'w Rounded),
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<Claim<F>> {
-        let [(left, a), (right, b)] = terms;
-        let (trace_a, trace_b) = traces;
-        let (row_a, sum_a, weight_a) = left.reduction(a, trace_a, io)?;
-        let (row_b, sum_b, weight_b) = right.reduction(b, trace_b, io)?;
-        let [mix] = io.point(1)?.try_into().expect("one mixing challenge");
-        let sum = sum_a + mix * sum_b;
-        let shape = left.input;
-        if row_a == row_b {
-            let public: Vec<_> = weight_a
-                .iter()
-                .zip(&weight_b)
-                .map(|(&a, &b)| a + mix * b)
-                .collect();
-            let mut claim = io.public_dot(sum, &public, || bind_rows(shape.width, x(), &row_a))?;
-            claim.point = [row_a, claim.point].concat();
-            return Ok(claim);
-        }
-
-        let (point, [value]) = io.relation(
-            instance(sum, shape.vars(), 2),
-            || {
-                let rows_a = weights(&row_a);
-                let rows_b = weights(&row_b);
-                let (weight_a, weight_b) = (&weight_a, &weight_b);
-                let width = weight_a.len();
-                [
-                    Column::integer(x(), shape),
-                    Column::source(1 << shape.vars(), move |i| {
-                        let (row, col) = (i / width, i % width);
-                        rows_a[row] * weight_a[col] + mix * rows_b[row] * weight_b[col]
-                    }),
-                ]
-            },
-            |v| v[0] * v[1],
-            |point, &[value]| {
-                let (row, col) = point.split_at(shape.row_vars());
-                let combined = eq(row, &row_a) * weight_a.evaluate(col)
-                    + mix * eq(row, &row_b) * weight_b.evaluate(col);
-                value * combined
-            },
-        )?;
-        Ok(Claim { point, value })
+        let mut claim =
+            io.public_dot(sum, &public, || bind_rows(self.input.width, trace().0, row))?;
+        claim.point = [row, &claim.point].concat();
+        Ok(claim)
     }
 }
 

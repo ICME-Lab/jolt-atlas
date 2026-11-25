@@ -1,0 +1,26 @@
+[package]
+name = "post_gkr"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["parallel"]
+parallel = ["dep:rayon"]
+
+[dependencies]
+common = { git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+field = { git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", features = ["spongefish"] }
+poly = { git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+transcript = { git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+tracing = "0.1"
+num-traits = "0.2"
+rayon = { version = "1.10", optional = true }
+
+[dev-dependencies]
+rand_core = "0.10"
+rand_pcg = "0.10"
+
+[profile.test]
+opt-level = 3

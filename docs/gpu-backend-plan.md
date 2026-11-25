@@ -100,7 +100,7 @@ code: everything in `gpu/` is written here and owned end to end.
 | First model | **Qwen2-0.5B**: the same block as the 7B targets, and the CPU backend's 2.7 s to compare against. Which 7B follows is still open (5.2) |
 | Where it lives | **`gpu/` in this repository**, its own workspace (4.1) |
 | Ownership | **All code written here.** No dependency on this repository's crates, on upstream Jolt, or on outside proof-system crates |
-| Not the commodity stack | **We do not build on a small prime field with a FRI-family commitment** (Goldilocks or a 31-bit field with WHIR, BaseFold or FRI). Sable, FlashProve and SP1 already do, so it differentiates nothing, and Magnetar (5.4) proves 24 to 66 times faster than SP1 Hypercube on the same 12 CPU cores, at 120 bits of provable security against SP1's 100. That stack is the baseline we measure against, not a candidate |
+| Not the commodity stack, and not a copy of anyone's | **We do not build on a small prime field with a FRI-family commitment** (Goldilocks or a 31-bit field with WHIR, BaseFold or FRI); Sable, FlashProve and SP1 already do. Nor do we adopt Magnetar or any other system as it stands. The core of the proof system is chosen by a search for the best fit to our workload (5.5), with the commodity stack as the bar to beat |
 
 ### 5.2 Open
 
@@ -110,8 +110,8 @@ by argument alone.
 | # | Decision | Options | Recommendation | Settled by |
 |---|---|---|---|---|
 | 1 | Numeric representation | (a) 32-bit fixed point everywhere, as today; (b) per-tensor widths, e.g. 8-bit weights and 16-bit activations; (c) floating point | (b), with the widths chosen by experiment. (c) has no affordable proof. See 5.3 | Accuracy experiment, phase 0 |
-| 2 | Commitment | Packed bits in `F_{2^128}` under a hash tree, opened with ring switching and Ligerito: what BitZ and Magnetar both do, and what we own; a lattice scheme | Packed bits, laid out as one polynomial with one opening. It prices a value by its bits and gives range checks for free, which is why BitZ beat Akita here by 14 to 15 times (PR #409). The unknown is binary-field arithmetic on a GPU, which has no carry-less multiply instruction | GPU rates for `F_{2^128}` multiplication by each known method (bit-sliced, tower, table, integer-multiply), for the encoding and the hash tree, and for the BitZ grand product's inner loop, phase 0 |
-| 3 | Field of the sumchecks | A prime field, with BitZ's bridge from a commitment of bits to a claim over that field (which prime: Fp128 as today, a Mersenne prime, a smaller prime with an extension); `F_{2^128}` throughout, with integer arithmetic as bit constraints, as Magnetar does | A prime field. A sumcheck for a matrix product touches each weight once only in a field where integers add and multiply; as bit constraints each multiply-add costs a few hundred constraints (an estimate), and Qwen2-0.5B at 16 tokens is several billion multiply-adds against under half a billion weights. Which prime is open, and the bridge (the grand product, our largest opening cost today) is what the choice has to pay for | GPU sumcheck-round rates per candidate prime; the bridge's cost on the GPU; the widths of decision 1 (an 8-bit by 16-bit product over 11,008 terms needs about 38 bits) |
+| 2 | Where the arithmetic runs | A prime field (Fp128 as today, a 127-bit Mersenne prime, a smaller prime with an extension); the integers mod `2^k` (Rotor, Nenya); a binary field | Not decided; the search of 5.5 decides. It must be a ring that counts: a sumcheck for a matrix product touches each weight once only where integers add and multiply. In a binary field each multiply-add is a few hundred bit constraints (an estimate), and Qwen2-0.5B at 16 tokens is several billion multiply-adds against under half a billion weights. The incumbent is a prime field; the lead worth chasing is `Z_{2^k}`, whose arithmetic is the GPU's own | The search of 5.5; GPU sumcheck-round rates per candidate; the widths of decision 1 (an 8-bit by 16-bit product over 11,008 terms needs about 38 bits) |
+| 3 | How small values are committed | Packed bits in `F_{2^128}` with ring switching and Ligerito (BitZ, Magnetar); packing by the field trace (Frigo and shelat); a pay-per-bit lattice scheme (SuperNeo, LaBinius); a linear or quasi-abelian code over the arithmetic's own ring (Rotor, Quasar) | Not decided; the search of 5.5 decides. The incumbent is packed bits, which price a value by its bits, give range checks for free and beat Akita here by 14 to 15 times (PR #409); NVIDIA GPUs since Ampere have a carry-less multiply, so its field is no longer an obstacle there. Its cost is the bridge to a ring that counts (the grand product, our largest opening cost today) | The search of 5.5; GPU rates for `F_{2^128}` multiplication with `clmad`, for the encoding and the hash tree, and for the bridge |
 | 4 | The 7B model | Llama-2-7B; Mistral-7B; Qwen2.5-7B; Llama-3.1-8B | One config-driven block serves all four, so this is a licence question: Llama 2 is under Meta's community licence and gated; Mistral-7B and Qwen2.5-7B are Apache 2.0 | Licence review, before phase 4 |
 | 5 | GPU kernels | CUDA through a Rust backend trait, with which toolchain (C++ kernels over FFI, or Rust-side code generation) | CUDA C++ kernels behind the trait; benchmark an existing proving library only as the bar to beat | Phase 0 |
 | 6 | Statement | What is public (prompt, output, sampling seed); greedy or sampled decoding | Public prompt and output, greedy decoding first; one proof covers a whole sequence, since a causal model's forward pass over N tokens checks every next-token choice | Product owner |
@@ -168,10 +168,48 @@ and MosaicPCS over Ligerito for the one commitment. On 12 cores of an M4 Max it 
 **What does not transfer:**
 
 - **Its arithmetisation.** RV64I has no multiply instruction, and Magnetar's adder is bit
-  constraints. Our workload is integer multiply-add, by the billion (open decision 3).
-- **Its speed, to a GPU.** Every figure is from a CPU with a carry-less multiply
-  instruction. The paper has no GPU measurement, and it measured SP1 on that CPU too, not on
-  the GPUs SP1 is built for.
+  constraints. Our workload is integer multiply-add, by the billion (open decision 2).
+- **Its speed, to a GPU, unmeasured.** Every figure is from a CPU, and the paper measured SP1
+  on that CPU too, not on the GPUs SP1 is built for. The field itself is no obstacle: NVIDIA
+  GPUs since Ampere have a carry-less multiply (`clmad`, CUDA 13.3, July 2026), with which
+  NVIDIA reports a sumcheck over `F_{2^128}` 3 to 4 times faster than bit-slicing on an RTX
+  5090 and up to 13 times on a B200.
+
+### 5.5 The search for something better
+
+Open decisions 2 and 3 are one question: what is the best core for proving integer matrix
+products and lookups over tiny values on a GPU? Nobody's published system is built for that.
+The search runs in phase 0 and is judged against these, in order:
+
+1. **It counts.** A matrix product costs one ring operation per weight, not per multiply-add.
+2. **Small values are cheap to commit**: priced by their bits, or so few are committed that it
+   does not matter.
+3. **Its arithmetic is the GPU's own**: 32- or 64-bit words, or carry-less multiplies.
+4. **120 bits or more, provable**, with losses that grow with the logarithm of the instance.
+5. **A fast verifier and a small proof.** This is where the commodity stack is weakest and
+   where we mean to differ.
+6. **One commitment and one opening**, with the weights committed once per model.
+
+**The bar** (the commodity stack on one GPU): Sable proves 4,096 tokens of Qwen2.5-32B in
+92.5 s on an RTX PRO 6000, at a soundness error of 2^-103, not zero-knowledge, with a verifier
+that takes 19 to 56 s on one core. FlashProve reports about 110 tokens a second for a 400B
+mixture-of-experts model on an H100, with 19 MB proofs and a 21 s verifier. Both are their
+authors' figures.
+
+**Candidates.** Except for BitZ and Magnetar, we have read only abstracts; reading each in
+full is the first step of the search.
+
+| Candidate | The idea | What is known | What we must learn |
+|---|---|---|---|
+| Integers mod `2^k` (Rotor, ePrint 2026/2175; Nenya, 2026/2672) | Prove directly over machine words. Rotor gets soundness from three precisions of power-of-two ring, commits with a Brakedown-style code and links ring witnesses to binary representations; Nenya embeds into Galois rings | Nenya: 2^25 constraints over 32-bit integers in 4.8 s, 1.06 times a field-based SNARK (hardware not stated). Rotor withdrew its evaluation after changing its parameters. No GPU work in either | Whether a matrix-product sumcheck and a Shout-style lookup carry over; the real soundness parameters and what they cost; proof size; whether "overflow is an error" needs more than range checks |
+| Bits in `F_{2^128}`, a prime field for the arithmetic (BitZ; our CPU backend) | Pay per bit to commit; bridge to a field that counts by a grand product | Qwen2-0.5B in 2.7 s on 32 CPU cores. The bridge is 0.6 s of a 0.85 s opening | The bridge's and the prime field's cost on a GPU; whether a cheaper bridge exists |
+| Bits in `F_{2^128}` throughout (Magnetar) | Never leave the binary field | 7 to 13 million RISC-V cycles a second on 12 CPU cores at 120 provable bits | Whether any argument makes integer products cheap there; without one it fails criterion 1 |
+| Packing by the field trace (Frigo and shelat, ePrint 2026/2770) | Pack bits into one `GF(2^m)` element using only the trace's linearity; soundness error 2^-m | A simpler reduction than ring switching, with linear constraints only | Whether it replaces ring switching in either binary design, and at what prover cost |
+| A code over the arithmetic's own field (Quasar, ePrint 2026/1839) | Field-agnostic commitment from quasi-abelian codes; implemented over the 127-bit Mersenne prime | GPU encoding 33 to 148 times a 32-thread CPU; 100-bit security | Cost per committed small value, since it pays per element; whether 120 provable bits is reachable |
+| Pay-per-bit lattice commitments (SuperNeo, ePrint 2026/242; LaBinius, 2026/2103) | Commit small values cheaply under Module-SIS, with sumchecks over a small field | Folding with pay-per-bit costs (CRYPTO 2026). Akita, not pay-per-bit, was 14 to 15 times slower than BitZ here | Concrete cost per bit against packed bits; our earlier note on LaBinius disagrees with its abstract and needs re-reading |
+
+A candidate is dropped when it fails a criterion on paper, and prototyped at kernel level on
+the GPU when it does not. The search ends with one core written into the protocol spec.
 
 ## 6. Phases
 
@@ -179,17 +217,19 @@ Each phase ends at a gate. A phase's specs are written when it starts.
 
 **Phase 0: measure and decide.** No protocol code.
 - GPU instance up; the gate harness runs on it.
-- Kernel microbenchmarks on that GPU: binary-field multiplication by each known method;
-  Reed–Solomon encoding and the hash tree over packed bits; the BitZ grand product's inner
-  loop; one sumcheck round over 2^28 values in each candidate field of decision 3.
+- The search of 5.5: each candidate read in full, then dropped on paper or prototyped.
+- Kernel microbenchmarks on that GPU for what survives: `F_{2^128}` multiplication with
+  `clmad`; wrapping 32- and 64-bit ring arithmetic; each candidate prime; encoding and the
+  hash tree over packed bits; the BitZ grand product's inner loop; one sumcheck round over
+  2^28 values in each.
 - The baseline to beat on the same GPU: a small prime field with a FRI-family commitment, at
   the same sizes, from an existing implementation.
 - The accuracy experiment of 5.3, on Qwen2-0.5B first.
 - A cost model for Qwen2-0.5B and for the 7B target at 1,000 tokens: values per token,
   committed values, lookups, the batched weight opening, GPU memory at each step.
-- A recency-first literature pass: Magnetar and BinarySpartan in full, bit packing in
-  sumcheck (ePrint 2026/2770), binary-field proving on GPUs, and the zkML systems of the last
-  few months, with their numbers read sceptically.
+- The wider literature pass, recency first: Sable and FlashProve in full, GPU sumcheck work
+  (zkDuel, arXiv 2610.37710; the DATE 2026 binary-tower paper), and whatever the candidates
+  cite, with every number read sceptically.
 - *Gate:* every open decision of 5.2 that phase 2 depends on (1, 2, 3, 5, 7, 8) made and
   written into a top-level protocol spec; a target rate.
 
@@ -252,21 +292,26 @@ each model.
   the commitment scheme is chosen.
 - **Two backends, one team.** The CPU backend is frozen in scope so it does not compete for
   time; the padded-lane gaps pinned on 2026-11-19 stay pinned there.
-- **Binary-field arithmetic on a GPU.** The packed-bit design rests on multiplication in
-  `F_{2^128}`, which CPUs do in one instruction and GPUs do not have. Magnetar's and BitZ's
-  speeds are CPU measurements. If no method reaches a useful rate, decision 2 reopens; this
-  is the first number phase 0 produces.
-- **A field that can count.** Our relations are integer products. Either the sumchecks stay
-  in a prime field, whose cost on a GPU decision 3 measures, or integer arithmetic becomes
-  binary constraints, whose cost for a matrix product nobody has priced for us.
+- **The best candidate may be the least mature.** Proof systems over `Z_{2^k}` fit a GPU and
+  our arithmetic best on paper, and Rotor has withdrawn its numbers while its soundness
+  parameters change. A core we cannot give a proven error bound is not chosen, whatever its
+  speed.
+- **A ring that counts.** Our relations are integer products. A binary field alone cannot
+  host them cheaply, so a binary commitment needs a bridge, and the bridge is our largest
+  opening cost today.
+- **Unmeasured GPU arithmetic.** Carry-less multiplication on the GPU is new (July 2026) and
+  NVIDIA's figures are against bit-slicing, not against a prime field. Every rate in this
+  plan's reasoning is measured in phase 0 before it decides anything.
 
 ## Sources
 
-Magnetar: Setty, ePrint 2026/2423, read in full (sections 1.3, 2.2, 5.2 and 6 are what this
-plan relies on). BinarySpartan: Setty, ePrint 2026/1656. Ring switching: Diamond and Posen,
-ePrint 2024/504. Ligerito: Novakovic and Angeris, ePrint 2025/1187. Sumcheck bit packing:
-Frigo and shelat, ePrint 2026/2770 (not yet read). BitZ: ePrint 2026/2141 and
-`specs/bitz-commitment.md`. Sable, FlashProve and the positions of other systems:
+Read in full: Magnetar (Setty, ePrint 2026/2423); BitZ (ePrint 2026/2141, and
+`specs/bitz-commitment.md`). Read as abstracts or summaries only: Rotor (ePrint 2026/2175);
+Nenya (2026/2672); Quasar (2026/1839); Sumcheck bit packing (Frigo and shelat, 2026/2770);
+Neo and SuperNeo (2026/242); LaBinius (2026/2103); Sable (arXiv 2611.14083); zkDuel (arXiv
+2610.37710); NVIDIA, "Building faster cryptography with carryless multiplication in CUDA
+13.3" (15 July 2026). Cited by Magnetar: BinarySpartan (2026/1656), ring switching (Diamond
+and Posen, 2024/504), Ligerito (2025/1187). FlashProve and other systems' positions:
 `docs/prover-plan.md` section 4.
 
 ## Appendix: the 7B target in numbers

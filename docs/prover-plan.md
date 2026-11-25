@@ -210,8 +210,8 @@ verifier time. Needs a memory plan and a relation compiler.
 - **Memory per token.** 370 MB per token on Qwen caps the context before time does.
   Nothing is planned yet; the committed-volume items help in proportion.
 - **A GPU backend.** Estimated 5 to 10x end to end on one H100 against sixteen cores, when
-  Qwen proved 2.7 tokens a second on them: the trace and the hashing gain the most, the binary-field arithmetic of the opening the least (no carry-less multiply on a
-  GPU), the many small nodes and the transcript little. Nothing measured. The first step is
+  Qwen proved 2.7 tokens a second on them: the trace and the hashing gain the most, the binary-field arithmetic of the opening the least (estimated assuming no
+  carry-less multiply on a GPU; NVIDIA GPUs since Ampere have one, `clmad`, from CUDA 13.3), the many small nodes and the transcript little. Nothing measured. The first step is
   one kernel, the grand product's inner loop, on a small NVIDIA instance behind a feature
   flag; CUDA and not Metal, since a Mac's numbers say little about a deployment.
 - **Sumcheck research** is not expected to give 2x by itself: the stage is a third of the

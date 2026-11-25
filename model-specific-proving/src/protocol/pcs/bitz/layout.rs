@@ -1,5 +1,6 @@
 use super::*;
 
+const GROUP_BITS: usize = 32 << 23;
 const MIN_VARS: usize = world_common::shape::MIN_LOG_BITS;
 
 pub struct Plan {
@@ -45,7 +46,30 @@ impl Plan {
             placement[id] = (0, offset);
             offset += size;
         }
-        if cfg!(feature = "bitz-lookup-groups") && single > MIN_VARS {
+        if cfg!(feature = "bitz-onehot-groups") && total > GROUP_BITS {
+            let mut slots = slots;
+            slots.sort_unstable_by_key(|&(id, size)| (std::cmp::Reverse(size), id));
+            let mut groups: Vec<(usize, usize)> = Vec::new();
+            for (id, size) in slots {
+                let group = groups
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &(capacity, used))| size <= capacity - used)
+                    .min_by_key(|(_, &(capacity, used))| capacity - used)
+                    .map(|(group, _)| group)
+                    .unwrap_or_else(|| {
+                        groups.push((size.next_power_of_two().max(GROUP_BITS), 0));
+                        groups.len() - 1
+                    });
+                let used = &mut groups[group].1;
+                placement[id] = (group, *used);
+                *used += size;
+            }
+            capacity = groups
+                .into_iter()
+                .map(|(_, used)| (used.next_power_of_two().ilog2() as usize).max(MIN_VARS))
+                .collect();
+        } else if cfg!(feature = "bitz-lookup-groups") && single > MIN_VARS {
             let mut slots = slots;
             slots.sort_unstable_by_key(|&(id, size)| (std::cmp::Reverse(size), id));
             let large = 1usize << (single - 1);

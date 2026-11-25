@@ -61,6 +61,7 @@ pub struct Messages<F> {
 pub(crate) struct Session<'a, 'proof, F: ProofField> {
     mode: Mode<'a, 'proof, F>,
     pub(crate) openings: Vec<Opening<F>>,
+    pub(crate) replay_sources: bool,
 }
 
 enum Mode<'a, 'proof, F: ProofField> {
@@ -80,6 +81,7 @@ impl<F: ProofField> Messages<F> {
         Session {
             mode: Mode::Verify(F::verifier(transcript), &self.values, self.checks.iter()),
             openings: Vec::new(),
+            replay_sources: false,
         }
     }
 }
@@ -89,6 +91,7 @@ impl<'a, F: ProofField> Session<'a, '_, F> {
         Self {
             mode: Mode::Prove(t, messages),
             openings: Vec::new(),
+            replay_sources: false,
         }
     }
 
@@ -423,7 +426,12 @@ impl<F: JoltField> Equality<F> {
 pub(crate) enum Column<'a, F: JoltField> {
     Field(Cow<'a, [F]>, usize, usize),
     Bits(&'a [u8], usize),
-    Source(Box<dyn Fn(usize) -> F + Send + Sync + 'a>, usize, Option<F>),
+    Source {
+        read: Box<dyn Fn(usize) -> F + Send + Sync + 'a>,
+        len: usize,
+        weights: Vec<F>,
+        rounds: usize,
+    },
     Lookup {
         addresses: &'a super::lookup::Addresses,
         shift: usize,
@@ -451,7 +459,19 @@ impl<'a, F: JoltField> Column<'a, F> {
     }
 
     pub(crate) fn source(len: usize, read: impl Fn(usize) -> F + Send + Sync + 'a) -> Self {
-        Self::Source(Box::new(read), len, None)
+        Self::Source {
+            read: Box::new(read),
+            len,
+            weights: vec![F::one()],
+            rounds: 1,
+        }
+    }
+
+    pub(crate) fn replay(mut self, replay_rounds: usize) -> Self {
+        if let Self::Source { rounds, .. } = &mut self {
+            *rounds = replay_rounds;
+        }
+        self
     }
 
     pub(crate) fn lookup(
@@ -480,7 +500,7 @@ impl<'a, F: JoltField> Column<'a, F> {
         match self {
             Self::Field(v, width, copies) => v.len() * width * copies,
             Self::Bits(v, copies) => v.len() * copies,
-            Self::Source(_, len, _) | Self::Lookup { len, .. } => *len,
+            Self::Source { len, .. } | Self::Lookup { len, .. } => *len,
             Self::Equality(weights) => weights.len(),
             Self::Integer(_, shape) => 1 << shape.vars(),
             Self::Prefix(_, len) => *len,
@@ -520,11 +540,21 @@ impl<'a, F: JoltField> Column<'a, F> {
                 }
             }
             Self::Prefix(values, _) => values.get(i).copied().unwrap_or_else(F::zero),
-            Self::Source(read, _, None) => read(i),
-            Self::Source(read, half, Some(r)) => {
-                let low = read(i);
-                low + *r * (read(i + half) - low)
-            }
+            Self::Source {
+                read, len, weights, ..
+            } => match weights.as_slice() {
+                [_] => read(i),
+                [_, r] => {
+                    let low = read(i);
+                    low + *r * (read(i + len) - low)
+                }
+                _ => weights
+                    .iter()
+                    .enumerate()
+                    .fold(F::zero(), |sum, (prefix, &weight)| {
+                        weight.mul_add(read(prefix * len + i), sum)
+                    }),
+            },
         }
     }
 
@@ -591,9 +621,20 @@ impl<'a, F: JoltField> Column<'a, F> {
                     values.truncate(*len);
                 }
             }
-            Self::Source(_, len, first @ None) => {
-                *first = Some(r);
+            Self::Source {
+                len,
+                weights,
+                rounds,
+                ..
+            } if *rounds != 0 => {
+                let mut next = Vec::with_capacity(weights.len() * 2);
+                for &weight in weights.iter() {
+                    let high = weight * r;
+                    next.extend([weight - high, high]);
+                }
+                *weights = next;
                 *len /= 2;
+                *rounds -= 1;
             }
             column => {
                 let half = column.len() / 2;
@@ -807,6 +848,8 @@ fn lookup_and_equality_columns_match_dense_folding() {
         .map(|&i| digits[((i >> 2) & 3) as usize])
         .collect();
     let mut dense_eq = weights(&point);
+    let mut replay = Column::source(128, |i| F::from_i32(i as i32 - 64)).replay(4);
+    let mut dense_source: Vec<_> = (-64..64).map(F::from_i32).collect();
     let shape = Shape::new(5, 11).unwrap();
     let integers: Vec<_> = (-35..20).collect();
     let mut integer = Column::integer(&integers, shape);
@@ -816,12 +859,15 @@ fn lookup_and_equality_columns_match_dense_folding() {
             assert_eq!(lookup.at(i), dense_digits[i]);
             assert_eq!(equality.at(i), dense_eq[i]);
             assert_eq!(integer.at(i), dense_integer[i]);
+            assert_eq!(replay.at(i), dense_source[i]);
         }
         if round < point.len() {
             let r = F::from_u64(if round == 3 { 0 } else { round as u64 + 13 });
             lookup.bind(r);
             equality.bind(r);
             integer.bind(r);
+            replay.bind(r);
+            bind_halves(&mut dense_source, r);
             bind_halves(&mut dense_integer, r);
             bind_halves(&mut dense_digits, r);
             bind_halves(&mut dense_eq, r);

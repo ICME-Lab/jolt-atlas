@@ -152,6 +152,8 @@ impl<F> Witness<F> {
     }
 }
 
+mod checkpoint;
+
 type ClipSpec = crate::layers::softmax::ClipSpec;
 type ClipPlans = Vec<Vec<Option<crate::layers::softmax::ClipPlan>>>;
 
@@ -189,6 +191,7 @@ impl<'a> Model<'a> {
         let mut layout = Layout::default();
         let mut plans = Vec::with_capacity(layers.len());
         for (i, p) in layers.into_iter().enumerate() {
+            layout.section = Some(i + 1);
             let input_bound = match &architecture {
                 Architecture::Decoder { .. } => p.attention_norm.output_bound(shape.width, bits),
                 Architecture::Encoder { .. } => None,
@@ -225,6 +228,7 @@ impl<'a> Model<'a> {
                 output,
             });
         }
+        layout.section = None;
         let head = match architecture {
             Architecture::Decoder {
                 final_norm,
@@ -335,35 +339,7 @@ impl<'a> Model<'a> {
                 },
             );
             let pre = embedding.is_none();
-            let (attention, attention_sum, attention_norm) = sublayer(
-                pre,
-                x,
-                (&p.attention_norm, &p.attention_sum),
-                &mut advice,
-                |source, advice| p.attention.execute(source, advice),
-                AttentionTrace::output,
-            )?;
-            let skip = if pre {
-                &attention_sum
-            } else {
-                &attention_norm.output
-            };
-            let (mlp, mlp_sum, mlp_norm) = sublayer(
-                pre,
-                skip,
-                (&p.mlp_norm, &p.output),
-                &mut advice,
-                |source, advice| p.mlp.execute(source, advice),
-                MlpTrace::output,
-            )?;
-            let layer = LayerTrace {
-                attention,
-                mlp,
-                attention_norm,
-                mlp_norm,
-                attention_sum,
-                mlp_sum,
-            };
+            let layer = p.execute(x, pre, &mut advice)?;
             layers.push(layer);
         }
         let (norm, logits) = match &self.head {
@@ -430,62 +406,7 @@ impl<'a> Model<'a> {
                 (_, true) => &witness().layers[i - 1].mlp_sum,
                 (_, false) => &witness().layers[i - 1].mlp_norm.output,
             };
-            let (skip, branch) = if pre {
-                let q = boundary(shape, &p.output, &claims, || &w().mlp_sum, io)?;
-                split(shape, None, q, || &w().attention_sum, io)?
-            } else {
-                let q = p
-                    .mlp_norm
-                    .reverse(&claims, || (&w().mlp_sum, &w().mlp_norm), io)?;
-                split(shape, Some(&p.output), q, || &w().attention_norm.output, io)?
-            };
-            let source = || {
-                if pre {
-                    &w().mlp_norm.output[..]
-                } else {
-                    &w().attention_norm.output
-                }
-            };
-            let branch = p
-                .mlp
-                .reverse(branch, source, || &w().mlp, io, &mut lookups)?;
-            let (skip, branch) = if pre {
-                let q =
-                    p.mlp_norm
-                        .reverse(&[branch], || (&w().attention_sum, &w().mlp_norm), io)?;
-                let h = fresh(shape, || &w().attention_sum, io)?;
-                let range = [&skip, &q, &h].map(|q| (q.point.as_slice(), [q.value]));
-                p.attention_sum.check(&range, io)?;
-                split(shape, None, h, x, io)?
-            } else {
-                let q = p.attention_norm.reverse(
-                    &[skip, branch],
-                    || (&w().attention_sum, &w().attention_norm),
-                    io,
-                )?;
-                split(shape, Some(&p.attention_sum), q, x, io)?
-            };
-            let source = || {
-                if pre {
-                    &w().attention_norm.output[..]
-                } else {
-                    x()
-                }
-            };
-            claims = p.attention.reverse(
-                branch,
-                &clipping[i],
-                || (source(), &w().attention),
-                io,
-                &mut lookups,
-            )?;
-            if pre {
-                claims =
-                    vec![p
-                        .attention_norm
-                        .reverse(&claims, || (x(), &w().attention_norm), io)?];
-            }
-            claims.push(skip);
+            claims = p.reverse(shape, pre, claims, &clipping[i], w, x, io, &mut lookups)?;
         }
         if let Head::Encoder(norm) = &self.head {
             claims = vec![norm.reverse(&claims, || (input, norm_trace()), io)?];
@@ -511,11 +432,18 @@ impl<'a> Model<'a> {
         if specs.len() != self.layers.len() {
             return Err("invalid Softmax clip layer count");
         }
-        self.layers
+        let plans = self
+            .layers
             .iter()
             .zip(specs)
-            .map(|(layer, s)| layer.attention.clip_plan(layout, s))
-            .collect()
+            .enumerate()
+            .map(|(i, (layer, s))| {
+                layout.section = Some(i + 1);
+                layer.attention.clip_plan(layout, s)
+            })
+            .collect();
+        layout.section = None;
+        plans
     }
 
     fn prepare_clip<F>(
@@ -545,6 +473,9 @@ impl<'a> Model<'a> {
         setup: &C::AdviceProverSetup,
     ) -> Result<(Vec<i32>, Proof<C>)> {
         let input = self.input(tokens, segments)?;
+        if C::LAYER_OPENINGS {
+            return self.prove_checkpointed::<C>(tokens, segments, &input, setup);
+        }
         let mut w = self.forward::<C::Field>(&input, &self.layout, true)?;
         let mut layout = self.layout.clone();
         let (specs, clipping) = self.prepare_clip(&mut layout, &mut w)?;
@@ -582,6 +513,11 @@ impl<'a> Model<'a> {
         }
         let mut layout = self.layout.clone();
         let clipping = self.clip_plan(&mut layout, &proof.clipping)?;
+        if C::LAYER_OPENINGS {
+            return self.verify_checkpointed(
+                tokens, segments, &input, output, proof, &layout, &clipping, setup,
+            );
+        }
         proof.verify(
             &self.domain(),
             &layout,
@@ -592,6 +528,110 @@ impl<'a> Model<'a> {
             },
             |io| self.reverse(&input, output, &clipping, || unreachable!(), io),
         )
+    }
+}
+
+impl LayerPlan<'_> {
+    fn execute<F: ProofField>(
+        &self,
+        x: &[i32],
+        pre: bool,
+        advice: &mut Advice,
+    ) -> Result<LayerTrace<F>> {
+        let p = self;
+        let (attention, attention_sum, attention_norm) = sublayer(
+            pre,
+            x,
+            (&p.attention_norm, &p.attention_sum),
+            advice,
+            |source, advice| p.attention.execute(source, advice),
+            AttentionTrace::output,
+        )?;
+        let skip = if pre {
+            &attention_sum
+        } else {
+            &attention_norm.output
+        };
+        let (mlp, mlp_sum, mlp_norm) = sublayer(
+            pre,
+            skip,
+            (&p.mlp_norm, &p.output),
+            advice,
+            |source, advice| p.mlp.execute(source, advice),
+            MlpTrace::output,
+        )?;
+        Ok(LayerTrace {
+            attention,
+            mlp,
+            attention_norm,
+            mlp_norm,
+            attention_sum,
+            mlp_sum,
+        })
+    }
+
+    fn reverse<'s, 'w, F: ProofField>(
+        &'s self,
+        shape: Shape,
+        pre: bool,
+        mut claims: Vec<Claim<F>>,
+        clipping: &[Option<crate::layers::softmax::ClipPlan>],
+        w: impl Fn() -> &'w LayerTrace<F> + Sync,
+        x: impl Fn() -> &'w [i32] + Sync,
+        io: &mut Session<'_, '_, F>,
+        lookups: &mut Batches<'s, 'w, F>,
+    ) -> Result<Vec<Claim<F>>> {
+        let p = self;
+        let (skip, branch) = if pre {
+            let q = boundary(shape, &p.output, &claims, || &w().mlp_sum, io)?;
+            split(shape, None, q, || &w().attention_sum, io)?
+        } else {
+            let q = p
+                .mlp_norm
+                .reverse(&claims, || (&w().mlp_sum, &w().mlp_norm), io)?;
+            split(shape, Some(&p.output), q, || &w().attention_norm.output, io)?
+        };
+        let source = || {
+            if pre {
+                &w().mlp_norm.output[..]
+            } else {
+                &w().attention_norm.output
+            }
+        };
+        let branch = p.mlp.reverse(branch, source, || &w().mlp, io, lookups)?;
+        let (skip, branch) = if pre {
+            let q = p
+                .mlp_norm
+                .reverse(&[branch], || (&w().attention_sum, &w().mlp_norm), io)?;
+            let h = fresh(shape, || &w().attention_sum, io)?;
+            let range = [&skip, &q, &h].map(|q| (q.point.as_slice(), [q.value]));
+            p.attention_sum.check(&range, io)?;
+            split(shape, None, h, &x, io)?
+        } else {
+            let q = p.attention_norm.reverse(
+                &[skip, branch],
+                || (&w().attention_sum, &w().attention_norm),
+                io,
+            )?;
+            split(shape, Some(&p.attention_sum), q, &x, io)?
+        };
+        let source = || {
+            if pre {
+                &w().attention_norm.output[..]
+            } else {
+                x()
+            }
+        };
+        claims =
+            p.attention
+                .reverse(branch, clipping, || (source(), &w().attention), io, lookups)?;
+        if pre {
+            claims = vec![p
+                .attention_norm
+                .reverse(&claims, || (x(), &w().attention_norm), io)?];
+        }
+        claims.push(skip);
+        Ok(claims)
     }
 }
 

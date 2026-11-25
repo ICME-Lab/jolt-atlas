@@ -301,7 +301,7 @@ struct Plan(Vec<Group>);
 impl Plan {
     fn new(layout: &Layout, setup: &AkitaAdviceSetup) -> Result<Self> {
         let mut buckets = BTreeMap::<_, Vec<_>>::new();
-        for &slot in &layout.slots {
+        for &slot in layout.slots.iter().filter(|&&slot| layout.active(slot)) {
             let local = slot.vars()
                 - match slot.kind {
                     Kind::Lookup { address_vars } => address_vars,
@@ -469,8 +469,61 @@ pub struct GroupProof {
     opening: <AkitaScheme as CommitmentScheme>::Proof,
 }
 
+fn commit_group(
+    layout: &Layout,
+    advice: &mut Advice,
+    group: &Group,
+    setup: &AkitaAdviceSetup,
+) -> Result<(AkitaCommitment, CommittedGroup)> {
+    let mut polynomials: Vec<_> = (0..group.key.count)
+        .map(|_| Indices::new(1 << (group.key.rounds - ADDRESS_BITS)))
+        .collect();
+    let mut slots = BTreeMap::<_, Vec<_>>::new();
+    for (i, blocks) in group.polynomials.iter().enumerate() {
+        for block in blocks {
+            slots.entry(block.leaf).or_default().push((i, block));
+        }
+    }
+    for (leaf, blocks) in slots {
+        let slot = layout.slots[leaf];
+        match slot.kind {
+            Kind::Bits { .. } => {
+                let digits = advice.digits(slot)?;
+                let share = Arc::strong_count(&digits) > 1;
+                for (i, block) in blocks {
+                    let rows = digits.len().saturating_sub(block.offset).min(block.cycles);
+                    if share {
+                        polynomials[i].attach_digits(
+                            block.start,
+                            Arc::clone(&digits),
+                            block.offset,
+                            rows,
+                        );
+                    } else {
+                        for (row, &digit) in digits.iter().skip(block.offset).take(rows).enumerate()
+                        {
+                            polynomials[i].insert(block.start + row, digit);
+                        }
+                    }
+                }
+            }
+            Kind::Lookup { .. } => {
+                let [(i, block)] = blocks.as_slice() else {
+                    unreachable!("lookup slot is kept in one block");
+                };
+                polynomials[*i].attach(block.start, advice.take_lookup(slot)?);
+            }
+        }
+    }
+    polynomials.iter_mut().for_each(Indices::prepare);
+    let polynomials: Arc<[_]> = polynomials.into();
+    let (commitment, hint) = setup.commit_group(group.key, &polynomials)?;
+    Ok((commitment, CommittedGroup { polynomials, hint }))
+}
+
 impl ModelPcs for AkitaScheme {
     type Field = F;
+    const LAYER_OPENINGS: bool = true;
     type AdvicePlan = ();
     type AdviceProverSetup = AkitaAdviceSetup;
     type AdviceVerifierSetup = AkitaAdviceSetup;
@@ -492,54 +545,54 @@ impl ModelPcs for AkitaScheme {
         let mut commitments = Vec::with_capacity(plan.0.len());
         let mut groups = Vec::with_capacity(plan.0.len());
         for group in &plan.0 {
-            let mut polynomials: Vec<_> = (0..group.key.count)
-                .map(|_| Indices::new(1 << (group.key.rounds - ADDRESS_BITS)))
-                .collect();
-            let mut slots = BTreeMap::<_, Vec<_>>::new();
-            for (i, blocks) in group.polynomials.iter().enumerate() {
-                for block in blocks {
-                    slots.entry(block.leaf).or_default().push((i, block));
-                }
-            }
-            for (leaf, blocks) in slots {
-                let slot = layout.slots[leaf];
-                match slot.kind {
-                    Kind::Bits { .. } => {
-                        let digits = advice.digits(slot)?;
-                        let share = Arc::strong_count(&digits) > 1;
-                        for (i, block) in blocks {
-                            let rows = digits.len().saturating_sub(block.offset).min(block.cycles);
-                            if share {
-                                polynomials[i].attach_digits(
-                                    block.start,
-                                    Arc::clone(&digits),
-                                    block.offset,
-                                    rows,
-                                );
-                            } else {
-                                for (row, &digit) in
-                                    digits.iter().skip(block.offset).take(rows).enumerate()
-                                {
-                                    polynomials[i].insert(block.start + row, digit);
-                                }
-                            }
-                        }
-                    }
-                    Kind::Lookup { .. } => {
-                        let [(i, block)] = blocks.as_slice() else {
-                            unreachable!("lookup slot is kept in one block");
-                        };
-                        polynomials[*i].attach(block.start, advice.take_lookup(slot)?);
-                    }
-                }
-            }
-            polynomials.iter_mut().for_each(Indices::prepare);
-            let polynomials: Arc<[_]> = polynomials.into();
-            let (commitment, hint) = setup.commit_group(group.key, &polynomials)?;
+            let (commitment, witness) = commit_group(layout, advice, group, setup)?;
             commitments.push(commitment);
-            groups.push(CommittedGroup { polynomials, hint });
+            groups.push(witness);
         }
         Ok((commitments, AkitaState { plan, groups }))
+    }
+
+    fn commit_section(
+        layout: &Layout,
+        advice: &mut Advice,
+        _: &(),
+        setup: &AkitaAdviceSetup,
+    ) -> Result<Self::AdviceCommitments> {
+        Plan::new(layout, setup)?
+            .0
+            .iter()
+            .map(|group| {
+                commit_group(layout, advice, group, setup).map(|(commitment, _)| commitment)
+            })
+            .collect()
+    }
+
+    fn open_section(
+        layout: &Layout,
+        advice: &mut Advice,
+        claims: Vec<Opening<F>>,
+        commitments: &Self::AdviceCommitments,
+        _: &(),
+        setup: &AkitaAdviceSetup,
+        t: &mut ProverState<Keccak>,
+    ) -> Result<Vec<GroupProof>> {
+        let plan = Plan::new(layout, setup)?;
+        if plan.0.len() != commitments.len() {
+            return Err("invalid Akita group count");
+        }
+        let reads = plan.requests(layout, &claims);
+        plan.0
+            .iter()
+            .zip(commitments)
+            .zip(reads)
+            .map(|((group, commitment), reads)| {
+                let (replayed, witness) = commit_group(layout, advice, group, setup)?;
+                if &replayed != commitment {
+                    return Err("Akita commitment changed during layer replay");
+                }
+                prove_group(layout, group, reads, witness, commitment, setup, t)
+            })
+            .collect()
     }
 
     fn bind(commitments: &Self::AdviceCommitments, t: &mut impl Transcript) {

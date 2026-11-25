@@ -24,6 +24,7 @@ pub(crate) struct Slot {
     pub(crate) id: usize,
     pub(crate) cell_vars: usize,
     pub(crate) kind: Kind,
+    section: usize,
 }
 
 impl Slot {
@@ -48,6 +49,7 @@ impl Slot {
 pub struct Layout {
     slots: Vec<Slot>,
     pub(crate) integer_bits: u32,
+    pub(crate) section: Option<usize>,
 }
 
 impl Layout {
@@ -56,6 +58,7 @@ impl Layout {
             id: self.slots.len(),
             cell_vars,
             kind,
+            section: self.section.unwrap_or(0),
         };
         if slot.vars() >= usize::BITS as usize {
             return Err("advice exceeds address space");
@@ -96,10 +99,17 @@ impl Layout {
         Advice(self.slots.iter().map(|_| None).collect())
     }
 
+    fn active(&self, slot: Slot) -> bool {
+        self.section.is_none_or(|section| section == slot.section)
+    }
+
     fn validate<F>(&self, requests: &[Opening<F>]) -> Result<()> {
         let mut opened = vec![false; self.slots.len()];
         for request in requests {
             let slot = self.slots.get(request.slot).ok_or("invalid advice slot")?;
+            if !self.active(*slot) {
+                return Err("advice slot outside proof section");
+            }
             let arity = match &request.planes {
                 None => slot.vars(),
                 Some(planes)
@@ -115,7 +125,11 @@ impl Layout {
             }
             opened[slot.id] = true;
         }
-        if opened.contains(&false) {
+        if self
+            .slots
+            .iter()
+            .any(|&slot| self.active(slot) && !opened[slot.id])
+        {
             return Err("unopened advice slot");
         }
         Ok(())
@@ -271,6 +285,8 @@ impl<F> Opening<F> {
 pub trait ModelPcs {
     type Field: ProofField;
     const MIN_FIELD_BITS: u32 = 128;
+    #[doc(hidden)]
+    const LAYER_OPENINGS: bool = false;
     type AdviceProverSetup;
     type AdviceVerifierSetup;
     type AdviceCommitments;
@@ -288,6 +304,30 @@ pub trait ModelPcs {
         plan: &Self::AdvicePlan,
         setup: &Self::AdviceProverSetup,
     ) -> Result<(Self::AdviceCommitments, Self::AdviceState)>;
+    #[doc(hidden)]
+    fn commit_section(
+        layout: &Layout,
+        advice: &mut Advice,
+        plan: &Self::AdvicePlan,
+        setup: &Self::AdviceProverSetup,
+    ) -> Result<Self::AdviceCommitments> {
+        Self::commit(layout, advice, plan, setup).map(|(commitments, _)| commitments)
+    }
+
+    #[doc(hidden)]
+    fn open_section(
+        layout: &Layout,
+        advice: &mut Advice,
+        requests: Vec<Opening<Self::Field>>,
+        commitments: &Self::AdviceCommitments,
+        plan: &Self::AdvicePlan,
+        setup: &Self::AdviceProverSetup,
+        t: &mut ProverState<Keccak>,
+    ) -> Result<Self::AdviceOpening> {
+        let (_, state) = Self::commit(layout, advice, plan, setup)?;
+        Self::open(layout, requests, commitments, state, plan, setup, t)
+    }
+
     #[doc(hidden)]
     fn bind(commitments: &Self::AdviceCommitments, t: &mut impl Transcript);
     #[doc(hidden)]
@@ -314,10 +354,62 @@ pub trait ModelPcs {
 
 pub struct Proof<C: ModelPcs> {
     pub(crate) clipping: Vec<Vec<crate::layers::softmax::ClipSpec>>,
-    commitments: C::AdviceCommitments,
+    pub(crate) sections: Vec<ProofSection<C>>,
+    pub(crate) transcript: Vec<u8>,
+}
+
+pub(crate) struct ProofSection<C: ModelPcs> {
+    pub(crate) commitments: C::AdviceCommitments,
     messages: Messages<C::Field>,
     opening: C::AdviceOpening,
-    transcript: Vec<u8>,
+}
+
+impl<C: ModelPcs> ProofSection<C> {
+    pub(crate) fn prove(
+        layout: &Layout,
+        commitments: C::AdviceCommitments,
+        setup: &C::AdviceProverSetup,
+        t: &mut ProverState<Keccak>,
+        reverse: impl FnOnce(&mut Session<'_, '_, C::Field>) -> Result<Advice>,
+    ) -> Result<Self> {
+        let plan = plan::<C>(layout)?;
+        let mut messages = Messages::default();
+        let mut io = Session::prove(C::Field::prover(t), &mut messages);
+        io.replay_sources = true;
+        let mut advice = reverse(&mut io)?;
+        let requests = io.finish()?;
+        layout.validate(&requests)?;
+        let opening =
+            C::open_section(layout, &mut advice, requests, &commitments, &plan, setup, t)?;
+        Ok(Self {
+            commitments,
+            messages,
+            opening,
+        })
+    }
+
+    pub(crate) fn verify(
+        &self,
+        layout: &Layout,
+        setup: &C::AdviceVerifierSetup,
+        t: &mut VerifierState<'_, Keccak>,
+        reverse: impl FnOnce(&mut Session<'_, '_, C::Field>) -> Result<()>,
+    ) -> Result<()> {
+        let plan = plan::<C>(layout)?;
+        let mut io = self.messages.read(t);
+        reverse(&mut io)?;
+        let requests = io.finish()?;
+        layout.validate(&requests)?;
+        C::verify(
+            layout,
+            requests,
+            &self.commitments,
+            &self.opening,
+            &plan,
+            setup,
+            t,
+        )
+    }
 }
 
 impl<C: ModelPcs> Proof<C> {
@@ -352,9 +444,11 @@ impl<C: ModelPcs> Proof<C> {
         )?;
         Ok(Self {
             clipping: Vec::new(),
-            commitments,
-            messages,
-            opening,
+            sections: vec![ProofSection {
+                commitments,
+                messages,
+                opening,
+            }],
             transcript: transcript.narg_string().to_vec(),
         })
     }
@@ -367,23 +461,13 @@ impl<C: ModelPcs> Proof<C> {
         public: impl FnOnce(&mut VerifierState<'_, Keccak>),
         reverse: impl FnOnce(&mut Session<'_, '_, C::Field>) -> Result<()>,
     ) -> Result<()> {
-        let plan = plan::<C>(layout)?;
+        let [section] = self.sections.as_slice() else {
+            return Err("invalid proof section count");
+        };
         let mut t = verifier_transcript::<Keccak>(domain, b"", &self.transcript);
         public(&mut t);
-        C::bind(&self.commitments, &mut t);
-        let mut io = self.messages.read(&mut t);
-        reverse(&mut io)?;
-        let requests = io.finish()?;
-        layout.validate(&requests)?;
-        <C as ModelPcs>::verify(
-            layout,
-            requests,
-            &self.commitments,
-            &self.opening,
-            &plan,
-            setup,
-            &mut t,
-        )?;
+        C::bind(&section.commitments, &mut t);
+        section.verify(layout, setup, &mut t, reverse)?;
         t.check_eof().map_err(|_| "unused transcript bytes")
     }
 }

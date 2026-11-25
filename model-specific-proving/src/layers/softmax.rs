@@ -701,6 +701,12 @@ impl<'a> Softmax<'a> {
         };
         let batch = io.point(claims.len())?;
         let sum = dot(claims.iter().map(|q| q.value), batch.iter().copied());
+        // Re-read compact Softmax sources until the shared fold has shrunk.
+        let replay_rounds = if io.replay_sources {
+            vars.saturating_sub(18).clamp(1, 4)
+        } else {
+            1
+        };
         let columns = |i: usize| {
             let (t, scores) = trace(i);
             let score = move |row, col| {
@@ -748,6 +754,7 @@ impl<'a> Softmax<'a> {
                 11 => Column::equality(&clamp),
                 _ => Column::rows(weights(&total).into(), stride),
             })
+            .map(|column| column.replay(replay_rounds))
         };
         let (end, values) = io.fold_weighted_masked(
             instance(sum, vars, if has_excess { 4 } else { 3 }),

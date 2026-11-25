@@ -111,7 +111,7 @@ by argument alone.
 |---|---|---|---|---|
 | 1 | Numeric representation | (a) 32-bit fixed point everywhere, as today; (b) per-tensor widths, e.g. 8-bit weights and 16-bit activations; (c) floating point | (b), with the widths chosen by experiment. (c) has no affordable proof. See 5.3 | Accuracy experiment, phase 0 |
 | 2 | Where the arithmetic runs | A prime field (Fp128 as today, a 127-bit Mersenne prime, a smaller prime with an extension); the integers mod `2^k` (read and dropped, 5.5); a binary field | Not decided; the search of 5.5 decides. It must be a ring that counts: a sumcheck for a matrix product touches each weight once only where integers add and multiply. In a binary field each multiply-add is a few hundred bit constraints (an estimate), and Qwen2-0.5B at 16 tokens is several billion multiply-adds against under half a billion weights. The incumbent is a prime field larger than our values, with a reduction that is cheap in machine words | The search of 5.5; GPU sumcheck-round rates per candidate; the widths of decision 1 (an 8-bit by 16-bit product over 11,008 terms needs about 38 bits) |
-| 3 | How small values are committed | Packed bits in `F_{2^128}` with ring switching and Ligerito (BitZ, Magnetar); packing by the field trace (Frigo and shelat); a pay-per-bit lattice scheme (SuperNeo, LaBinius); a linear or quasi-abelian code over the arithmetic's own ring (Rotor, Quasar) | Not decided; the search of 5.5 decides. The incumbent is packed bits, which price a value by its bits, give range checks for free and beat Akita here by 14 to 15 times (PR #409); NVIDIA GPUs since Ampere have a carry-less multiply, so its field is no longer an obstacle there. Its cost is the bridge to a ring that counts (the grand product, our largest opening cost today) | The search of 5.5; GPU rates for `F_{2^128}` multiplication with `clmad`, for the encoding and the hash tree, and for the bridge |
+| 3 | How small values are committed | Packed bits in a binary field with ring switching and Ligerito (BitZ, Magnetar); integers under a code over the rationals (Zinc, Zinc+; read and dropped, 5.5); a pay-per-bit lattice scheme (SuperNeo, LaBinius; read and dropped, 5.5); a linear or quasi-abelian code over the arithmetic's own ring (Rotor, dropped; Quasar, unread) | Not decided, but packed bits stand after the reading of 5.5: nothing read commits a small value as cheaply at 120 bits with a small proof. They price a value by its bits, give range checks for free and beat Akita here by 14 to 15 times (PR #409); NVIDIA GPUs since Ampere have a carry-less multiply, so the field is no obstacle there. Their cost is the bridge to a ring that counts (the grand product, our largest opening cost today), and the open work is that bridge (5.5) | GPU rates for binary-field multiplication with `clmad`, for the encoding and the hash tree, and for the bridge; the Mersenne pair of 5.5 written out and checked |
 | 4 | The 7B model | Llama-2-7B; Mistral-7B; Qwen2.5-7B; Llama-3.1-8B | One config-driven block serves all four, so this is a licence question: Llama 2 is under Meta's community licence and gated; Mistral-7B and Qwen2.5-7B are Apache 2.0 | Licence review, before phase 4 |
 | 5 | GPU kernels | CUDA through a Rust backend trait, with which toolchain (C++ kernels over FFI, or Rust-side code generation) | CUDA C++ kernels behind the trait; benchmark an existing proving library only as the bar to beat | Phase 0 |
 | 6 | Statement | What is public (prompt, output, sampling seed); greedy or sampled decoding | Public prompt and output, greedy decoding first; one proof covers a whole sequence, since a causal model's forward pass over N tokens checks every next-token choice | Product owner |
@@ -197,17 +197,18 @@ that takes 19 to 56 s on one core. FlashProve reports about 110 tokens a second 
 mixture-of-experts model on an H100, with 19 MB proofs and a 21 s verifier. Both are their
 authors' figures.
 
-**Candidates.** Except for BitZ and Magnetar, we have read only abstracts; reading each in
-full is the first step of the search.
+**Candidates.** Every paper below has been read in full except Quasar, which is known from
+its abstract.
 
 | Candidate | The idea | What is known | What we must learn |
 |---|---|---|---|
 | Integers mod `2^k` (Rotor, ePrint 2026/2175; Nenya, 2026/2672) | Prove directly over machine words | **Read in full and dropped as a core** (see below) | Nothing further; two ideas are kept |
 | Bits in `F_{2^128}`, a prime field for the arithmetic (BitZ; our CPU backend) | Pay per bit to commit; bridge to a field that counts by a grand product | Qwen2-0.5B in 2.7 s on 32 CPU cores. The bridge is 0.6 s of a 0.85 s opening | The bridge's and the prime field's cost on a GPU; whether a cheaper bridge exists |
 | Bits in `F_{2^128}` throughout (Magnetar) | Never leave the binary field | 7 to 13 million RISC-V cycles a second on 12 CPU cores at 120 provable bits | Whether any argument makes integer products cheap there; without one it fails criterion 1 |
-| Packing by the field trace (Frigo and shelat, ePrint 2026/2770) | Pack bits into one `GF(2^m)` element using only the trace's linearity; soundness error 2^-m | A simpler reduction than ring switching, with linear constraints only | Whether it replaces ring switching in either binary design, and at what prover cost |
+| Packing by the field trace (Frigo and shelat, ePrint 2026/2770) | A claim on bits packed `m` to an element of `GF(2^m)` becomes one linear relation on the elements, by the trace's linearity alone; error 2^-m, no sumcheck, any `m`, any coefficients | **Read.** It replaces ring switching, which is not where our time goes, and its gain is zero knowledge: no quadratic constraint in the commitment. It needs a commitment that answers a general linear query | Nothing for speed. Kept for when zero knowledge returns, and for packing in a field whose degree is not a power of two (the Mersenne pair below) |
+| Integers committed directly (Zinc, ePrint 2025/316; Zinc+, 2026/855) | Encode integers with a code over the rationals; check the constraints modulo a random prime | **Read in full and dropped** (see below) | Nothing further |
 | A code over the arithmetic's own field (Quasar, ePrint 2026/1839) | Field-agnostic commitment from quasi-abelian codes; implemented over the 127-bit Mersenne prime | GPU encoding 33 to 148 times a 32-thread CPU; 100-bit security | Cost per committed small value, since it pays per element; whether 120 provable bits is reachable |
-| Pay-per-bit lattice commitments (SuperNeo, ePrint 2026/242; LaBinius, 2026/2103) | Commit small values cheaply under Module-SIS, with sumchecks over a small field | Folding with pay-per-bit costs (CRYPTO 2026). Akita, not pay-per-bit, was 14 to 15 times slower than BitZ here | Concrete cost per bit against packed bits; our earlier note on LaBinius disagrees with its abstract and needs re-reading |
+| Pay-per-bit lattice commitments (SuperNeo, ePrint 2026/242; LaBinius, 2026/2103) | Commit small values cheaply under Module-SIS | **Read in full and dropped as a core** (see below). Akita, not pay-per-bit, was 14 to 15 times slower than BitZ here | Nothing further for SuperNeo; LaBinius is worth a second look if its verifier is fixed |
 
 A candidate is dropped when it fails a criterion on paper, and prototyped at kernel level on
 the GPU when it does not. The search ends with one core written into the protocol spec.
@@ -238,11 +239,84 @@ its compatible commitment, one committed vector answering both integer queries a
 binary-field queries on its bits, is the cleanest statement of what a bridge must do, though
 its own construction costs a word of codeword for every committed bit.
 
-**What this changes.** The counting ring that fits a GPU is a prime with a reduction that is
-cheap in words (a Mersenne prime), not a power of two, so the search now turns on the other
-half: committing bits cheaply and bridging them to that prime. Next to read in full: BitZ's
-bridge against Zinc+'s projection to a random prime, the pay-per-bit lattice schemes
-(SuperNeo, LaBinius), and Frigo and shelat's packing.
+So the counting ring that fits a GPU is a prime with a reduction that is cheap in words (a
+Mersenne prime), not a power of two, and the search turned to the other half: committing bits
+cheaply and bridging them to that prime.
+
+**Dropped: committing integers directly** (Zinc and Zinc+, read 2026-11-25).
+
+- **Zinc is theory only.** It has no implementation, no analysis of the non-interactive
+  setting, and an opening in the style of Brakedown. Its code multiplies every committed
+  value by integers of about 4λ bits (2λ conjectured), so a codeword symbol is hundreds of
+  bits however small the value: the opposite of paying per bit.
+- **Zinc+ is built for small traces.** It replaces that code with a Reed–Solomon transform
+  over a 16-bit prime run without reduction, and it is implemented, at a 100-bit target. Its
+  figures stop at 2^18 elements. Encoding 2^18 polynomials of 32 bits takes 177 ms on a
+  MacBook Air M4 with all cores, about 47 million bits a second, where packed-bit commitments
+  run at about 4 billion bits a second on one core (Ligerito and BaseFold at rate 1/2 in
+  LaBinius's Table 1; both rates are our arithmetic from the papers' tables). A bit costs
+  about a third of a 32-bit integer there, not a thirty-second, and that each one is a bit is
+  a separate sumcheck. The opening is in the style of Ligero, one per claim, and the authors
+  call it large.
+- **Neither proves over a fixed prime.** The sumcheck runs modulo a random prime of more
+  than λ bits (about 192 in Zinc+'s implementation). The authors' own open question 7.5 is
+  our case, a large prime with witness values far below it.
+
+Nothing is taken from them that we lack: the projection onto a random prime is the step BitZ
+already has.
+
+**Dropped: the lattice commitments** (SuperNeo and LaBinius, read 2026-11-25).
+
+- **SuperNeo is a folding scheme without an opening.** It has no implementation, no
+  measurement, no proof size and no final proof: succinctness is left to a second proof
+  system that the paper does not construct. Committing a bit costs 960 field additions (our
+  count from its parameters, 15 ring elements of degree 64).
+- **LaBinius is fast and does not bridge.** On one core it commits 2.7×10^9 bits in 636 ms
+  and opens them in 167 ms: per bit, level with BaseFold and Ligerito at rate 1/2 to commit,
+  and five times faster than Ligerito to open. But its claims are in a binary field only, so
+  it would replace our encoding, hash tree and Ligerito and leave the bridge where it is. It
+  targets 100 bits. Its proof is 2.9 MiB at that size and grows as the square root, or 83 KiB with a
+  713 ms verifier.
+
+**What the reading leaves standing.** Nothing read commits small values more cheaply than
+packed bits at 120 bits with a small proof, and nothing read has a cheaper bridge than
+BitZ's. The incumbent of decision 3 stands on paper. What is open is the bridge, and that is
+now a question for our own design and for measurement on the GPU, not for more reading.
+
+**Two findings about the bridge.** Both are ours, from our own code and not from a paper.
+Neither is reviewed, and the first is not written out as a protocol.
+
+1. **A Mersenne pair removes the projection.** BitZ proves a sum in the exponent of a
+   generator of `F_{2^128}`'s multiplicative group, whose order `2^128 − 1` is a product of
+   nine small primes. So it lifts the claim to the integers, reduces it modulo a random
+   prime small enough that no column's sum wraps (below `2^128` over the row count), and
+   buys back the projection's error with proof of work. The multiplicative group of
+   `F_{2^127}` has prime order `2^127 − 1`. If the counting field is that Mersenne prime,
+   which criterion 3 favours anyway, and the grand product runs in `F_{2^127}`, then
+   exponents add modulo the counting field itself. There is no lift, no random prime, no
+   primality test in the verifier, no projection error and no proof of work for it, and the
+   split into rows and columns is no longer tied to soundness. Checked here: `2^127 − 1` is
+   prime and `x^127 + x + 1` is irreducible over `F_2`, so reduction is by a trinomial.
+   - *What it does not remove:* the grand product. On Qwen at 64 tokens that is 4.4 s of a
+     10.2 s opening, and the projection 1.0 s.
+   - *Open:* the commitment must open at points of `F_{2^127}`, a field with no tower and a
+     degree that is not a power of two. Packing 127 bits to an element leaves one position in
+     every 128 unused and changes the layout; packing 64 doubles the hashing. Every
+     challenge in a 127-bit field is one bit short of the 128-bit one. And prior
+     work may exist: a search result says the BitZ paper sets itself against an earlier
+     scheme limited to this prime, which we have not found.
+2. **The bridge's proof and verifier grow as the square root of the committed bits.** The
+   proof carries one 16-byte sum per column, with as many columns as rows, and the verifier
+   does one exponentiation per row and per column. The CPU backend's proof sizes on Qwen
+   (1.77, 2.40, 2.49 and 3.55 MiB at 16, 32, 64 and 128 tokens) fit column sums of 0.5, 1, 1
+   and 2 MiB, and its verify time (0.23 s to 0.62 s) grows by about the square root of 8.
+   At 10^11 committed bits that is 4 to 8 MiB of column sums. This bears on criterion 5 and
+   is to be measured, not inferred. A free split, as the Mersenne pair gives, trades proof
+   bytes for verifier exponentiations but keeps their product.
+
+**Next.** Write the Mersenne pair out as a protocol and check it; read Quasar, and the BitZ
+paper again for the earlier scheme; then the GPU rates of 5.6 for `F_{2^127}` and
+`F_{2^128}` multiplication, the 127-bit Mersenne field, and the hash tree.
 
 ### 5.6 The floor, and measuring against it
 
@@ -368,9 +442,10 @@ each model.
   the commitment scheme is chosen.
 - **Two backends, one team.** The CPU backend is frozen in scope so it does not compete for
   time; the padded-lane gaps pinned on 2026-11-19 stay pinned there.
-- **The search may end at the incumbent.** The first candidate read, proof systems over
-  `Z_{2^k}`, was dropped. If nothing beats packed bits with a prime field, the gain over the
-  CPU backend comes from the GPU, narrower values and a cheaper bridge, not from a new core.
+- **The search may end at the incumbent.** Three families have been read and dropped: proof
+  systems over `Z_{2^k}`, integers committed under a code over the rationals, and the lattice
+  commitments. If nothing beats packed bits with a prime field, the gain over the CPU backend
+  comes from the GPU, narrower values and a cheaper bridge, not from a new core.
 - **A ring that counts.** Our relations are integer products. A binary field alone cannot
   host them cheaply, so a binary commitment needs a bridge, and the bridge is our largest
   opening cost today.
@@ -381,10 +456,11 @@ each model.
 ## Sources
 
 Read in full: Magnetar (Setty, ePrint 2026/2423); BitZ (ePrint 2026/2141, and
-`specs/bitz-commitment.md`); Rotor (ePrint 2026/2175) and Nenya (2026/2672), constructions and
-evaluations, proofs skimmed. Read as abstracts or summaries only: Quasar (2026/1839); Sumcheck bit packing (Frigo and shelat, 2026/2770);
-Neo and SuperNeo (2026/242); LaBinius (2026/2103); Sable (arXiv 2611.14083); zkDuel (arXiv
-2610.37710); NVIDIA, "Building faster cryptography with carryless multiplication in CUDA
+`specs/bitz-commitment.md`); Sumcheck bit packing (Frigo and shelat, 2026/2770). Read in
+full with the proofs skimmed: Rotor (ePrint 2026/2175); Nenya (2026/2672); Zinc (2025/316);
+Zinc+ (2026/855); Neo and SuperNeo (2026/242); LaBinius (2026/2103). Read as abstracts or
+summaries only: Quasar (2026/1839); Sable (arXiv 2611.14083); zkDuel (arXiv 2610.37710);
+NVIDIA, "Building faster cryptography with carryless multiplication in CUDA
 13.3" (15 July 2026). Cited by Magnetar: BinarySpartan (2026/1656), ring switching (Diamond
 and Posen, 2024/504), Ligerito (2025/1187). FlashProve and other systems' positions:
 `docs/prover-plan.md` section 4.

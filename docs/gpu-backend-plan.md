@@ -368,8 +368,9 @@ Neither is reviewed, and the first is not written out as a protocol.
    is to be measured, not inferred. A free split, as the Mersenne pair gives, trades proof
    bytes for verifier exponentiations but keeps their product.
 
-**Next.** Write the hypothesis of 5.6 out as a protocol with its soundness argument, for
-review; beside it the Mersenne pair, as the packed-bit alternative for the witness; read
+**Next.** The hypothesis of 5.6 is written out with its soundness argument in
+`docs/gpu-protocol.md`, for review. Still to write beside it: the Mersenne pair, as the
+packed-bit alternative for the witness, and a second layer that shrinks the opening; read
 Quasar, and the BitZ paper again for the earlier scheme; then the GPU rates of 5.7 for each
 candidate's arithmetic and for the hash tree.
 
@@ -429,18 +430,23 @@ is the price of a design choice.
 
 - **Weights under a linear-map commitment, opened in one shot.** Per proof: one pass forming
   the claim in the large field and one pass forming a short combination in machine words,
-  with nothing recomputed from the binding. At 6.7×10^9 weights the proof would be a few
-  megabytes and the verifier's work a few matrix products over a small modulus. That is at
-  the floor of 5.7 for the weight pass.
+  with nothing recomputed from the binding. That is at the floor of 5.7 for the weight pass.
+  The opening is not small: written out (`docs/gpu-protocol.md`, section 6) it is 18 MiB for
+  6.7×10^9 weights and 4.4 MiB for Qwen2-0.5B's, growing as the square root. An earlier
+  version of this section said a few megabytes; that was a miscount.
 - **Witness: undecided between two.** The same commitment with a range sumcheck over its
   bits, or packed bits with a bridge. Both pay a few field multiplications per bit for the
   range; which is cheaper on the GPU is a measurement.
 
 **What is not known.**
 
-- LaBinius proves this mechanism for claims modulo 2 only, and says its extraction extends
-  to other primes under two conditions on the ring and the challenge set. A large prime is
-  new work, and it is the piece to send for review.
+- LaBinius states its extraction for any evaluation prime that is inert in its ring and
+  builds only the prime 2. `2^127 − 1` is not inert there; `docs/gpu-protocol.md` shows that
+  short elements are still units modulo it, which is what the extraction needs, and writes
+  the scheme out for claims in the prime field. That is the piece to send for review.
+- The proof's size. The square-root opening puts it at the commodity stack's level (tens of
+  megabytes at 7B), against criterion 5, and it counts every committed cell, so one-hot
+  lookup rows are expensive. Shrinking it needs a second layer that is not designed.
 - Parameters at 120 bits for 8-bit coefficients: the paper's are for bits at 100.
 - Every rate on a GPU. Akita, a lattice scheme, lost to BitZ on our CPU by 14 to 15 times.
   The differences claimed here (a tiny modulus, a one-shot opening, binding done offline)

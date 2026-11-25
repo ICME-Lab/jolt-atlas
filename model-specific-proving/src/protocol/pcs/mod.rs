@@ -376,6 +376,8 @@ pub(crate) fn bind_i32(t: &mut impl Transcript, values: &[i32]) {
 
 #[cfg(feature = "akita")]
 mod akita;
+#[cfg(feature = "akita-cluster")]
+pub use akita::cluster::serve_worker;
 #[cfg(feature = "akita")]
 pub use akita::AkitaAdviceSetup;
 

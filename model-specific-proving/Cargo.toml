@@ -8,6 +8,7 @@ resolver = "2"
 
 [features]
 akita = ["dep:jolt-akita", "dep:akita-config", "dep:akita-schedules"]
+akita-cluster = ["akita", "dep:akita-pcs", "dep:akita-types", "dep:bincode", "dep:serde"]
 akita-metal = ["akita", "jolt-akita/metal", "dep:jolt-metal"]
 bitz = ["dep:world-common", "dep:world-field", "dep:world-pcs", "dep:world-prover", "dep:world-verifier", "dep:world-transcript", "dep:crypto-primitives", "dep:num-traits", "dep:rand_core", "dep:serde"]
 safetensors-weights = ["dep:safetensors", "dep:half", "dep:atlas-trace", "dep:libm", "dep:serde", "dep:serde_json"]
@@ -16,7 +17,14 @@ safetensors-weights = ["dep:safetensors", "dep:half", "dep:atlas-trace", "dep:li
 name = "prove-gpt2"
 required-features = ["akita", "safetensors-weights"]
 
+[[bin]]
+name = "akita-worker"
+required-features = ["akita-cluster"]
+
 [dependencies]
+akita-pcs = { git = "https://github.com/GUJustin/akita.git", rev = "5668262bcc0e8ddef005051fa66ad84255431294", default-features = false, optional = true }
+akita-types = { git = "https://github.com/GUJustin/akita.git", rev = "5668262bcc0e8ddef005051fa66ad84255431294", default-features = false, optional = true }
+bincode = { version = "1.3", optional = true }
 world-common = { package = "common", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
 world-field = { package = "field", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
 world-pcs = { package = "pcs", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }

@@ -1326,8 +1326,11 @@ name = "model-specific-proving"
 version = "0.1.0"
 dependencies = [
  "akita-config",
+ "akita-pcs",
  "akita-schedules",
+ "akita-types",
  "atlas-trace",
+ "bincode",
  "common",
  "crypto-primitives",
  "field",

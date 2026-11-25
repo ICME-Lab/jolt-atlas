@@ -44,3 +44,51 @@ fn proves_bert_with_post_normalization() {
         .verify(&tokens, Some(&segments), &output, &proof, &setup)
         .unwrap();
 }
+
+#[cfg(feature = "akita-cluster")]
+#[test]
+fn proves_model_with_two_akita_worker_processes() {
+    use std::{
+        io::{BufRead, BufReader},
+        process::{Child, Command, Stdio},
+    };
+
+    struct Worker(Child);
+
+    impl Drop for Worker {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let mut workers = Vec::new();
+    let mut addresses = Vec::new();
+    for _ in 0..2 {
+        let mut worker = Worker(
+            Command::new(env!("CARGO_BIN_EXE_akita-worker"))
+                .arg("127.0.0.1:0")
+                .env("RAYON_NUM_THREADS", "2")
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let mut address = String::new();
+        BufReader::new(worker.0.stdout.take().unwrap())
+            .read_line(&mut address)
+            .unwrap();
+        addresses.push(address.trim().parse().unwrap());
+        workers.push(worker);
+    }
+
+    let weights = ModelWeights::from_safetensors(&model("qwen2-tiny"), 14).unwrap();
+    let tokens = [17, 42, 23];
+    let decoder = weights.model(tokens.len()).unwrap();
+    let prover = setup().with_workers(addresses).unwrap();
+    let (output, proof) = decoder
+        .prove::<AkitaScheme>(&tokens, None, &prover)
+        .unwrap();
+    decoder
+        .verify(&tokens, None, &output, &proof, &setup())
+        .unwrap();
+}

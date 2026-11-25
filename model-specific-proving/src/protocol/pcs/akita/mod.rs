@@ -26,6 +26,8 @@ use jolt_transcript::{FieldTranscript, ProverTranscript, VerifierTranscript};
 use rayon::prelude::*;
 
 use super::*;
+#[cfg(feature = "akita-cluster")]
+pub(crate) mod cluster;
 #[cfg(all(test, feature = "akita-metal", target_os = "macos"))]
 mod metal;
 mod packed;
@@ -67,6 +69,8 @@ impl Key {
 /// Schedule artifacts and reusable setup data for grouped model advice.
 /// The same public configuration is used for both proving and verifying.
 pub struct AkitaAdviceSetup {
+    #[cfg(feature = "akita-cluster")]
+    workers: Option<Arc<cluster::Workers>>,
     #[cfg(all(feature = "akita-metal", target_os = "macos"))]
     metal: bool,
     dense_profile: AkitaChunkProfile,
@@ -104,6 +108,8 @@ impl AkitaAdviceSetup {
             widths.dedup();
         }
         Ok(Self {
+            #[cfg(feature = "akita-cluster")]
+            workers: None,
             #[cfg(all(feature = "akita-metal", target_os = "macos"))]
             metal: false,
             dense_profile: artifacts.dense_profile(),
@@ -138,10 +144,25 @@ impl AkitaAdviceSetup {
         Ok(self)
     }
 
+    /// Use the supplied TCP workers for supported Akita trace folds.
+    #[cfg(feature = "akita-cluster")]
+    pub fn with_workers(mut self, workers: Vec<std::net::SocketAddr>) -> Result<Self> {
+        self.workers = Some(Arc::new(cluster::Workers::new(workers)?));
+        self.prover = Mutex::default();
+        Ok(self)
+    }
+
     fn setup(&self, key: Key) -> Result<Arc<AkitaProverSetup>> {
         cached(&self.prover, key, || {
             let (pk, _) =
                 AkitaScheme::setup(self.params(key)?).map_err(|_| "Akita prover setup failed")?;
+            #[cfg(feature = "akita-cluster")]
+            if let Some(workers) = &self.workers {
+                let workers = Arc::clone(workers);
+                return pk
+                    .with_trace_compute_kernel(|_| Ok(workers))
+                    .map_err(|_| "Akita worker setup failed");
+            }
             #[cfg(all(feature = "akita-metal", target_os = "macos"))]
             if self.native_metal(key) {
                 return pk
@@ -585,6 +606,10 @@ fn digit_weights(lanes: &[F], scale: F) -> [F; K] {
 }
 
 /// A separable public weight on an aligned interval of the committed row axis.
+#[cfg_attr(
+    feature = "akita-cluster",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 struct Read {
     start: usize,
     rows: Vec<F>,
@@ -813,20 +838,38 @@ fn prove_group(
     let key = group.key;
     pow(GroupQueries::dimension(key, &claims), t)?;
     let queries = GroupQueries::read(layout, group, claims, t)?;
-    let mut fold = GroupFold {
-        rounds: key.rounds,
-        packed: witness
-            .polynomials
-            .iter()
-            .zip(&queries.reads)
-            .zip(&queries.bit_mix)
-            .map(|((poly, reads), &mix)| PackedFold::new(poly, reads, &queries.bit_check, mix))
-            .collect(),
+    let local = |t: &mut _| {
+        let mut fold = GroupFold {
+            rounds: key.rounds,
+            packed: witness
+                .polynomials
+                .iter()
+                .zip(&queries.reads)
+                .zip(&queries.bit_mix)
+                .map(|((poly, reads), &mix)| PackedFold::new(poly, reads, &queries.bit_check, mix))
+                .collect(),
+        };
+        let (reduction, reduced) =
+            prove_single(&mut fold, &instance(queries.sum, key.rounds, 3), t)
+                .map_err(|_| "Akita lookup group reduction failed")?;
+        let evaluations: Vec<_> = fold.packed.iter().map(|fold| fold.value(0)).collect();
+        Ok::<_, &'static str>((reduction, reduced, evaluations))
     };
-    let (reduction, reduced) = prove_single(&mut fold, &instance(queries.sum, key.rounds, 3), t)
-        .map_err(|_| "Akita lookup group reduction failed")?;
-    let evaluations: Vec<_> = fold.packed.iter().map(|fold| fold.value(0)).collect();
-    drop(fold);
+    #[cfg(feature = "akita-cluster")]
+    let (reduction, reduced, evaluations) = match &setup.workers {
+        Some(workers) => {
+            let mut fold = workers
+                .sumcheck(key.rounds, &witness.polynomials, &queries)
+                .map_err(|_| "Akita worker sumcheck setup failed")?;
+            let (reduction, reduced) =
+                prove_single(&mut fold, &instance(queries.sum, key.rounds, 3), t)
+                    .map_err(|_| "Akita worker sumcheck failed")?;
+            (reduction, reduced, fold.evaluations)
+        }
+        None => local(t)?,
+    };
+    #[cfg(not(feature = "akita-cluster"))]
+    let (reduction, reduced, evaluations) = local(t)?;
     let point = group_point(&reduced.challenges);
     t.append_values(&evaluations);
     let polynomials = witness

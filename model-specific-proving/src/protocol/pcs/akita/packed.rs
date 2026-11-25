@@ -8,7 +8,7 @@ const SPARSE_ROUNDS: usize = 4;
 
 /// Row-major K=16 indices. Code zero is an empty row; 1 through 16 select a column.
 pub(super) struct Indices {
-    bytes: Vec<u8>,
+    pub(super) bytes: Vec<u8>,
     len: usize,
     pub(super) prefix: usize,
 }

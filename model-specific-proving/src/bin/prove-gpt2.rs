@@ -27,6 +27,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     if metal {
         return Err("--metal requires macOS and the akita-metal feature".into());
     }
+    #[cfg(feature = "akita-cluster")]
+    let prover = match std::env::var("ATLAS_AKITA_WORKERS") {
+        Ok(addrs) => {
+            if metal {
+                return Err("choose --metal or ATLAS_AKITA_WORKERS".into());
+            }
+            prover.with_workers(addrs.split(',').map(str::parse).collect::<Result<_, _>>()?)?
+        }
+        Err(std::env::VarError::NotPresent) => prover,
+        Err(error) => return Err(error.into()),
+    };
     let start = Instant::now();
     let (logits, proof) = model.prove::<AkitaScheme>(&tokens, None, &prover)?;
     println!("prove: {:.3} s", start.elapsed().as_secs_f64());

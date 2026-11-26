@@ -449,33 +449,37 @@ impl<'a> Soft<'a> {
                 let trace = witness();
                 let (row, col) = point.split_at(shape.row_bits());
                 let columns = weights(col);
-                let mut result = [F::zero(); 4];
+                let mut totals = [F::zero(); 6];
+                let rounded = scores(i);
+                let overflow = trace.overflows[i].as_deref();
                 for (row, rw) in weights(row).into_iter().enumerate() {
+                    let mut row_values = [F::zero(); 6];
                     for (col, &cw) in columns.iter().enumerate() {
-                        let j = row * columns.len() + col;
-                        let w = rw * cw;
-                        let address = trace.addresses[i].at(j);
-                        for (dst, val) in result[..3].iter_mut().zip([
-                            F::from_u64(address as u64),
-                            tables[0].value(address),
-                            tables[1].value(address),
-                        ]) {
-                            *dst += w * val;
-                        }
+                        let address = trace.addresses[i].at(row * columns.len() + col);
+                        row_values[0] += cw.mul_unsigned(address as u128);
+                        row_values[1] +=
+                            cw.mul_signed(i128::from(self.tables.probabilities[address]));
+                        row_values[2] += cw * tables[1].value(address);
                         if row < shape.rows && col < shape.width {
-                            if let Some(overflow) = &trace.overflows[i] {
-                                result[3] += w * F::from_i64(overflow[row * shape.width + col]);
+                            let cell = row * shape.width + col;
+                            if let Some(overflow) = overflow {
+                                row_values[3] += cw.mul_signed(i128::from(overflow[cell]));
                             }
-                            let rounded = scores(i);
-                            qk_values[0] += w * shape.at(&rounded.values, j);
-                            qk_values[1] += w * match &rounded.remainder {
-                                Remainder::Narrow(values) => shape.at(values, j),
-                                Remainder::Wide(values) => shape.at(values, j),
+                            row_values[4] += cw.mul_signed(i128::from(rounded.values[cell]));
+                            let residue = match &rounded.remainder {
+                                Remainder::Narrow(values) => u128::from(values[cell]),
+                                Remainder::Wide(values) => u128::from(values[cell]),
                             };
+                            row_values[5] += cw.mul_unsigned(residue);
                         }
                     }
+                    for (total, value) in totals.iter_mut().zip(row_values) {
+                        *total += rw * value;
+                    }
                 }
-                result
+                let [address, probability, sum, extra, score, residue] = totals;
+                qk_values = [score, residue];
+                [address, probability, sum, extra]
             })?;
             for ((sum, value), base) in full.iter_mut().zip([a, b, c, d]).zip(defaults) {
                 *sum += factor * (value - base);

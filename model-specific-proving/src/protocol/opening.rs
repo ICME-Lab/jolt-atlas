@@ -665,14 +665,14 @@ impl<'a, 'q> Projection<'a, 'q> {
         for &(row, weight, shift) in &self.ranges {
             let output = &mut self.outputs[row][..values.len()];
             if let Some(value) = constant {
-                let term = F::from_u128(value >> shift) * weight;
+                let term = weight.mul_unsigned(value >> shift);
                 for dst in output {
                     *dst += term;
                 }
             } else {
                 for (dst, &value) in output.iter_mut().zip(values) {
                     if value != 0 {
-                        *dst += F::from_u128(value >> shift) * weight;
+                        *dst += weight.mul_unsigned(value >> shift);
                     }
                 }
             }
@@ -1026,50 +1026,91 @@ impl Plan {
             self.requests(check(&mut Session::Prover(&mut transcript, &mut messages))?)?;
         let mut openings = Messages::default();
         let mut io = Session::Prover(&mut transcript, &mut openings);
-        let mut provers = HashMap::new();
-        for ((((params, pcs), slots), queries), expected) in
-            self.groups.iter().zip(groups).zip(requests).zip(&roots)
-        {
-            let mut committed = None;
-            let claim = self.reduce(
-                &queries,
-                params,
-                |queries| {
-                    let mut projection = Projection::new(queries);
-                    if let Some((data, sources)) = commitments.next() {
-                        info_span!("Atlas BitZ projection").in_scope(|| projection.read(&sources));
-                        committed = Some(data);
-                    } else {
-                        let (block, _) =
-                            info_span!("Atlas BitZ repack and projection").in_scope(|| {
-                                witness.group(
-                                    &slots,
-                                    pcs.packed_len(),
-                                    false,
-                                    Some(&mut projection),
-                                )
-                            })?;
-                        let (root, data) = commit(block, pcs)?;
-                        if &root.0 != expected {
-                            return Err("regenerated witness root differs");
+        std::thread::scope(|threads| -> Result<()> {
+            type Provers = HashMap<usize, world_prover::BitZProver<Scalar>>;
+            type Opening<'a> = Box<dyn FnOnce(&mut Provers) -> Result<BitProof> + Send + 'a>;
+
+            // The Atlas reductions share a transcript, but each BitZ proof uses
+            // its own channel. Prepare at most one group while its predecessor opens.
+            let pipeline = (streamed && rayon::current_num_threads() > 1).then(|| {
+                let (send, work) = std::sync::mpsc::sync_channel::<Opening<'_>>(0);
+                let (done, receive) = std::sync::mpsc::sync_channel(1);
+                threads.spawn(move || {
+                    let mut provers = Provers::new();
+                    for open in work {
+                        if done.send(open(&mut provers)).is_err() {
+                            break;
                         }
-                        for &(slot, _) in &slots {
-                            witness.slots[slot] = Stored::default();
-                        }
-                        committed = Some(data);
                     }
-                    Ok(projection.columns())
-                },
-                &mut io,
-            )?;
-            let (data, block, mut channel) = committed.ok_or("missing prover commitment")?;
-            provers
-                .entry(params.shape().columns())
-                .or_insert_with(|| world_prover::BitZProver::new(*params, 8))
-                .prove(&claim, pcs, &data, block, &mut channel)
-                .map_err(|_| "could not prove witness evaluation")?;
-            emit(channel.finish())?;
-        }
+                });
+                (send, receive)
+            });
+            let mut provers = Provers::new();
+            let mut pending = false;
+            for ((((params, pcs), slots), queries), expected) in
+                self.groups.iter().zip(groups).zip(requests).zip(&roots)
+            {
+                let mut committed = None;
+                let claim = self.reduce(
+                    &queries,
+                    params,
+                    |queries| {
+                        let mut projection = Projection::new(queries);
+                        if let Some((data, sources)) = commitments.next() {
+                            info_span!("Atlas BitZ projection")
+                                .in_scope(|| projection.read(&sources));
+                            committed = Some(data);
+                        } else {
+                            let (block, _) = info_span!("Atlas BitZ repack and projection")
+                                .in_scope(|| {
+                                    witness.group(
+                                        &slots,
+                                        pcs.packed_len(),
+                                        false,
+                                        Some(&mut projection),
+                                    )
+                                })?;
+                            let (root, data) = commit(block, pcs)?;
+                            if &root.0 != expected {
+                                return Err("regenerated witness root differs");
+                            }
+                            for &(slot, _) in &slots {
+                                witness.slots[slot] = Stored::default();
+                            }
+                            committed = Some(data);
+                        }
+                        Ok(projection.columns())
+                    },
+                    &mut io,
+                )?;
+                let (data, block, mut channel) = committed.ok_or("missing prover commitment")?;
+                let open = move |provers: &mut Provers| {
+                    provers
+                        .entry(params.shape().columns())
+                        .or_insert_with(|| world_prover::BitZProver::new(*params, 8))
+                        .prove(&claim, pcs, &data, block, &mut channel)
+                        .map_err(|_| "could not prove witness evaluation")?;
+                    Ok(channel.finish())
+                };
+                if let Some((send, receive)) = &pipeline {
+                    if pending {
+                        emit(receive.recv().map_err(|_| "BitZ worker stopped")??)?;
+                    }
+                    send.send(Box::new(open))
+                        .map_err(|_| "BitZ worker stopped")?;
+                    pending = true;
+                } else {
+                    emit(open(&mut provers)?)?;
+                }
+            }
+            if let Some((send, receive)) = pipeline {
+                drop(send);
+                if pending {
+                    emit(receive.recv().map_err(|_| "BitZ worker stopped")??)?;
+                }
+            }
+            Ok(())
+        })?;
         Ok(ProofMetadata {
             roots,
             widths,

@@ -51,6 +51,32 @@ impl Ring for F {
     }
 }
 
+impl F {
+    #[inline]
+    pub(crate) fn mul_unsigned(self, value: u128) -> Self {
+        let Ok(value) = u64::try_from(value) else {
+            return self * Self::from_u128(value);
+        };
+        let a = self.0.lift();
+        let value = u128::from(value);
+        let low = u128::from(a as u64) * value;
+        let high = (a >> 64) * value + (low >> 64);
+        let lower = u128::from(low as u64) | ((high & ((1 << 55) - 1)) << 64);
+        // The part above bit 118 folds back with a factor of 69.
+        Self::from_u128(lower + 69 * (high >> 55))
+    }
+
+    #[inline]
+    pub(crate) fn mul_signed(self, value: i128) -> Self {
+        let magnitude = self.mul_unsigned(value.unsigned_abs());
+        if value < 0 {
+            -magnitude
+        } else {
+            magnitude
+        }
+    }
+}
+
 impl WithAccumulator for F {
     type SumAccumulator = NaiveAccumulator<Self>;
     type Accumulator = NaiveAccumulator<Self>;
@@ -159,3 +185,33 @@ macro_rules! transcript {
 
 transcript!(ProverState<Keccak>);
 transcript!(VerifierState<'_, Keccak>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mixed_width_product_matches_field_multiplication() {
+        let mut a = F::from_u128(PRIME - 1);
+        let signed = [
+            i128::MIN,
+            i64::MIN.into(),
+            i32::MIN.into(),
+            -1,
+            0,
+            1,
+            i32::MAX.into(),
+            u64::MAX.into(),
+            i128::MAX,
+        ];
+        for _ in 0..64 {
+            for &value in &signed {
+                assert_eq!(a.mul_signed(value), a * F::from_i128(value));
+            }
+            for value in [0, 1, u64::MAX.into(), 1 << 64, u128::MAX] {
+                assert_eq!(a.mul_unsigned(value), a * F::from_u128(value));
+            }
+            a = a * F::from_u128((1 << 109) - 39) + F::from_u64(71);
+        }
+    }
+}

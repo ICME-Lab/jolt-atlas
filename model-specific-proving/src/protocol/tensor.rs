@@ -50,10 +50,10 @@ impl Shape {
         inner(
             weights(row),
             values.chunks_exact(self.width).map(|v| {
-                inner(
-                    col.iter().copied(),
-                    v.iter().map(|&x| F::from_i128(x.into())),
-                )
+                col.iter()
+                    .zip(v)
+                    .map(|(&w, &x)| w.mul_signed(x.into()))
+                    .sum()
             }),
         )
     }
@@ -92,7 +92,7 @@ pub(crate) fn bind_rows(width: usize, rows: &[i32], point: &[F]) -> Vec<F> {
     let mut bound = vec![F::zero(); width.next_power_of_two()];
     for (row, factor) in rows.chunks_exact(width).zip(weights(point)) {
         for (total, &value) in bound.iter_mut().zip(row) {
-            *total = F::from_i32(value).mul_add(factor, *total);
+            *total += factor.mul_signed(i128::from(value));
         }
     }
     bound

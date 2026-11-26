@@ -574,7 +574,11 @@ impl<'a> AttentionPlan<'a> {
                                 .take(if self.causal { r + 1 } else { shape.rows })
                                 .enumerate()
                             {
-                                *p += w * F::from_i32(head.soft.probability(&trace().soft, r, c));
+                                *p += w.mul_signed(i128::from(head.soft.probability(
+                                    &trace().soft,
+                                    r,
+                                    c,
+                                )));
                             }
                         }
                         vec![Column::Dense(a), Column::Dense(bind_v())]

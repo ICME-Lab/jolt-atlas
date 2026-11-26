@@ -6,6 +6,7 @@ rust-version = "1.97"
 license = "MIT OR Apache-2.0"
 
 [features]
+metal = []
 gkr-backend = []
 
 [dependencies]

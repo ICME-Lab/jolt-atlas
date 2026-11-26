@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[cfg(all(feature = "metal", target_os = "macos", target_arch = "aarch64"))]
+#[path = "metal.rs"]
+mod metal;
+
 /// At most 256 MiB for the two dense child buffers in one relation.
 pub(super) const DENSE_NODES: usize = 1 << 24;
 const TILE: usize = 1 << 12;
@@ -110,6 +114,14 @@ pub(super) fn prove(
     (point, value)
 }
 
+fn round_sum(
+    precomputed: Option<(Wide256, Wide256)>,
+    point: &[Field],
+    cpu: impl Fn(Range<usize>, &[Field], &mut Vec<Field>) -> (Wide256, Wide256) + Sync,
+) -> (Wide256, Wide256) {
+    precomputed.unwrap_or_else(|| factored_sum(point, cpu))
+}
+
 fn factored_sum(
     point: &[Field],
     work: impl Fn(Range<usize>, &[Field], &mut Vec<Field>) -> (Wide256, Wide256) + Sync,
@@ -184,6 +196,14 @@ fn prove_relation(
                 }
                 sum.reduce()
             };
+            #[cfg(all(feature = "metal", target_os = "macos", target_arch = "aarch64"))]
+            let gpu = source_lut.and_then(|(lut, level)| {
+                if level == LEAVES && side > dense_nodes {
+                    metal::Leaves::new(lut, point)
+                } else {
+                    None
+                }
+            });
             while (2 << remaining) > dense_nodes {
                 let i = remaining - 1;
                 let stride = 1 << remaining;
@@ -196,7 +216,15 @@ fn prove_relation(
                 let projected = source_lut.filter(|_| paired.is_none()).map(|(lut, level)| {
                     packed_round::PackedRound::new(lut, level, stride, &prefix)
                 });
-                let mut sums = factored_sum(&point[..i], |range, eq, scratch| {
+                #[cfg(not(all(feature = "metal", target_os = "macos", target_arch = "aarch64")))]
+                let gpu_sum = None;
+                #[cfg(all(feature = "metal", target_os = "macos", target_arch = "aarch64"))]
+                let gpu_sum = gpu.as_ref().and_then(|leaves| match prefix.len() {
+                    1 => Some(leaves.first(at_one)),
+                    2 => Some(leaves.second(challenges[i + 1], at_one)),
+                    _ => None,
+                });
+                let mut sums = round_sum(gpu_sum, &point[..i], |range, eq, scratch| {
                     if let Some(lut) = paired {
                         let group = 1 << lut.log_trees;
                         let mut sums = (Wide256::zero(), Wide256::zero());
@@ -387,14 +415,6 @@ fn leaf_pair_sums(
     first: Field,
     at_one: bool,
 ) -> (Wide256, Wide256) {
-    let children = [start, start + half].map(|start| {
-        let images = &lut.luts[start >> lut.log_trees];
-        let left: [Field; 4] =
-            std::array::from_fn(|k| interpolate(images[k & 1], images[k & 2], first));
-        let right: [Field; 4] =
-            std::array::from_fn(|k| interpolate(images[(k & 1) << 2], images[(k & 2) << 2], first));
-        (left, right)
-    });
     let mut weights = [Field::ZERO; 256];
     let words = lut.words();
     let start = start / NIBBLES_IN_WORD;
@@ -408,8 +428,27 @@ fn leaf_pair_sums(
             b >>= 4;
         }
     }
+    leaf_pair_eval(lut, start * NIBBLES_IN_WORD, half, first, at_one, &weights)
+}
+
+fn leaf_pair_eval(
+    lut: &LutLayers,
+    start: usize,
+    half: usize,
+    first: Field,
+    at_one: bool,
+    weights: &[Field; 256],
+) -> (Wide256, Wide256) {
+    let children = [start, start + half].map(|start| {
+        let images = &lut.luts[start >> lut.log_trees];
+        let left: [Field; 4] =
+            std::array::from_fn(|k| interpolate(images[k & 1], images[k & 2], first));
+        let right: [Field; 4] =
+            std::array::from_fn(|k| interpolate(images[(k & 1) << 2], images[(k & 2) << 2], first));
+        (left, right)
+    });
     let mut sums = (Wide256::zero(), Wide256::zero());
-    for (key, w) in weights.into_iter().enumerate() {
+    for (key, w) in weights.iter().copied().enumerate() {
         if w == Field::ZERO {
             continue;
         }

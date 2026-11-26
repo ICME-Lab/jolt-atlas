@@ -86,6 +86,11 @@ cargo run --release --manifest-path model-specific-proving/Cargo.toml \
   models/gpt2-tiny 14 17 42
 ```
 
+On Apple Silicon, add the `bitz-metal` feature to run the first two BitZ GKR
+leaf rounds for large groups on Metal. Building the feature requires the Xcode
+Metal toolchain. Set `ATLAS_BITZ_METAL=0` to run the same build on the CPU for
+comparison.
+
 For large Top-K proofs, `Model::prove_top_k_to` writes to an empty,
 seekable file and returns the selected candidates. Pass those candidates
 and the proof file to `Model::verify_top_k_from` with the same model,

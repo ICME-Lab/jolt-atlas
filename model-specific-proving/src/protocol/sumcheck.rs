@@ -1,5 +1,5 @@
-use jolt_field::{Field, Zero};
-use jolt_poly::{MultilinearPoly, UnivariatePoly};
+use jolt_field::{Field, One, Zero};
+use jolt_poly::{BindingOrder, GruenSplitEqPolynomial, MultilinearPoly, UnivariatePoly};
 use jolt_sumcheck::{
     prove_single, round_pow_bits, verify_single, ProveRounds, SingleFormat, SingleInstance,
     SingleReduction, SingleSumcheckProof, SumcheckError,
@@ -247,6 +247,39 @@ pub(crate) enum Column<'a> {
     Dense(Vec<F>),
     Public(&'a [F]),
     Source(usize, Box<dyn Fn(usize) -> F + Send + Sync + 'a>),
+    Lookup {
+        len: usize,
+        read: Box<dyn Fn(usize) -> usize + Send + Sync + 'a>,
+        width: usize,
+        tables: Vec<F>,
+    },
+    Equality(Box<SplitEquality>),
+}
+
+pub(crate) struct SplitEquality {
+    polynomial: GruenSplitEqPolynomial<F>,
+    len: usize,
+    high: Vec<F>,
+}
+
+impl SplitEquality {
+    fn refresh(&mut self) {
+        self.high.clear();
+        if self.len == 1 {
+            self.high.push(self.polynomial.current_scalar());
+            return;
+        }
+        let (low, high) = self.polynomial.current_linear_evals();
+        let inner = self.polynomial.e_in_current();
+        for scale in [low, high] {
+            self.high.extend(inner.iter().map(|&value| scale * value));
+        }
+    }
+
+    fn get(&self, i: usize) -> F {
+        let low = self.polynomial.e_out_current();
+        self.high[i >> low.len().trailing_zeros()] * low[i & (low.len() - 1)]
+    }
 }
 
 impl<'a> Column<'a> {
@@ -254,11 +287,35 @@ impl<'a> Column<'a> {
         Self::Source(n, Box::new(read))
     }
 
+    pub(crate) fn lookup(
+        len: usize,
+        table: &[F],
+        read: impl Fn(usize) -> usize + Send + Sync + 'a,
+    ) -> Self {
+        Self::Lookup {
+            len,
+            read: Box::new(read),
+            width: table.len(),
+            tables: table.to_vec(),
+        }
+    }
+
+    pub(crate) fn split_equality(point: &[F]) -> Self {
+        let mut column = Box::new(SplitEquality {
+            polynomial: GruenSplitEqPolynomial::new(point, BindingOrder::HighToLow),
+            len: 1 << point.len(),
+            high: Vec::new(),
+        });
+        column.refresh();
+        Self::Equality(column)
+    }
+
     fn len(&self) -> usize {
         match self {
             Self::Dense(v) => v.len(),
             Self::Public(v) => v.len(),
-            Self::Source(n, _) => *n,
+            Self::Source(n, _) | Self::Lookup { len: n, .. } => *n,
+            Self::Equality(column) => column.len,
         }
     }
 
@@ -267,11 +324,45 @@ impl<'a> Column<'a> {
             Self::Dense(v) => v[i],
             Self::Public(v) => v[i],
             Self::Source(_, read) => read(i),
+            Self::Lookup {
+                len,
+                read,
+                width,
+                tables,
+            } => tables
+                .chunks_exact(*width)
+                .enumerate()
+                .map(|(prefix, table)| table[read(prefix * len + i)])
+                .sum(),
+            Self::Equality(column) => column.get(i),
         }
     }
 
     fn bind(&mut self, r: F) {
         let half = self.len() / 2;
+        match self {
+            Self::Equality(column) => {
+                column.polynomial.bind(r);
+                column.len = half;
+                column.refresh();
+                return;
+            }
+            Self::Lookup {
+                len, width, tables, ..
+            } if tables.len() < 4 * *width => {
+                // Bind the first two coordinates in the digit tables.
+                let mut next = Vec::with_capacity(2 * tables.len());
+                let low = F::one() - r;
+                for table in tables.chunks_exact(*width) {
+                    next.extend(table.iter().map(|&value| low * value));
+                    next.extend(table.iter().map(|&value| r * value));
+                }
+                *tables = next;
+                *len = half;
+                return;
+            }
+            _ => {}
+        }
         if let Self::Dense(v) = self {
             let (lo, hi) = v.split_at_mut(half);
             if half >= 2048 {
@@ -375,5 +466,40 @@ impl<E: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, E> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use jolt_field::Ring;
+
+    use super::*;
+
+    #[test]
+    fn compact_lookup_columns_fold_like_dense_columns() {
+        let values: Vec<_> = (1..=8).map(F::from_u64).collect();
+        let point = &values[..5];
+        let digit = |i: usize| (i ^ (i >> 3)) & 7;
+        let mut lookup = Column::lookup(32, &values, digit);
+        let mut dense_lookup = Column::Dense((0..32).map(|i| values[digit(i)]).collect());
+        let mut equality = Column::split_equality(point);
+        let mut dense_equality = Column::Dense(weights(point));
+        for round in 0..=point.len() {
+            if round > 0 {
+                let challenge = F::from_u64(10 + round as u64);
+                for column in [
+                    &mut lookup,
+                    &mut dense_lookup,
+                    &mut equality,
+                    &mut dense_equality,
+                ] {
+                    column.bind(challenge);
+                }
+            }
+            for i in 0..lookup.len() {
+                assert_eq!(lookup.get(i), dense_lookup.get(i));
+                assert_eq!(equality.get(i), dense_equality.get(i));
+            }
+        }
     }
 }

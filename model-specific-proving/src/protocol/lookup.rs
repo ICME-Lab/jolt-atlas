@@ -241,11 +241,11 @@ impl<'a> Lookups<'a> {
                     for q in &reads {
                         for (choice, &(_, shift, n)) in selectors.iter().zip(&q.plan.digits) {
                             let addresses = q.witness.as_ref().expect("lookup trace");
-                            columns.push(Column::source(len, move |i| {
-                                choice[(addresses.get(i) >> shift) & ((1 << n) - 1)]
+                            columns.push(Column::lookup(len, choice, move |i| {
+                                (addresses.get(i) >> shift) & ((1 << n) - 1)
                             }));
                         }
-                        columns.push(Column::Dense(weights(&q.point)));
+                        columns.push(Column::split_equality(&q.point));
                     }
                     columns
                 },

@@ -85,7 +85,7 @@ pub(crate) struct Soft<'a> {
 
 pub(crate) struct SoftTrace {
     addresses: Vec<Arc<Addresses>>,
-    overflows: Vec<Vec<i64>>,
+    overflows: Vec<Option<Vec<i64>>>,
     stats: Vec<[i64; 3]>,
 }
 
@@ -188,11 +188,7 @@ impl<'a> Soft<'a> {
             .iter()
             .map(|block| Addresses::new(1 << block.read.cells, block.read.bits))
             .collect();
-        let mut overflows: Vec<_> = self
-            .blocks
-            .iter()
-            .map(|block| vec![0i64; block.tile.shape.len()])
-            .collect();
+        let mut overflows: Vec<_> = self.blocks.iter().map(|_| None::<Vec<i64>>).collect();
         let mut stats = Vec::with_capacity(self.shape.rows);
         let max_address = (self.tables.sums.len() - 1) as i64;
         let limit = i64::from(self.tables.limit);
@@ -231,9 +227,13 @@ impl<'a> Soft<'a> {
                 let difference = lo - value;
                 let address = difference.min(max_address);
                 addresses[block].set(index, address as usize);
-                let width = self.blocks[block].tile.shape.width;
-                let stride = width.next_power_of_two();
-                overflows[block][index / stride * width + index % stride] = difference - address;
+                let overflow = difference - address;
+                if overflow != 0 {
+                    let shape = self.blocks[block].tile.shape;
+                    let stride = shape.width.next_power_of_two();
+                    let values = overflows[block].get_or_insert_with(|| vec![0; shape.len()]);
+                    values[index / stride * shape.width + index % stride] = overflow;
+                }
             }
         }
         let column: [Vec<i64>; 3] =
@@ -242,7 +242,9 @@ impl<'a> Soft<'a> {
             .record(packed, column.each_ref().map(Vec::as_slice))?;
         for ((block, addresses), overflow) in self.blocks.iter().zip(&addresses).zip(&overflows) {
             block.read.record(packed, addresses)?;
-            block.overflow.record_adaptive(packed, overflow)?;
+            block
+                .overflow
+                .record_adaptive(packed, overflow.as_deref().unwrap_or_default())?;
         }
         Ok(SoftTrace {
             addresses: addresses.into_iter().map(Arc::new).collect(),
@@ -321,7 +323,9 @@ impl<'a> Soft<'a> {
                         F::from_i64(cell(i).map_or(0, |(b, j)| {
                             let shape = self.blocks[b].tile.shape;
                             let stride = shape.width.next_power_of_two();
-                            trace.overflows[b][j / stride * shape.width + j % stride]
+                            trace.overflows[b]
+                                .as_ref()
+                                .map_or(0, |v| v[j / stride * shape.width + j % stride])
                         }))
                     }),
                     Column::source(len, move |i| {
@@ -388,7 +392,9 @@ impl<'a> Soft<'a> {
                         *dst += w * val;
                     }
                 }
-                result[3] = shape.evaluate(&trace.overflows[i], &point);
+                if let Some(overflow) = &trace.overflows[i] {
+                    result[3] = shape.evaluate(overflow, &point);
+                }
                 result
             })?;
             for ((sum, value), base) in full.iter_mut().zip([a, b, c, d]).zip(defaults) {

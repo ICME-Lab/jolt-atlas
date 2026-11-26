@@ -169,6 +169,37 @@ impl Packed<'_> {
         Ok(())
     }
 
+    pub(crate) fn one_hot(
+        &mut self,
+        digits: &[(Slot, usize, usize)],
+        len: usize,
+        address: impl Fn(usize) -> usize,
+    ) {
+        let stride = len.div_ceil(ROWS);
+        for &(slot, _, width) in digits {
+            self.blocks[slot.0] = F128::zeroed_vec(stride << width);
+        }
+
+        let mut rows = vec![[0u128; 16]; digits.len()];
+        for word in 0..stride {
+            rows.fill([0; 16]);
+            let start = word * ROWS;
+            for i in start..(start + ROWS).min(len) {
+                let code = address(i);
+                for (bits, &(_, shift, width)) in rows.iter_mut().zip(digits) {
+                    let digit = (code >> shift) & ((1 << width) - 1);
+                    bits[digit] |= 1 << (i - start);
+                }
+            }
+            for (bits, &(slot, _, width)) in rows.iter().zip(digits) {
+                let block = &mut self.blocks[slot.0];
+                for (plane, &bits) in bits[..1 << width].iter().enumerate() {
+                    block[plane * stride + word] = F128::from(bits);
+                }
+            }
+        }
+    }
+
     pub(crate) fn write(
         &mut self,
         slot: Slot,
@@ -273,9 +304,10 @@ impl Plan {
                     .iter()
                     .flat_map(|(offset, cols, row, planes, mix)| {
                         let mut projection = vec![F::zero(); ROWS];
-                        let coeffs = planes
-                            .iter()
-                            .flat_map(|&p| cols.iter().map(move |&c| p * *mix * c));
+                        let coeffs = planes.iter().flat_map(|&p| {
+                            let scale = p * *mix;
+                            cols.iter().map(move |&c| scale * c)
+                        });
                         for (&word, weight) in packed[*offset..].iter().zip(coeffs) {
                             let mut bits = word.to_u128();
                             while bits != 0 {
@@ -294,9 +326,10 @@ impl Plan {
         let mut columns = vec![Scalar::from(0u64); params.shape().columns()];
         for (offset, cols, row, planes, mix) in queries {
             let scale = mix * equality(&row, &end.challenges);
-            let factors = planes
-                .iter()
-                .flat_map(|&p| cols.iter().map(move |&c| p * scale * c));
+            let factors = planes.iter().flat_map(|&p| {
+                let scale = p * scale;
+                cols.iter().map(move |&c| scale * c)
+            });
             for (dst, weight) in columns[offset..].iter_mut().zip(factors) {
                 *dst += weight.0;
             }

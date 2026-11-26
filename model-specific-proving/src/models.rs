@@ -529,16 +529,17 @@ impl<'a> Model<'a> {
             .as_ref()
             .map_or_else(|| run.layers.last().unwrap().output(false), |v| &v.values)
             .to_vec();
-        let output = Output::Logits(&y);
+        let values = &y;
+        let output = Output::Logits(values);
         let proof = layout.finish(&packed.widths)?.prove(
             &output.domain(),
             packed,
             |t| self.bind(t, tokens, segments, output),
-            |io| {
+            move |io| {
                 self.reverse_logits(
                     io,
                     &input,
-                    &y,
+                    values,
                     logits.as_ref(),
                     || &run,
                     || score.as_ref().unwrap(),
@@ -615,15 +616,15 @@ impl<'a> Model<'a> {
         let mut packed = layout.packed();
         let run = self.execute(&input, &mut packed)?;
         let candidates = ranking.select(&run.norms.values, &mut packed)?;
-        let output = Output::Ranked(config, &candidates);
+        let selected = &candidates;
+        let output = Output::Ranked(config, selected);
         let proof = layout.finish(&packed.widths)?.prove(
             &output.domain(),
             packed,
             |t| self.bind(t, tokens, None, output),
-            |io| {
+            move |io| {
                 let mut requests = Vec::new();
-                let claims =
-                    ranking.reverse(io, &mut requests, &candidates, || &run.norms.values)?;
+                let claims = ranking.reverse(io, &mut requests, selected, || &run.norms.values)?;
                 self.reverse(io, &input, claims, || &run, requests)
             },
         )?;

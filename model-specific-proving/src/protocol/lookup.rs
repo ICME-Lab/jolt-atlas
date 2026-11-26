@@ -117,11 +117,7 @@ impl Lookup {
         if addresses.len != 1 << self.cells || addresses.bits != self.bits {
             return Err("invalid lookup witness");
         }
-        for &(slot, shift, width) in &self.digits {
-            packed.write(slot, 0, 1 << width, |cell| {
-                1 << ((addresses.get(cell) >> shift) & ((1 << width) - 1))
-            })?;
-        }
+        packed.one_hot(&self.digits, addresses.len, |i| addresses.get(i));
         Ok(())
     }
 }

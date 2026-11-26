@@ -16,6 +16,11 @@ use crate::protocol::{
 };
 use field::{BitzField as F, Fq};
 
+// Qwen3-0.6B, one layer, 1,024 tokens, last-position Top-K, four threads.
+// Rows / field bits: prove / verify / proof payload.
+// 128 / 121: 37.23 s / 6.05 s / 420.8 MiB.
+// 512 / 119: 37.13 s / 2.74 s / 108.8 MiB.
+// 2048 / 117: 48.14 s / 1.95 s / 30.9 MiB.
 const ROW_VARS: usize = 7;
 const ROWS: usize = 1 << ROW_VARS;
 const DOMAIN: &[u8] = b"atlas/model-specific/world-bitz/groups/v1";

@@ -242,6 +242,12 @@ impl<F> Opening<F> {
     }
 }
 
+fn bind_clips(t: &mut impl Transcript, specs: &[Vec<crate::layers::softmax::ClipSpec>]) {
+    for head in specs.iter().flatten() {
+        head.bind(t);
+    }
+}
+
 pub struct Proof {
     pub(crate) clipping: Vec<Vec<crate::layers::softmax::ClipSpec>>,
     commitments: Vec<[u8; 32]>,
@@ -254,6 +260,7 @@ impl Proof {
     pub(crate) fn prove<W>(
         domain: &[u8; 32],
         layout: &Layout,
+        clipping: Vec<Vec<crate::layers::softmax::ClipSpec>>,
         mut witness: W,
         advice: impl FnOnce(&mut W) -> &mut Advice,
         public: impl FnOnce(&mut ProverState<Keccak>),
@@ -263,6 +270,7 @@ impl Proof {
         let (commitments, state) = bitz::commit(layout, advice(&mut witness), &plan)?;
         let mut transcript = prover_transcript::<Keccak>(domain, b"");
         public(&mut transcript);
+        bind_clips(&mut transcript, &clipping);
         bitz::bind(&commitments, &mut transcript);
         let mut messages = Messages::default();
         let mut io = Session::prove(BitzField::prover(&mut transcript), &mut messages);
@@ -271,7 +279,7 @@ impl Proof {
         layout.validate(&requests)?;
         let opening = bitz::open(layout, requests, state, &plan, &mut transcript)?;
         Ok(Self {
-            clipping: Vec::new(),
+            clipping,
             commitments,
             messages,
             opening,
@@ -289,6 +297,7 @@ impl Proof {
         let plan = bitz::plan(layout)?;
         let mut t = verifier_transcript::<Keccak>(domain, b"", &self.transcript);
         public(&mut t);
+        bind_clips(&mut t, &self.clipping);
         bitz::bind(&self.commitments, &mut t);
         let mut io = self.messages.read(&mut t);
         reverse(&mut io)?;

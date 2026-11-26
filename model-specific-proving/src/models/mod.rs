@@ -133,8 +133,8 @@ struct LayerPlan<'a> {
 struct LayerTrace<F> {
     attention: AttentionTrace<F>,
     mlp: MlpTrace,
-    attention_norm: NormTrace<F>,
-    mlp_norm: NormTrace<F>,
+    attention_norm: NormTrace,
+    mlp_norm: NormTrace,
     attention_sum: Vec<i32>,
     mlp_sum: Vec<i32>,
 }
@@ -142,7 +142,7 @@ struct LayerTrace<F> {
 struct Witness<F> {
     advice: Advice,
     layers: Vec<LayerTrace<F>>,
-    norm: NormTrace<F>,
+    norm: NormTrace,
     logits: Option<Rounded>,
 }
 
@@ -157,14 +157,6 @@ impl<F> Witness<F> {
 
 type ClipSpec = crate::layers::softmax::ClipSpec;
 type ClipPlans = Vec<Vec<Option<crate::layers::softmax::ClipPlan>>>;
-
-fn bind_clips(t: &mut impl Transcript, specs: &[Vec<ClipSpec>]) {
-    for layer in specs {
-        for head in layer {
-            head.bind(t);
-        }
-    }
-}
 
 impl<'a> Model<'a> {
     pub fn new(
@@ -498,18 +490,15 @@ impl<'a> Model<'a> {
         let mut layout = self.layout.clone();
         let (specs, clipping) = self.prepare_clip(&mut layout, &mut w)?;
         let output = w.output().to_vec();
-        let mut proof = Proof::prove(
+        let proof = Proof::prove(
             &self.domain(),
             &layout,
+            specs,
             w,
             |w| &mut w.advice,
-            |t| {
-                self.bind(t, tokens, segments, &output);
-                bind_clips(t, &specs);
-            },
+            |t| self.bind(t, tokens, segments, &output),
             |w, io| self.reverse(&input, &output, &clipping, Some(w), io),
         )?;
-        proof.clipping = specs;
         Ok((output, proof))
     }
 
@@ -530,10 +519,7 @@ impl<'a> Model<'a> {
         proof.verify(
             &self.domain(),
             &layout,
-            |t| {
-                self.bind(t, tokens, segments, output);
-                bind_clips(t, &proof.clipping);
-            },
+            |t| self.bind(t, tokens, segments, output),
             |io| self.reverse(&input, output, &clipping, None, io),
         )
     }
@@ -611,9 +597,8 @@ impl LayerPlan<'_> {
             let q = p
                 .mlp_norm
                 .reverse(&[branch], || (&w().attention_sum, &w().mlp_norm), io)?;
-            let h = fresh(shape, || &w().attention_sum, io)?;
-            let range = [&skip, &q, &h].map(|q| (q.point.as_slice(), [q.value]));
-            p.attention_sum.check(&range, io)?;
+            let sum = || w().attention_sum.as_slice();
+            let h = boundary(shape, &p.attention_sum, &[skip, q], sum, io)?;
             split(shape, None, h, &x, io)?
         } else {
             let q = p.attention_norm.reverse(
@@ -710,18 +695,15 @@ impl Model<'_> {
             plan.select_and_record(cfg, &norm.output, public, width, &mut witness.advice)?;
         let mut layout = plan.layout.clone();
         let (specs, clipping) = self.prepare_clip(&mut layout, &mut witness)?;
-        let mut proof = Proof::prove(
+        let proof = Proof::prove(
             &protocol_tag(b"atlas/model-specific/top-k/v4"),
             &layout,
+            specs,
             witness,
             |w| &mut w.advice,
-            |t| {
-                self.bind_top_k(t, tokens, cfg, &candidates);
-                bind_clips(t, &specs);
-            },
+            |t| self.bind_top_k(t, tokens, cfg, &candidates),
             |w, io| self.reverse_top_k(&input, &plan, cfg, &candidates, &clipping, Some(w), io),
         )?;
-        proof.clipping = specs;
         Ok((candidates, proof))
     }
 
@@ -740,10 +722,7 @@ impl Model<'_> {
         proof.verify(
             &protocol_tag(b"atlas/model-specific/top-k/v4"),
             &layout,
-            |t| {
-                self.bind_top_k(t, tokens, cfg, candidates);
-                bind_clips(t, &proof.clipping);
-            },
+            |t| self.bind_top_k(t, tokens, cfg, candidates),
             |io| self.reverse_top_k(&input, &plan, cfg, candidates, &clipping, None, io),
         )
     }
@@ -872,14 +851,14 @@ impl Affine {
     }
 }
 
-fn sublayer<F: ProofField, T>(
+fn sublayer<T>(
     pre: bool,
     input: &[i32],
     (norm, range): (&Norm<'_>, &Ranges),
     advice: &mut Advice,
     execute: impl FnOnce(&[i32], &mut Advice) -> Result<T>,
     output: impl FnOnce(&T) -> &[i32],
-) -> Result<(T, Vec<i32>, NormTrace<F>)> {
+) -> Result<(T, Vec<i32>, NormTrace)> {
     let normalized = pre.then(|| norm.execute(input, advice)).transpose()?;
     let trace = execute(normalized.as_ref().map_or(input, |n| &n.output), advice)?;
     let sum = input
@@ -902,15 +881,6 @@ fn point<F: ProofField>(shape: Shape, x: &[i32], io: &mut Session<'_, '_, F>) ->
         point,
     })
 }
-fn fresh<'a, F: ProofField>(
-    shape: Shape,
-    x: impl FnOnce() -> &'a [i32],
-    io: &mut Session<'_, '_, F>,
-) -> Result<Claim<F>> {
-    let point = io.point(shape.vars())?;
-    let [value] = io.values(|| [shape.eval(x(), &point)])?;
-    Ok(Claim { point, value })
-}
 fn boundary<'a, F: ProofField>(
     shape: Shape,
     range: &Ranges,
@@ -918,13 +888,12 @@ fn boundary<'a, F: ProofField>(
     trace: impl FnOnce() -> &'a [i32],
     io: &mut Session<'_, '_, F>,
 ) -> Result<Claim<F>> {
-    let next = fresh(shape, trace, io)?;
-    let checks: Vec<_> = claims
-        .iter()
-        .chain([&next])
-        .map(|q| (q.point.as_slice(), [q.value]))
-        .collect();
-    range.check(&checks, io)?;
+    let point = io.point(shape.vars())?;
+    let [value] = io.values(|| [shape.eval(trace(), &point)])?;
+    let next = Claim { point, value };
+    for q in claims.iter().chain([&next]) {
+        range.check(&[(q.point.as_slice(), [q.value])], io)?;
+    }
     Ok(next)
 }
 fn split<'a, F: ProofField>(

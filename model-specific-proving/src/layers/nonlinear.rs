@@ -415,10 +415,10 @@ pub(crate) struct Norm<'a> {
     cells: Ranges,
 }
 
-pub(crate) struct NormTrace<F> {
+pub(crate) struct NormTrace {
     pub(crate) output: Vec<i32>,
-    rows: [Vec<F>; 9],
-    cells: [Vec<F>; 5],
+    rows: [Vec<i128>; 9],
+    quotients: Vec<i64>,
 }
 
 impl<'a> Norm<'a> {
@@ -478,11 +478,7 @@ impl<'a> Norm<'a> {
         bind_i32(t, self.p.bias);
     }
 
-    pub(crate) fn execute<F: ProofField>(
-        &self,
-        input: &[i32],
-        advice: &mut Advice,
-    ) -> Result<NormTrace<F>> {
+    pub(crate) fn execute(&self, input: &[i32], advice: &mut Advice) -> Result<NormTrace> {
         let shape = self.shape;
         shape.check(input)?;
         let width = shape.width as i128;
@@ -527,14 +523,13 @@ impl<'a> Norm<'a> {
             for (i, &x) in row.iter().enumerate() {
                 let x = (i128::from(x) - mean) * scale;
                 let z = x.div_euclid(dev);
-                let rem = x.rem_euclid(dev);
+                let rem = x - z * dev;
                 let affine = z * i128::from(self.p.gain[i]);
                 let y = affine.div_euclid(scale) + i128::from(self.p.bias[i]);
                 output.push(i32::try_from(y).map_err(|_| "normalization overflow")?);
-                for (c, v) in
-                    cells
-                        .iter_mut()
-                        .zip([z, y, rem, dev - 1 - rem, affine.rem_euclid(scale)])
+                for (c, v) in cells
+                    .iter_mut()
+                    .zip([z, y, rem, dev - 1 - rem, affine & (scale - 1)])
                 {
                     c.push(v);
                 }
@@ -548,25 +543,16 @@ impl<'a> Norm<'a> {
             .record(advice, &cells.each_ref().map(Vec::as_slice))?;
         Ok(NormTrace {
             output,
-            rows: rows.map(|v| {
-                if v.is_empty() {
-                    Vec::new()
-                } else {
-                    Shape {
-                        rows: shape.rows,
-                        width: 1,
-                    }
-                    .padded(&v, F::zero(), F::from_i128)
-                }
-            }),
-            cells: cells.map(|v| shape.padded(&v, F::zero(), F::from_i128)),
+            rows,
+            // The centered i32 input is scaled by at most 2^15 and divided by a positive deviation.
+            quotients: cells[0].iter().map(|&z| z as i64).collect(),
         })
     }
 
     pub(crate) fn reverse<'w, F: ProofField>(
         &self,
         claims: &[Claim<F>],
-        trace: impl Fn() -> (&'w [i32], &'w NormTrace<F>),
+        trace: impl Fn() -> (&'w [i32], &'w NormTrace),
         io: &mut Session<'_, '_, F>,
     ) -> Result<Claim<F>> {
         let shape = self.shape;
@@ -661,8 +647,35 @@ impl<'a> Norm<'a> {
                     Column::owned(query_column(claims, &batch)),
                     Column::equality(&query),
                 ];
-                cols.extend(trace.cells.iter().map(|c| Column::borrowed(c)));
-                cols.extend(trace.rows[..stats].iter().map(|r| row(r.as_slice().into())));
+                let mut cells: [Vec<F>; 4] = std::array::from_fn(|_| vec![F::zero(); 1 << vars]);
+                let scale = 1i128 << self.bits;
+                for (r, (inputs, quotients)) in input
+                    .chunks_exact(shape.width)
+                    .zip(trace.quotients.chunks_exact(shape.width))
+                    .enumerate()
+                {
+                    let mean = if stats == 9 { trace.rows[6][r] } else { 0 };
+                    let dev = trace.rows[3][r];
+                    for (col, ((&x, &z), &gain)) in
+                        inputs.iter().zip(quotients).zip(self.p.gain).enumerate()
+                    {
+                        let z = i128::from(z);
+                        let rem = (i128::from(x) - mean) * scale - z * dev;
+                        let arem = (i128::from(gain) * z) & (scale - 1);
+                        for (column, value) in cells.iter_mut().zip([z, rem, dev - 1 - rem, arem]) {
+                            column[r * width + col] = F::from_i128(value);
+                        }
+                    }
+                }
+                let [z, rem, gap, arem] = cells.map(Column::owned);
+                cols.extend([z, Column::integer(&trace.output, shape), rem, gap, arem]);
+                cols.extend(trace.rows[..stats].iter().map(|values| {
+                    row(self
+                        .rows
+                        .shape
+                        .padded(values, F::zero(), F::from_i128)
+                        .into())
+                }));
                 cols
             },
             [0, 9, 10, 11, 12, 13],
@@ -671,12 +684,12 @@ impl<'a> Norm<'a> {
         let p = &end.challenges;
         let (r, c) = p.split_at(row_vars);
         let rs: [F; 9] = io.values_prefix(stats, || {
-            std::array::from_fn(|i| {
-                if i < stats {
-                    trace().1.rows[i].as_slice().evaluate(r)
-                } else {
-                    F::zero()
-                }
+            let row_weights = weights::<F>(r);
+            trace().1.rows.each_ref().map(|column| {
+                dot(
+                    column.iter().copied().map(F::from_i128),
+                    row_weights.iter().copied(),
+                )
             })
         })?;
         io.check_value(&end, || {
@@ -755,9 +768,7 @@ mod tests {
                 },
             )
             .unwrap();
-            let trace = norm
-                .execute::<crate::protocol::pcs::BitzField>(&[1, -1], &mut layout.witness())
-                .unwrap();
+            let trace = norm.execute(&[1, -1], &mut layout.witness()).unwrap();
             // The integer deviation is floor(sqrt(1 + 268)) = 16.
             assert_eq!(trace.output, [1024, -1024]);
         }

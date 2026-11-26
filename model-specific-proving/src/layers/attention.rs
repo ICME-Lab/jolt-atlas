@@ -46,13 +46,13 @@ struct Project<'a> {
     norm: Option<Norm<'a>>,
     rotary: Option<Rotate<'a>>,
 }
-struct ProjectTrace<F> {
+struct ProjectTrace {
     linear: Rounded,
-    norm: Option<NormTrace<F>>,
+    norm: Option<NormTrace>,
     rotary: Option<Rounded>,
 }
 
-impl<F> ProjectTrace<F> {
+impl ProjectTrace {
     fn output(&self) -> &[i32] {
         self.rotary
             .as_ref()
@@ -101,7 +101,7 @@ impl<'a> Project<'a> {
         }
     }
 
-    fn execute<F: ProofField>(&self, x: &[i32], a: &mut Advice) -> Result<ProjectTrace<F>> {
+    fn execute(&self, x: &[i32], a: &mut Advice) -> Result<ProjectTrace> {
         let linear = self.linear.execute(x, a)?;
         let norm = self
             .norm
@@ -123,7 +123,7 @@ impl<'a> Project<'a> {
     fn reverse<'w, F: ProofField>(
         &self,
         mut q: Claim<F>,
-        trace: impl Fn() -> (&'w [i32], &'w ProjectTrace<F>),
+        trace: impl Fn() -> (&'w [i32], &'w ProjectTrace),
         io: &mut Session<'_, '_, F>,
     ) -> Result<Claim<F>> {
         if let Some(r) = &self.rotary {
@@ -167,8 +167,8 @@ struct HeadTrace<F> {
     value: Rounded,
 }
 pub(crate) struct AttentionTrace<F> {
-    queries: Vec<ProjectTrace<F>>,
-    groups: Vec<(ProjectTrace<F>, ProjectTrace<F>)>,
+    queries: Vec<ProjectTrace>,
+    groups: Vec<(ProjectTrace, ProjectTrace)>,
     heads: Vec<HeadTrace<F>>,
     joined: Vec<i32>,
     output: Rounded,

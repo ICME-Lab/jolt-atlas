@@ -67,7 +67,7 @@ remainders and one-hot vectors and opens them in a final batch.
 
 ## Implementation size
 
-The crate has about 5,250 lines of Rust source, including model execution,
+The crate has about 5,300 lines of Rust source, including model execution,
 model definitions, and proof generation and verification.
 The existing Atlas codebase has about 84,000 lines of
 Rust across its broader ONNX pipeline and supporting code. The direct approach

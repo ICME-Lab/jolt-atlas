@@ -125,16 +125,27 @@ impl Ranges<1> {
         range
     }
 
-    pub(crate) fn record_adaptive(&self, packed: &mut Packed<'_>, values: &[i64]) -> Result<()> {
-        let value = values.iter().copied().max().unwrap_or(0) as u64;
-        let bits = (64 - value.leading_zeros()) as usize;
-        packed.shrink(self.slot, bits)?;
+    pub(crate) fn record_adaptive<T: Copy + Into<i128>>(
+        &self,
+        packed: &mut Packed<'_>,
+        values: &[T],
+    ) -> Result<()> {
         let shape = self.shape;
+        if !values.is_empty() && values.len() != shape.len() {
+            return Err("invalid range witness dimensions");
+        }
+        let value = values.iter().try_fold(0, |maximum, &value| {
+            u128::try_from(value.into())
+                .map(|value| maximum.max(value))
+                .map_err(|_| "negative unsigned witness")
+        })?;
+        let bits = (128 - value.leading_zeros()) as usize;
+        packed.shrink(self.slot, bits)?;
         let stride = shape.width.next_power_of_two();
         packed.write(self.slot, 0, bits, |i| {
             let (row, col) = (i / stride, i % stride);
             if row < shape.rows && col < shape.width {
-                values[row * shape.width + col] as u128
+                values[row * shape.width + col].into() as u128
             } else {
                 0
             }

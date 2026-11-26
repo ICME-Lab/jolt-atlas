@@ -14,7 +14,9 @@ pub(crate) struct Norm<'a> {
     params: NormalizationParameters<'a>,
     bits: usize,
     rows: Ranges<9>,
-    cells: Ranges<5>,
+    cells: Ranges<3>,
+    remainder: Ranges<1>,
+    remainder_gap: Ranges<1>,
 }
 
 pub(crate) struct NormTrace {
@@ -65,6 +67,18 @@ impl<'a> Norm<'a> {
             let ceil_root = root + u128::from(root * root < shape.width as u128);
             ((ceil_root << bits) * (dev + 1)).div_ceil(dev).ilog2() as usize + 2
         };
+        let quotient_limit = 1u128 << (z_bits - 1);
+        let output_limit = params
+            .gain
+            .iter()
+            .zip(params.bias)
+            .map(|(&gain, &bias)| {
+                (quotient_limit * u128::from(gain.unsigned_abs())).div_ceil(1 << bits)
+                    + u128::from(bias.unsigned_abs())
+            })
+            .max()
+            .unwrap_or(0);
+        let output_bits = (output_limit.max(1).ilog2() as usize + 2).min(32);
         Ok(Self {
             bits,
             params,
@@ -72,8 +86,10 @@ impl<'a> Norm<'a> {
             cells: Ranges::new(
                 layout,
                 shape,
-                [Width::signed(z_bits), I32, u(33), u(33), u(bits)],
+                [Width::signed(z_bits), Width::signed(output_bits), u(bits)],
             ),
+            remainder: Ranges::adaptive(layout, shape, 33),
+            remainder_gap: Ranges::adaptive(layout, shape, 33),
         })
     }
 
@@ -192,7 +208,9 @@ impl<'a> Norm<'a> {
         self.rows
             .record(packed, stats.each_ref().map(Vec::as_slice))?;
         self.cells
-            .record(packed, columns.each_ref().map(Vec::as_slice))?;
+            .record(packed, [&columns[0], &columns[1], &columns[4]])?;
+        self.remainder.record_adaptive(packed, &columns[2])?;
+        self.remainder_gap.record_adaptive(packed, &columns[3])?;
         Ok(trace)
     }
 
@@ -367,8 +385,12 @@ impl<'a> Norm<'a> {
             io,
             requests,
             &end.challenges,
-            values[1..].try_into().expect("normalization cells"),
+            [values[1], values[2], values[5]],
         )?;
+        self.remainder
+            .open(io, requests, &end.challenges, [values[3]])?;
+        self.remainder_gap
+            .open(io, requests, &end.challenges, [values[4]])?;
         Ok(Claim::new(end.challenges, values[0]))
     }
 }

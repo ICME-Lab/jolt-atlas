@@ -82,7 +82,7 @@ pub(crate) fn gate_fits(
     };
     let scale = 1u128 << bits;
     let root = (norm.epsilon_variance_units as u128).isqrt();
-    // The integer RMS divisor is at least sqrt(epsilon). Flooring each
+    // The integer RMS divisor is at least floor(sqrt(epsilon)). Flooring each
     // normalized coordinate adds less than one unit in magnitude.
     let quotient = ceil_sqrt(width as u128) * ((scale * (root + 1)).div_ceil(root) + 1);
     gate.weights

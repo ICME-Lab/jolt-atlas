@@ -1,14 +1,33 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-pub(super) struct Codes {
+#[derive(Default, Serialize, Deserialize)]
+pub(crate) struct Codes {
     len: usize,
-    width: usize,
+    pub(super) width: usize,
     #[serde(with = "super::storage::bytes")]
     bytes: Vec<u8>,
 }
 
 impl Codes {
+    pub(crate) fn new(len: usize, width: usize) -> Self {
+        let bytes = vec![0; (len * width).div_ceil(8) + 16];
+        Self { len, width, bytes }
+    }
+
+    pub(crate) fn at(&self, i: usize) -> usize {
+        let bit = i * self.width;
+        let word = u64::from_le_bytes(self.bytes[bit / 8..][..8].try_into().unwrap());
+        ((word >> (bit % 8)) & ((1 << self.width) - 1)) as usize
+    }
+
+    pub(crate) fn set(&mut self, i: usize, value: usize) {
+        let bit = i * self.width;
+        let slot = &mut self.bytes[bit / 8..][..8];
+        let mask = ((1u64 << self.width) - 1) << (bit % 8);
+        let word = u64::from_le_bytes(slot.try_into().unwrap());
+        slot.copy_from_slice(&((word & !mask) | ((value as u64) << (bit % 8))).to_le_bytes());
+    }
+
     pub(super) fn pack(
         len: usize,
         width: usize,
@@ -42,7 +61,7 @@ impl Codes {
         Some(Self { len, width, bytes })
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len
     }
 
@@ -113,25 +132,6 @@ column!(i32s, i32);
 column!(i64s, i64);
 column!(u16s, u16);
 column!(u32s, u32);
-
-pub(crate) mod two_i32 {
-    use super::*;
-    pub(crate) fn serialize<S: serde::Serializer>(
-        values: &[Vec<i32>; 2],
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        values
-            .each_ref()
-            .map(|v| Integers::pack(v))
-            .serialize(serializer)
-    }
-    pub(crate) fn deserialize<'a, D: serde::Deserializer<'a>>(
-        deserializer: D,
-    ) -> Result<[Vec<i32>; 2], D::Error> {
-        let [a, b] = <[Integers; 2]>::deserialize(deserializer)?;
-        Ok([a.unpack()?, b.unpack()?])
-    }
-}
 
 pub(crate) mod optional_i64 {
     use super::*;

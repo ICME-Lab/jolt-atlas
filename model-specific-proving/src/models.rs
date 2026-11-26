@@ -61,14 +61,16 @@ struct Trace {
     attention: AttentionTrace,
     mlp: FeedTrace,
     norms: [NormTrace; 2],
-    #[serde(with = "crate::protocol::storage::two_i32")]
-    residuals: [Vec<i32>; 2],
+    #[serde(with = "crate::protocol::storage::i32s")]
+    first_residual: Vec<i32>,
+    #[serde(with = "crate::protocol::storage::i32s")]
+    output_residual: Vec<i32>,
 }
 
 impl Trace {
     fn output(&self, pre: bool) -> &[i32] {
         if pre {
-            &self.residuals[1]
+            &self.output_residual
         } else {
             &self.norms[1].values
         }
@@ -100,7 +102,8 @@ impl<'a> Block<'a> {
             attention,
             mlp,
             norms: [norm1, norm2],
-            residuals: [first, output],
+            first_residual: first,
+            output_residual: output,
         })
     }
 
@@ -115,12 +118,12 @@ impl<'a> Block<'a> {
     ) -> Result<Vec<Claim>> {
         let point = if pre {
             join(io, requests, &self.residuals[1], claims, || {
-                &witness().0.residuals[1]
+                &witness().0.output_residual
             })?
         } else {
             let c = self.norms[1].reverse(io, requests, claims, || {
                 let w = witness().0;
-                (&w.norms[1], &w.residuals[1])
+                (&w.norms[1], &w.output_residual)
             })?;
             self.residuals[1].open(io, requests, &c.point, [c.value])?;
             c
@@ -128,7 +131,7 @@ impl<'a> Block<'a> {
         let shape = self.residuals[0].shape;
         let [hidden, mlp] = split(io, shape, point, || {
             if pre {
-                &witness().0.residuals[0]
+                &witness().0.first_residual
             } else {
                 &witness().0.norms[0].values
             }
@@ -147,15 +150,15 @@ impl<'a> Block<'a> {
         let sum = if pre {
             let q = self.norms[1].reverse(io, requests, &[mlp], || {
                 let w = witness().0;
-                (&w.norms[1], &w.residuals[0])
+                (&w.norms[1], &w.first_residual)
             })?;
             join(io, requests, &self.residuals[0], &[hidden, q], || {
-                &witness().0.residuals[0]
+                &witness().0.first_residual
             })?
         } else {
             let q = self.norms[0].reverse(io, requests, &[hidden, mlp], || {
                 let w = witness().0;
-                (&w.norms[0], &w.residuals[0])
+                (&w.norms[0], &w.first_residual)
             })?;
             self.residuals[0].open(io, requests, &q.point, [q.value])?;
             q
@@ -293,18 +296,16 @@ impl LayerTrace {
             return Ok(Self::Expanded(Box::new(trace)));
         }
         let output = std::mem::take(if pre {
-            &mut trace.residuals[1]
+            &mut trace.output_residual
         } else {
             &mut trace.norms[1].values
         });
-        trace.attention.discard_derived();
-        trace.mlp.discard_derived();
-        trace.residuals[0] = Vec::new();
+        trace.first_residual = Vec::new();
         for norm in &mut trace.norms {
             norm.values = Vec::new();
         }
         let attention = trace.attention.take_addresses();
-        let mlp = trace.mlp.take_addresses();
+        let mlp = std::mem::take(&mut trace.mlp.addresses);
         let mut bytes = Vec::new();
         bincode::serialize_into(&mut bytes, &trace)
             .map_err(|_| "could not compress layer trace")?;
@@ -336,18 +337,17 @@ impl LayerTrace {
                 let mut trace: Trace =
                     bincode::deserialize(&bytes).map_err(|_| "could not expand layer trace")?;
                 if pre {
-                    trace.residuals[1] = output;
+                    trace.output_residual = output;
                 } else {
                     trace.norms[1].values = output;
                 }
                 trace.attention.restore_addresses(attention);
-                trace.mlp.restore_addresses(mlp);
+                trace.mlp.addresses = mlp;
                 block.attention.restore(&mut trace.attention)?;
-                block.mlp.restore(&mut trace.mlp)?;
                 for (norm, stored) in block.norms.iter().zip(&mut trace.norms) {
                     norm.restore(stored)?;
                 }
-                trace.residuals[0] = input
+                trace.first_residual = input
                     .iter()
                     .zip(trace.attention.values())
                     .map(|(&x, &y)| x.checked_add(y).ok_or("residual overflow"))

@@ -53,12 +53,6 @@ impl<const N: usize> Ranges<N> {
         let shape = self.shape;
         let mut plane = 0;
         for (width, values) in self.widths.into_iter().zip(columns) {
-            if width.bits == 0 && values.is_empty() {
-                continue;
-            }
-            if values.len() != shape.len() {
-                return Err("invalid range witness dimensions");
-            }
             packed.write(
                 self.slot,
                 plane..plane + width.bits,
@@ -166,9 +160,6 @@ impl Ranges<1> {
         offset: i128,
     ) -> Result<()> {
         let shape = self.shape;
-        if !values.is_empty() && values.len() != shape.len() {
-            return Err("invalid range witness dimensions");
-        }
         packed.shrink(self.slot, bits)?;
         packed.write(self.slot, 0..bits, shape, offset, values)
     }

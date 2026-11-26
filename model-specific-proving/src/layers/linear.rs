@@ -237,40 +237,6 @@ impl<'a> Linear<'a> {
     }
 }
 
-pub(crate) struct Hadamard(Rounding);
-
-impl Hadamard {
-    pub(crate) fn new(layout: &mut Layout, shape: Shape, bits: usize) -> Self {
-        Self(Rounding::new(layout, shape, bits))
-    }
-
-    pub(crate) fn execute(
-        &self,
-        left: &[i32],
-        right: &[i32],
-        packed: &mut Packed<'_>,
-    ) -> Result<Rounded> {
-        let shape = self.0.shape;
-        if left.len() != shape.len() || right.len() != shape.len() {
-            return Err("invalid product dimensions");
-        }
-        self.0.execute(packed, |row, col| {
-            let i = row * shape.width + col;
-            i128::from(left[i]) * i128::from(right[i])
-        })
-    }
-
-    pub(crate) fn recover<'w>(
-        &self,
-        io: &mut Session<'_, '_>,
-        requests: &mut Vec<Request>,
-        claim: &Claim,
-        remainder: impl FnOnce() -> &'w Remainder,
-    ) -> Result<F> {
-        self.0.recover(io, requests, claim, remainder)
-    }
-}
-
 pub(crate) struct Rotation<'a> {
     rounding: Rounding,
     table: Rotary<'a>,

@@ -272,7 +272,7 @@ impl<'a> Soft<'a> {
             return 0;
         }
         let (block, index) = self.find(row, col);
-        self.tables.probabilities[trace.addresses[block].get(index)]
+        self.tables.probabilities[trace.addresses[block].at(index)]
     }
 
     pub(crate) fn restore_scores(&self, trace: &SoftTrace, block: usize) -> Result<Vec<i32>> {
@@ -286,7 +286,7 @@ impl<'a> Soft<'a> {
                     return Ok(0);
                 }
                 let index = i / shape.width * stride + i % shape.width;
-                let address = trace.addresses[block].get(index) as i64;
+                let address = trace.addresses[block].at(index) as i64;
                 let overflow = trace.overflows[block].as_ref().map_or(0, |v| v[i]);
                 i32::try_from(trace.stats[r][0] - address - overflow)
                     .map_err(|_| "invalid restored QK score")
@@ -354,13 +354,13 @@ impl<'a> Soft<'a> {
                         }
                     }),
                     Column::source(len, move |i| {
-                        F::from_u64(cell(i).map_or(0, |(b, j)| trace.addresses[b].get(j)) as u64)
+                        F::from_u64(cell(i).map_or(0, |(b, j)| trace.addresses[b].at(j)) as u64)
                     }),
                     Column::source(len, move |i| {
-                        tables[0].value(cell(i).map_or(0, |(b, j)| trace.addresses[b].get(j)))
+                        tables[0].value(cell(i).map_or(0, |(b, j)| trace.addresses[b].at(j)))
                     }),
                     Column::source(len, move |i| {
-                        tables[1].value(cell(i).map_or(0, |(b, j)| trace.addresses[b].get(j)))
+                        tables[1].value(cell(i).map_or(0, |(b, j)| trace.addresses[b].at(j)))
                     }),
                     Column::source(len, move |i| {
                         F::from_i64(cell(i).map_or(0, |(b, j)| {
@@ -429,7 +429,7 @@ impl<'a> Soft<'a> {
                     for (col, &cw) in columns.iter().enumerate() {
                         let j = row * columns.len() + col;
                         let w = rw * cw;
-                        let address = trace.addresses[i].get(j);
+                        let address = trace.addresses[i].at(j);
                         for (dst, val) in result[..3].iter_mut().zip([
                             F::from_u64(address as u64),
                             tables[0].value(address),

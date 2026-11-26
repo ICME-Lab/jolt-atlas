@@ -154,19 +154,6 @@ pub(crate) struct AttentionTrace {
 
 impl AttentionTrace {
     pub(crate) fn take_addresses(&mut self) -> Vec<Vec<Arc<Addresses>>> {
-        self.heads
-            .iter_mut()
-            .map(|head| std::mem::take(&mut head.soft.addresses))
-            .collect()
-    }
-
-    pub(crate) fn restore_addresses(&mut self, addresses: Vec<Vec<Arc<Addresses>>>) {
-        for (head, addresses) in self.heads.iter_mut().zip(addresses) {
-            head.soft.addresses = addresses;
-        }
-    }
-
-    pub(crate) fn discard_derived(&mut self) {
         for project in self
             .queries
             .iter_mut()
@@ -180,6 +167,16 @@ impl AttentionTrace {
             for scores in &mut head.scores {
                 scores.values = Vec::new();
             }
+        }
+        self.heads
+            .iter_mut()
+            .map(|head| std::mem::take(&mut head.soft.addresses))
+            .collect()
+    }
+
+    pub(crate) fn restore_addresses(&mut self, addresses: Vec<Vec<Arc<Addresses>>>) {
+        for (head, addresses) in self.heads.iter_mut().zip(addresses) {
+            head.soft.addresses = addresses;
         }
     }
 

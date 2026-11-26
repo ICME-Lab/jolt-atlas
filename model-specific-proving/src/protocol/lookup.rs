@@ -15,44 +15,7 @@ use super::{
 // This limits the simultaneously materialized digit columns, in bytes.
 const LOOKUP_LINK_BYTES: usize = 192 * 1024 * 1024;
 
-#[derive(Default)]
-pub(crate) struct Addresses {
-    slots: Vec<u8>,
-    bits: usize,
-    len: usize,
-}
-
-impl Addresses {
-    pub(crate) fn new(len: usize, bits: usize) -> Self {
-        Self {
-            slots: vec![0; (len * bits).div_ceil(8) + 4],
-            len,
-            bits,
-        }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.len
-    }
-
-    pub(crate) fn get(&self, i: usize) -> usize {
-        let bit = i * self.bits;
-        let offset = bit / 8;
-        let mut word = [0; 8];
-        word[..5].copy_from_slice(&self.slots[offset..offset + 5]);
-        ((u64::from_le_bytes(word) >> (bit % 8)) & ((1 << self.bits) - 1)) as usize
-    }
-
-    pub(crate) fn set(&mut self, i: usize, value: usize) {
-        let bit = i * self.bits;
-        let offset = bit / 8;
-        let mask = ((1u64 << self.bits) - 1) << (bit % 8);
-        let mut word = [0; 8];
-        word[..5].copy_from_slice(&self.slots[offset..offset + 5]);
-        let word = (u64::from_le_bytes(word) & !mask) | (value as u64) << (bit % 8);
-        self.slots[offset..offset + 5].copy_from_slice(&word.to_le_bytes()[..5]);
-    }
-}
+pub(crate) use super::storage::Codes as Addresses;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Table<'a> {
@@ -124,7 +87,7 @@ impl Lookup {
     }
 
     pub(crate) fn record(&self, packed: &mut Packed<'_>, addresses: &Arc<Addresses>) -> Result<()> {
-        if addresses.len != 1 << self.cells || addresses.bits != self.bits {
+        if addresses.len() != 1 << self.cells || addresses.width != self.bits {
             return Err("invalid lookup witness");
         }
         packed.one_hot(&self.digits, addresses)
@@ -220,7 +183,7 @@ impl<'a> Lookups<'a> {
                             let inner = weights.e_in();
                             for (block, &outer) in weights.e_out().iter().enumerate() {
                                 for (i, &weight) in inner.iter().enumerate() {
-                                    update(addresses.get(block * inner.len() + i), outer * weight);
+                                    update(addresses.at(block * inner.len() + i), outer * weight);
                                 }
                             }
                         }
@@ -279,7 +242,7 @@ impl<'a> Lookups<'a> {
                                     let cells = TensorEqTable::new_with_scaling(&read.point, scale);
                                     (0..len)
                                         .map(|i| {
-                                            let addr = witness.get(i);
+                                            let addr = witness.at(i);
                                             let weight = dense.as_ref().map_or_else(
                                                 || address.evaluate_index(addr),
                                                 |table| table[addr],
@@ -328,7 +291,7 @@ impl<'a> Lookups<'a> {
                     for (choice, &(_, shift, n)) in selectors.iter().zip(&q.plan.digits) {
                         let addresses = q.witness.as_ref().expect("lookup trace");
                         columns.push(Column::lookup(len, choice, move |i| {
-                            (addresses.get(i) >> shift) & ((1 << n) - 1)
+                            (addresses.at(i) >> shift) & ((1 << n) - 1)
                         }));
                     }
                     columns.push(Column::split_equality(&q.point));
@@ -402,7 +365,7 @@ mod tests {
         let check = |io: &mut Session<'_, '_>| {
             let mut lookups = Lookups::default();
             for (read, witness) in reads.iter().zip(&witnesses) {
-                let indices = (0..8).map(|i| witness.get(i));
+                let indices = (0..8).map(|i| witness.at(i));
                 lookups.read(
                     read,
                     &[Table::Direct(&table)],

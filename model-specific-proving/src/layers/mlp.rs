@@ -1,9 +1,9 @@
 use std::{cell::OnceCell, sync::Arc};
 
-use jolt_field::{One, Ring, Zero};
+use jolt_field::{Field, One, Ring, Zero};
 
 use super::{
-    linear::{Hadamard, Linear, Rounded},
+    linear::{Linear, Rounded, Rounding},
     Activation, Mlp,
 };
 use crate::protocol::{
@@ -24,14 +24,6 @@ struct Activate<'a> {
     lookup: Lookup,
     constraints: Ranges<3>,
     excess: Ranges<1>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ActivationTrace {
-    #[serde(with = "crate::protocol::storage::i32s")]
-    output: Vec<i32>,
-    #[serde(skip)]
-    addresses: Arc<Addresses>,
 }
 
 impl<'a> Activate<'a> {
@@ -105,7 +97,7 @@ impl<'a> Activate<'a> {
             .ok_or("activation overflow")
     }
 
-    fn execute(&self, x: &[i32], packed: &mut Packed<'_>) -> Result<ActivationTrace> {
+    fn execute(&self, x: &[i32], packed: &mut Packed<'_>) -> Result<(Vec<i32>, Arc<Addresses>)> {
         let stride = self.shape.width.next_power_of_two();
         let mut addresses = Addresses::new(1 << self.shape.bits(), self.lookup.bits);
         let mut columns: [Vec<i64>; 4] = std::array::from_fn(|_| Vec::with_capacity(x.len()));
@@ -126,7 +118,7 @@ impl<'a> Activate<'a> {
         self.excess.record_adaptive(packed, excess)?;
         let addresses = Arc::new(addresses);
         self.lookup.record(packed, &addresses)?;
-        Ok(ActivationTrace { output, addresses })
+        Ok((output, addresses))
     }
 
     fn reverse<'w>(
@@ -136,7 +128,7 @@ impl<'a> Activate<'a> {
         lookups: &mut Lookups<'a>,
         claim: Claim,
         gated: bool,
-        witness: impl Fn() -> (&'w ActivationTrace, &'w [i32], Option<&'w [i32]>),
+        witness: impl Fn() -> (&'w Arc<Addresses>, &'w [i32], Option<&'w [i32]>),
     ) -> Result<(Claim, Option<Claim>)> {
         let shape = self.shape;
         let vars = shape.bits();
@@ -177,13 +169,11 @@ impl<'a> Activate<'a> {
             vars,
             if gated { 5 } else { 4 },
             || {
-                let (trace, x, up) = witness();
+                let (addresses, x, up) = witness();
                 let mut columns = vec![
                     Column::source(len, move |i| shape.at(x, i)),
-                    Column::source(len, move |i| F::from_u64(trace.addresses.get(i) as u64)),
-                    Column::source(len, move |i| {
-                        F::from_i32(self.correction[trace.addresses.get(i)])
-                    }),
+                    Column::source(len, move |i| F::from_u64(addresses.at(i) as u64)),
+                    Column::source(len, move |i| F::from_i32(self.correction[addresses.at(i)])),
                 ];
                 for j in 0..4 {
                     if self.symmetric && matches!(j, 1 | 2) {
@@ -239,7 +229,7 @@ impl<'a> Activate<'a> {
             end.challenges.clone(),
             v[1],
             vec![v[2]],
-            io.proving().then(|| witness().0.addresses.clone()),
+            io.proving().then(|| witness().0.clone()),
         );
         let up = gated.then(|| Claim::new(end.challenges.clone(), v[7]));
         Ok((Claim::new(end.challenges, v[0]), up))
@@ -249,7 +239,7 @@ impl<'a> Activate<'a> {
 pub(crate) struct FeedForward<'a> {
     gate: Linear<'a>,
     activation: Activate<'a>,
-    up: Option<(Linear<'a>, Hadamard)>,
+    up: Option<(Linear<'a>, Rounding)>,
     down: Linear<'a>,
     input: Shape,
 }
@@ -257,24 +247,13 @@ pub(crate) struct FeedForward<'a> {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct FeedTrace {
     gate: Rounded,
-    activation: ActivationTrace,
+    #[serde(skip)]
+    pub(crate) addresses: Arc<Addresses>,
     up: Option<(Rounded, Rounded)>,
     down: Rounded,
 }
 
 impl FeedTrace {
-    pub(crate) fn take_addresses(&mut self) -> Arc<Addresses> {
-        std::mem::take(&mut self.activation.addresses)
-    }
-
-    pub(crate) fn restore_addresses(&mut self, addresses: Arc<Addresses>) {
-        self.activation.addresses = addresses;
-    }
-
-    pub(crate) fn discard_derived(&mut self) {
-        self.activation.output = Vec::new();
-    }
-
     pub(crate) fn values(&self) -> &[i32] {
         &self.down.values
     }
@@ -295,7 +274,7 @@ impl<'a> FeedForward<'a> {
             if up.shape() != shape {
                 return Err("invalid gated MLP");
             }
-            Some((up, Hadamard::new(layout, shape, bits)))
+            Some((up, Rounding::new(layout, shape, bits)))
         } else {
             None
         };
@@ -314,48 +293,29 @@ impl<'a> FeedForward<'a> {
 
     pub(crate) fn execute(&self, input: &[i32], packed: &mut Packed<'_>) -> Result<FeedTrace> {
         let gate = self.gate.execute(input, packed)?;
-        let activation = self.activation.execute(&gate.values, packed)?;
+        let (activation, addresses) = self.activation.execute(&gate.values, packed)?;
         let up = self
             .up
             .as_ref()
             .map(|(up, mul)| {
                 let up = up.execute(input, packed)?;
-                let product = mul.execute(&activation.output, &up.values, packed)?;
+                let product = mul.execute(packed, |row, col| {
+                    let i = row * mul.shape.width + col;
+                    i128::from(activation[i]) * i128::from(up.values[i])
+                })?;
                 Ok((up, product))
             })
             .transpose()?;
         let values = up
             .as_ref()
-            .map_or(activation.output.as_slice(), |(_, y)| &y.values);
+            .map_or(activation.as_slice(), |(_, y)| &y.values);
         let down = self.down.execute(values, packed)?;
         Ok(FeedTrace {
             gate,
-            activation,
+            addresses,
             up,
             down,
         })
-    }
-
-    pub(crate) fn restore(&self, trace: &mut FeedTrace) -> Result<()> {
-        if self.up.is_some() {
-            return Ok(());
-        }
-        let width = self.activation.shape.width;
-        let stride = width.next_power_of_two();
-        trace.activation.output = trace
-            .gate
-            .values
-            .iter()
-            .enumerate()
-            .map(|(i, &value)| {
-                let address = trace
-                    .activation
-                    .addresses
-                    .get(i / width * stride + i % width);
-                self.activation.evaluate(value, address)
-            })
-            .collect::<Result<_>>()?;
-        Ok(())
     }
 
     pub(crate) fn reverse<'w>(
@@ -366,14 +326,36 @@ impl<'a> FeedForward<'a> {
         claim: Claim,
         witness: impl Fn() -> (&'w FeedTrace, &'w [i32]),
     ) -> Result<Claim> {
-        let claim = self.down.reverse(io, requests, claim, || {
-            let (w, _) = witness();
-            (
-                &w.down,
-                w.up.as_ref()
-                    .map_or(w.activation.output.as_slice(), |(_, y)| &y.values),
-            )
-        })?;
+        let claim = self.down.reverse_bound(
+            io,
+            requests,
+            claim,
+            || &witness().0.down.remainder,
+            |row| {
+                let trace = witness().0;
+                let width = self.activation.shape.width;
+                if let Some((_, product)) = &trace.up {
+                    return bind_rows(width, &product.values, row);
+                }
+                let stride = width.next_power_of_two();
+                let mut bound = vec![F::zero(); stride];
+                for (i, (gate, weight)) in trace
+                    .gate
+                    .values
+                    .chunks_exact(width)
+                    .zip(weights(row))
+                    .enumerate()
+                {
+                    for (j, (&value, output)) in gate.iter().zip(&mut bound).enumerate() {
+                        let correction =
+                            self.activation.correction[trace.addresses.at(i * stride + j)];
+                        let activated = i64::from(value.max(0)) + i64::from(correction);
+                        *output = F::from_i64(activated).mul_add(weight, *output);
+                    }
+                }
+                bound
+            },
+        )?;
         let gated = self.up.is_some();
         let claim = if let Some((_, mul)) = &self.up {
             let raw = mul.recover(io, requests, &claim, || {
@@ -388,7 +370,7 @@ impl<'a> FeedForward<'a> {
             .reverse(io, requests, lookups, claim, gated, || {
                 let trace = witness().0;
                 (
-                    &trace.activation,
+                    &trace.addresses,
                     &trace.gate.values,
                     trace.up.as_ref().map(|(up, _)| up.values.as_slice()),
                 )

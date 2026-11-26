@@ -300,13 +300,11 @@ impl<'a> Soft<'a> {
         let table = self.table();
         let zero_prob = F::from_i32(self.tables.probabilities[0]);
         let zero_sum = F::from_i32(self.tables.sums[0]) + radix * (limit + F::one());
-        let relation = |v: &[F; 13]| {
-            let [score, address, p, table, overflow, shift, under, over, mask, first, query, check, row] =
-                *v;
+        let relation = |v: &[F; 11]| {
+            let [address, p, table, overflow, under, over, mask, first, query, check, row] = *v;
             let inactive = F::one() - mask;
-            let clamp = mask * shift - score - address - overflow
-                + a[0] * overflow * (last - address)
-                + inactive * (a[1] * address + a[2] * overflow);
+            let clamp =
+                a[0] * overflow * (last - address) + inactive * (a[1] * address + a[2] * overflow);
             let row_sum = first * (under - limit - radix * (over + limit + F::one()))
                 + table
                 + mask * zero_sum;
@@ -332,16 +330,12 @@ impl<'a> Soft<'a> {
                     Column::table(v, n, stride)
                 };
                 [
-                    Column::source(n, |i| {
-                        self.at(trace, addresses[i], i / stride, i % stride)[0]
-                    }),
                     Column::source(n, |i| F::from_u32(addresses[i])),
                     Column::source(n, |i| table.values(addresses[i] as usize).0),
                     Column::source(n, |i| table.values(addresses[i] as usize).1),
                     Column::source(n, |i| {
                         self.at(trace, addresses[i], i / stride, i % stride)[1]
                     }),
-                    numbers(0),
                     numbers(1),
                     numbers(2),
                     Column::source(n, |i| F::from_bool(i % stride < self.count(i / stride))),
@@ -351,7 +345,7 @@ impl<'a> Soft<'a> {
                     Column::table(weights.clone(), n, stride),
                 ]
             },
-            [0, 1, 2, 3, 4, 5, 6, 7],
+            [0, 1, 2, 3, 4, 5],
             relation,
         )?;
         let point = end.challenges;
@@ -361,20 +355,19 @@ impl<'a> Soft<'a> {
             prefix.push(*prefix.last().unwrap() + w);
         }
         let rw = basis(r);
-        let mask = rw
+        let masked_rows: Vec<_> = rw
             .iter()
             .enumerate()
             .map(|(i, &w)| w * prefix[self.count(i)])
-            .sum();
+            .collect();
+        let mask = masked_rows.iter().copied().sum();
         let row = rw.into_iter().zip(weights).map(|(a, b)| a * b).sum();
-        let [q, i, p, t, diff, shift, under, over] = v;
+        let [i, p, t, diff, under, over] = v;
         if relation(&[
-            q,
             i,
             p,
             t,
             diff,
-            shift,
             under,
             over,
             mask,
@@ -386,9 +379,9 @@ impl<'a> Soft<'a> {
         {
             return Err("invalid Softmax terminal evaluation");
         }
-        for (slot, value) in trace.stats_slots.into_iter().zip([shift, under, over]) {
-            requests.push(slot, r, value);
-        }
+        let [shift_slot, under_slot, over_slot] = trace.stats_slots;
+        requests.push(under_slot, r, under);
+        requests.push(over_slot, r, over);
         let advice = io.advice();
         let mut whole = [F::zero(); 6];
         for (&tile, trace_tile) in self.tiles.iter().zip(&trace.lookups) {
@@ -436,12 +429,26 @@ impl<'a> Soft<'a> {
             requests.push(trace_tile.remainder, &local, rem);
             lookups.read(&trace_tile.lookup, table, local, address, (p, t));
         }
-        if whole[..5] != [q, i, p, t, diff] {
+        if whole[1..5] != [i, p, t, diff] {
             return Err("invalid Softmax tile evaluations");
         }
+        // The score is the masked row shift minus the address and clamp excess.
+        // After fixing the column point, only the row variables are left.
+        let shift = io.dot(whole[0] + i + diff, masked_rows, || {
+            let mut values: Vec<_> = trace
+                .stats
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|row| F::from_i64(row[0]))
+                .collect();
+            values.resize(stride, F::zero());
+            values
+        })?;
+        requests.push(shift_slot, &shift.point, shift.value);
         Ok(Claim {
             point,
-            value: q * F::from_u64(1 << bits) + whole[5],
+            value: whole[0] * F::from_u64(1 << bits) + whole[5],
         })
     }
 }

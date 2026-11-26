@@ -33,6 +33,7 @@ half = { version = "2", optional = true }
 atlas-trace = { path = "../crates/atlas-trace", optional = true }
 rayon = "1.10"
 serde = { version = "1.0", default-features = false, features = ["derive", "rc"] }
+serde_bytes = "0.11"
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 libm = { version = "0.2", optional = true }
 jolt-field = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["solinas"] }

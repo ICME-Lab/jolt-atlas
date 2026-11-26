@@ -13,7 +13,7 @@ use crate::{
     linear,
     lookup::Lookups,
     mlp::{gate_fits, Feed},
-    norm::{Claim, Width, Witness},
+    norm::{Claim, Normalized, Width},
     projection::Projection,
     protocol::{Candidate, Header, Proof, TopKConfig},
     residual,
@@ -57,54 +57,6 @@ pub struct Model<'a> {
     norm: NormalizationParameters<'a>,
     decoder: Option<&'a [i32]>,
     digest: [u8; 32],
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Normalized {
-    trace: Option<Witness>,
-    slots: Vec<Slot>,
-}
-
-impl Normalized {
-    fn forward(
-        advice: &mut Advice,
-        shape: Shape,
-        bits: u32,
-        params: NormalizationParameters<'_>,
-        input: Option<&[i32]>,
-    ) -> Result<Self> {
-        if params.gain.len() != shape.cols {
-            return Err("invalid layer normalization width");
-        }
-        let plan = params.at(shape.rows, bits)?;
-        let trace = input.map(|v| plan.witness(v)).transpose()?;
-        let slots = plan.record(advice, input, trace.as_ref())?;
-        Ok(Self { trace, slots })
-    }
-    fn values(&self) -> Option<&[i32]> {
-        self.trace.as_ref().map(|w| w.result.as_slice())
-    }
-    fn reverse(
-        &self,
-        io: &mut Channel<'_, '_>,
-        requests: &mut Requests,
-        shape: Shape,
-        bits: u32,
-        params: NormalizationParameters<'_>,
-        input: Option<&[i32]>,
-        output: &[Claim<F>],
-        carry: &[Claim<F>],
-    ) -> Result<Claim<F>> {
-        params.at(shape.rows, bits)?.reduce_model(
-            io,
-            input,
-            self.trace.as_ref(),
-            output,
-            carry,
-            &self.slots,
-            requests,
-        )
-    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -209,15 +161,7 @@ impl Run {
             Saved::OnDisk { .. } if index + 1 == self.blocks.len() => {
                 Ok(self.last.as_deref().map(Cow::Borrowed))
             }
-            Saved::OnDisk { offset, .. } => {
-                let mut file = self.trace.as_ref().unwrap().borrow_mut();
-                file.seek(SeekFrom::Start(*offset))
-                    .map_err(|_| "could not locate layer output")?;
-                let output = codec()
-                    .deserialize_from(std::io::BufReader::new(&mut *file))
-                    .map_err(|_| "could not read layer output")?;
-                Ok(Some(Cow::Owned(output)))
-            }
+            Saved::OnDisk { offset, .. } => self.read(*offset).map(|v| Some(Cow::Owned(v))),
         }
     }
 
@@ -225,18 +169,21 @@ impl Run {
         match &self.blocks[index] {
             Saved::InMemory(b) => Ok(BlockRef::Borrowed(b)),
             Saved::OnDisk { body, .. } => {
-                let mut file = self.trace.as_ref().unwrap().borrow_mut();
-                file.seek(SeekFrom::Start(*body))
-                    .map_err(|_| "could not locate layer trace")?;
-                let mut block: Block = codec()
-                    .deserialize_from(std::io::BufReader::new(&mut *file))
-                    .map_err(|_| "could not read layer trace")?;
+                let mut block: Block = self.read(*body)?;
                 if let Some(output) = norm_output {
                     block.m.trace.as_mut().unwrap().result = output.into_owned();
                 }
                 Ok(BlockRef::Owned(block))
             }
         }
+    }
+    fn read<T: serde::de::DeserializeOwned>(&self, offset: u64) -> Result<T> {
+        let mut file = self.trace.as_ref().unwrap().borrow_mut();
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|_| "could not locate layer record")?;
+        codec()
+            .deserialize_from(std::io::BufReader::new(&mut *file))
+            .map_err(|_| "could not read layer record")
     }
 }
 enum BlockRef<'a> {
@@ -388,39 +335,22 @@ impl<'a> Model<'a> {
         let mut last = None;
         for (i, p) in self.layers.iter().enumerate() {
             let ctx = self.context(i);
-            let mut a = if pre {
-                Some(Normalized::forward(
-                    advice,
-                    shape,
-                    bits,
-                    p.attention_norm,
-                    x,
-                )?)
-            } else {
-                None
+            let norm = |advice: &mut Advice, params, input: Option<&[i32]>| {
+                Normalized::forward(advice, shape, bits, params, input)
             };
+            let a = pre.then(|| norm(advice, p.attention_norm, x)).transpose()?;
             let attention = ctx.execute(advice, a.as_ref().map_or(x, Normalized::values))?;
             let after_attention = Sum::forward(advice, shape, x, &attention.output)?;
-            if !pre {
-                a = Some(Normalized::forward(
-                    advice,
-                    shape,
-                    bits,
-                    p.attention_norm,
-                    after_attention.values.as_deref(),
-                )?);
-            }
-            let a = a.unwrap();
+            let a = match a {
+                Some(a) => a,
+                None => norm(advice, p.attention_norm, after_attention.values.as_deref())?,
+            };
             let h = if pre {
                 after_attention.values.as_deref()
             } else {
                 a.values()
             };
-            let mut m = if pre {
-                Some(Normalized::forward(advice, shape, bits, p.mlp_norm, h)?)
-            } else {
-                None
-            };
+            let m = pre.then(|| norm(advice, p.mlp_norm, h)).transpose()?;
             let mlp = Feed::prepare(
                 advice,
                 p.mlp,
@@ -430,20 +360,15 @@ impl<'a> Model<'a> {
                 self.bounded_gates[i],
             )?;
             let after_mlp = Sum::forward(advice, shape, h, &mlp.output)?;
-            if !pre {
-                m = Some(Normalized::forward(
-                    advice,
-                    shape,
-                    bits,
-                    p.mlp_norm,
-                    after_mlp.values.as_deref(),
-                )?);
-            }
+            let m = match m {
+                Some(m) => m,
+                None => norm(advice, p.mlp_norm, after_mlp.values.as_deref())?,
+            };
             let mut block = Block {
                 a,
                 attention,
                 after_attention,
-                m: m.unwrap(),
+                m,
                 mlp,
                 after_mlp,
             };
@@ -496,18 +421,16 @@ impl<'a> Model<'a> {
         let pre = self.decoder.is_some();
         let (shape, bits) = (self.shape, self.bits);
         let mut lookups = Lookups::default();
+        let reduce_end_norm = |io: &mut Channel<'_, '_>,
+                               requests: &mut Requests,
+                               input: Option<&[i32]>,
+                               claims: &[Claim<F>]| {
+            run.norm
+                .reverse(io, requests, shape, bits, self.norm, input, claims, &[])
+        };
         if pre {
             let last = run.layer_output(run.blocks.len() - 1, true)?;
-            claims = vec![run.norm.reverse(
-                io,
-                requests,
-                shape,
-                bits,
-                self.norm,
-                last.as_deref(),
-                &claims,
-                &[],
-            )?];
+            claims = vec![reduce_end_norm(io, requests, last.as_deref(), &claims)?];
         }
         let mut norm_output = if pre {
             None
@@ -603,16 +526,7 @@ impl<'a> Model<'a> {
             }
         }
         if !pre {
-            claims = vec![run.norm.reverse(
-                io,
-                requests,
-                shape,
-                bits,
-                self.norm,
-                Some(input),
-                &claims,
-                &[],
-            )?];
+            claims = vec![reduce_end_norm(io, requests, Some(input), &claims)?];
         }
         if claims
             .iter()
@@ -665,28 +579,23 @@ impl<'a> Model<'a> {
             affine(t, a.output);
             integers(t, a.tables.probabilities);
             integers(t, a.tables.sums);
+            t.append(&(a.rotary.is_some() as u64));
             if let Some(r) = a.rotary {
-                t.append(&1u64);
                 integers(t, r.cos);
                 integers(t, r.sin);
-            } else {
-                t.append(&0u64);
             }
-            if let Some(qk) = self.qk_norms.get(i).copied().flatten() {
-                t.append(&1u64);
+            let qk = self.qk_norms.get(i).copied().flatten();
+            t.append(&(qk.is_some() as u64));
+            if let Some(qk) = qk {
                 norm(t, qk[0]);
                 norm(t, qk[1]);
-            } else {
-                t.append(&0u64);
             }
             let p = layer.mlp;
             affine(t, p.up);
             affine(t, p.down);
+            t.append(&(p.gate.is_some() as u64));
             if let Some(gate) = p.gate {
-                t.append(&1u64);
                 affine(t, gate);
-            } else {
-                t.append(&0u64);
             }
             t.append(&(p.activation.lower as u64));
             integers(t, p.activation.correction);
@@ -731,20 +640,16 @@ impl<'a> Model<'a> {
         }
     }
 
+    fn output_projection(&self) -> Option<Projection<'_>> {
+        self.decoder.map(|bias| Projection {
+            weights: self.embeddings.tokens,
+            bias,
+        })
+    }
+
     fn logits(&self, advice: &mut Advice, value: Option<&[i32]>) -> Result<Option<Rounded>> {
-        self.decoder
-            .map(|bias| {
-                linear::project(
-                    advice,
-                    self.shape,
-                    self.bits,
-                    Projection {
-                        weights: self.embeddings.tokens,
-                        bias,
-                    },
-                    value,
-                )
-            })
+        self.output_projection()
+            .map(|p| linear::project(advice, self.shape, self.bits, p, value))
             .transpose()
     }
 
@@ -765,20 +670,13 @@ impl<'a> Model<'a> {
             value: shape.eval(output, &point),
             point,
         };
-        if let Some((l, bias)) = logits.zip(self.decoder) {
+        if let Some((l, projection)) = logits.zip(self.output_projection()) {
             linear::reverse(
                 io,
                 requests,
                 self.shape,
                 self.bits,
-                &[(
-                    l,
-                    Projection {
-                        weights: self.embeddings.tokens,
-                        bias,
-                    },
-                    claim,
-                )],
+                &[(l, projection, claim)],
                 hidden,
             )
         } else {
@@ -793,11 +691,21 @@ impl<'a> Model<'a> {
         Ok(&output[..self.shape.cols])
     }
 
-    pub fn prove(&self, tokens: &[usize], segments: Option<&[usize]>) -> Result<(Vec<i32>, Proof)> {
+    fn setup(
+        &self,
+        tokens: &[usize],
+        segments: Option<&[usize]>,
+        proving: bool,
+    ) -> Result<(Vec<i32>, Advice, Run)> {
         let input = self.input(tokens, segments)?;
-        let mut advice = Advice::new(true)?;
+        let mut advice = Advice::new(proving)?;
         let run = tracing::info_span!("atlas forward")
-            .in_scope(|| self.forward(&mut advice, Some(&input)))?;
+            .in_scope(|| self.forward(&mut advice, proving.then_some(input.as_slice())))?;
+        Ok((input, advice, run))
+    }
+
+    pub fn prove(&self, tokens: &[usize], segments: Option<&[usize]>) -> Result<(Vec<i32>, Proof)> {
+        let (input, mut advice, run) = self.setup(tokens, segments, true)?;
         let hidden = run.output(self.decoder.is_some());
         let logits = self.logits(&mut advice, hidden)?;
         let output = logits
@@ -841,9 +749,7 @@ impl<'a> Model<'a> {
         if proof.evaluations.len() != proof.header.roots.len() {
             return Err("wrong number of BitZ proofs");
         }
-        let input = self.input(tokens, segments)?;
-        let mut advice = Advice::new(false)?;
-        let run = self.forward(&mut advice, None)?;
+        let (input, mut advice, run) = self.setup(tokens, segments, false)?;
         let logits = self.logits(&mut advice, None)?;
         self.verify_with(
             &mut advice,
@@ -851,13 +757,7 @@ impl<'a> Model<'a> {
             segments,
             Output::All(output),
             &proof.header,
-            |i| {
-                proof
-                    .evaluations
-                    .get(i)
-                    .map(Cow::Borrowed)
-                    .ok_or("missing BitZ evaluation")
-            },
+            |i| proof.evaluation(i),
             |io, requests| {
                 let claims = self.output_claims(io, requests, logits.as_ref(), output, None)?;
                 self.reverse(io, requests, &input, &run, claims)
@@ -894,10 +794,7 @@ impl<'a> Model<'a> {
             return Err("Top-K requires decoder");
         }
         let top = Top::new(cfg, self.embeddings.tokens, self.shape, self.bits)?;
-        let input = self.input(tokens, None)?;
-        let mut advice = Advice::new(true)?;
-        let run = tracing::info_span!("atlas forward")
-            .in_scope(|| self.forward(&mut advice, Some(&input)))?;
+        let (input, mut advice, run) = self.setup(tokens, None, true)?;
         let hidden = run.output(true);
         let (results, raw) = top.select(hidden.unwrap())?;
         let rank = top.record(&mut advice, &results, Some(&raw))?;
@@ -927,13 +824,7 @@ impl<'a> Model<'a> {
         if proof.evaluations.len() != proof.header.roots.len() {
             return Err("wrong number of BitZ proofs");
         }
-        self.verify_top_k_with(tokens, cfg, results, &proof.header, |i| {
-            proof
-                .evaluations
-                .get(i)
-                .map(Cow::Borrowed)
-                .ok_or("missing BitZ evaluation")
-        })
+        self.verify_top_k_with(tokens, cfg, results, &proof.header, |i| proof.evaluation(i))
     }
 
     fn verify_top_k_with<'p>(
@@ -948,9 +839,7 @@ impl<'a> Model<'a> {
             return Err("Top-K requires decoder");
         }
         let top = Top::new(cfg, self.embeddings.tokens, self.shape, self.bits)?;
-        let input = self.input(tokens, None)?;
-        let mut advice = Advice::new(false)?;
-        let run = self.forward(&mut advice, None)?;
+        let (input, mut advice, run) = self.setup(tokens, None, false)?;
         let rank = top.record(&mut advice, results, None)?;
         self.verify_with(
             &mut advice,
@@ -1083,10 +972,7 @@ impl<'a> Model<'a> {
             .seek(SeekFrom::Start(end))
             .map_err(|_| "could not locate proof metadata")?;
         let mut metadata = (&mut input).take(size - end);
-        let header = codec()
-            .with_limit(size - end)
-            .deserialize_from(&mut metadata)
-            .map_err(|_| "invalid proof metadata")?;
+        let header = decode(&mut metadata)?;
         if metadata.limit() != 0 {
             return Err("extra proof metadata");
         }
@@ -1095,11 +981,7 @@ impl<'a> Model<'a> {
             .map_err(|_| "could not locate BitZ proofs")?;
         let mut groups = input.take(end - 16);
         self.verify_top_k_with(tokens, cfg, result, &header, |_| {
-            codec()
-                .with_limit(groups.limit())
-                .deserialize_from(&mut groups)
-                .map(Cow::Owned)
-                .map_err(|_| "invalid BitZ proof")
+            decode(&mut groups).map(Cow::Owned)
         })?;
         if groups.limit() != 0 {
             return Err("extra BitZ proofs");
@@ -1116,7 +998,14 @@ fn integers(t: &mut impl Transcript, x: &[i32]) {
     }
 }
 
-const MAGIC: &[u8; 8] = b"ATLASMP2";
+const MAGIC: &[u8; 8] = b"ATLASMP3";
+
+fn decode<T: serde::de::DeserializeOwned>(data: &mut std::io::Take<impl Read>) -> Result<T> {
+    codec()
+        .with_limit(data.limit())
+        .deserialize_from(data)
+        .map_err(|_| "invalid proof record")
+}
 
 fn codec() -> impl Options {
     bincode::DefaultOptions::new().with_fixint_encoding()

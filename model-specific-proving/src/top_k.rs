@@ -5,7 +5,7 @@ use crate::{
     fold::basis,
     norm::{Claim, Width},
     protocol::{Candidate, TopKConfig},
-    tensor::Shape,
+    tensor::{add_rows, Shape},
 };
 use jolt_field::{Ring, Zero};
 use rayon::prelude::*;
@@ -97,7 +97,6 @@ impl<'a> Top<'a> {
 
     pub fn select(&self, values: &[i32]) -> Result<(Vec<Vec<Candidate>>, Vec<i128>)> {
         let width = self.input.cols;
-        let vocab = self.tokens.len() / width;
         let mut sums = Vec::new();
         let mut results = Vec::new();
         for block in self.config.positions.clone() {
@@ -106,13 +105,7 @@ impl<'a> Top<'a> {
                 .tokens
                 .par_chunks_exact(width)
                 .with_min_len(128)
-                .map(|weight| {
-                    weight
-                        .iter()
-                        .zip(x)
-                        .map(|(&a, &b)| i128::from(a) * i128::from(b))
-                        .sum()
-                })
+                .map(|weight| crate::tensor::dot(weight, x, false))
                 .collect();
             let mut candidates = raw
                 .iter()
@@ -125,7 +118,7 @@ impl<'a> Top<'a> {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if self.config.k < vocab {
+            if self.config.k < candidates.len() {
                 candidates.select_nth_unstable_by_key(self.config.k, order);
                 candidates.truncate(self.config.k);
             }
@@ -210,11 +203,12 @@ impl<'a> Top<'a> {
             let rw = basis(&row);
             let hidden = values.map(|input| {
                 let mut x = vec![F::zero(); stride];
-                for (r, &a) in rw.iter().enumerate() {
-                    for (out, &b) in x.iter_mut().zip(&input[(first.row + r) * width..][..width]) {
-                        *out += a * F::from_i32(b);
-                    }
-                }
+                add_rows(
+                    &mut x,
+                    &input[first.row * width..],
+                    width,
+                    rw.iter().copied(),
+                );
                 x
             });
             let mut terms = Vec::with_capacity(blocks.len());
@@ -230,14 +224,12 @@ impl<'a> Top<'a> {
                 let mut weight = vec![F::zero(); stride];
                 let mut lower = F::zero();
                 let mut upper = F::zero();
-                for (&a, matrix) in cw
-                    .iter()
-                    .zip(self.tokens[check.col * width..].chunks_exact(width))
-                {
-                    for (out, &b) in weight.iter_mut().zip(matrix) {
-                        *out += a * F::from_i32(b);
-                    }
-                }
+                add_rows(
+                    &mut weight,
+                    &self.tokens[check.col * width..],
+                    width,
+                    cw.iter().copied(),
+                );
                 for (r, &a) in rw.iter().enumerate() {
                     let (min, max) = self.eval_bounds(
                         &public[check.row + r - self.config.positions.start],

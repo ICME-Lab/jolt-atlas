@@ -9,7 +9,6 @@ unsafe extern "C" {
         trees: u32,
         count: u32,
         result: *mut Field,
-        third: *mut Field,
     ) -> bool;
 }
 
@@ -17,11 +16,10 @@ pub(super) struct Leaves<'a> {
     lut: &'a LutLayers,
     point: &'a [Field],
     bins: Vec<[Field; 256]>,
-    third: Option<Vec<[Field; 81]>>,
 }
 
 impl<'a> Leaves<'a> {
-    pub(super) fn new(lut: &'a LutLayers, point: &'a [Field], try_third: bool) -> Option<Self> {
+    pub(super) fn new(lut: &'a LutLayers, point: &'a [Field]) -> Option<Self> {
         const LIBRARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/leaf.metallib"));
         static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let trees = 1 << lut.log_trees;
@@ -35,12 +33,6 @@ impl<'a> Leaves<'a> {
 
         let weights = poly::eq_table(&point[..lut.log_trees]);
         let mut bins = vec![[Field::ZERO; 256]; count / trees];
-        static THIRD: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let mut third = (try_third
-            && count >= 2 * trees
-            && *THIRD
-                .get_or_init(|| std::env::var("ATLAS_BITZ_METAL_ROUND3").as_deref() != Ok("0")))
-        .then(|| vec![[Field::ZERO; 81]; count / (2 * trees)]);
         // Metal reads exactly two count-nibble blocks and writes one histogram per row pair.
         let _span = tracing::info_span!("Metal BitZ leaf histograms").entered();
         let ok = unsafe {
@@ -52,20 +44,12 @@ impl<'a> Leaves<'a> {
                 trees.try_into().ok()?,
                 count.try_into().ok()?,
                 bins.as_mut_ptr().cast(),
-                third
-                    .as_mut()
-                    .map_or(std::ptr::null_mut(), |m| m.as_mut_ptr().cast()),
             )
         };
         if !ok {
             tracing::warn!("Metal BitZ histogram failed");
         }
-        ok.then_some(Self {
-            lut,
-            point,
-            bins,
-            third,
-        })
+        ok.then_some(Self { lut, point, bins })
     }
 
     pub(super) fn first(&self, at_one: bool) -> (Wide256, Wide256) {
@@ -113,48 +97,6 @@ impl<'a> Leaves<'a> {
                 (Wide256::mul(b.reduce(), eq), Wide256::mul(inf.reduce(), eq))
             })
             .reduce(zero, add)
-    }
-    pub(super) fn third(&self, prefix: &[Field], at_one: bool) -> Option<(Wide256, Wide256)> {
-        let moments = self.third.as_ref()?;
-        let _span = tracing::info_span!("Metal BitZ leaf round three").entered();
-        let high = poly::eq_table(&self.point[self.lut.log_trees..self.point.len() - 3]);
-        let rows = moments.len();
-        Some(
-            moments
-                .par_iter()
-                .zip(high)
-                .enumerate()
-                .map(|(row, (moments, high))| {
-                    let mut left = [Field::ONE; 9];
-                    let mut right = [Field::ONE; 9];
-                    let mut b = Wide256::zero();
-                    let mut inf = Wide256::zero();
-                    for i in 0..8 {
-                        let (stream, bit) = (i / 2, i % 2);
-                        let image = &self.lut.luts[row + stream * rows];
-                        let scale = prefix[stream / 2 + 2 * bit];
-                        left[i] = scale * (image[1 << bit] + Field::ONE);
-                        right[i] = scale * (image[4 << bit] + Field::ONE);
-                    }
-                    for (i, &l) in left.iter().enumerate() {
-                        for (j, &r) in right.iter().enumerate() {
-                            let term = Wide256::mul(moments[i * 9 + j], l * r);
-                            let selected = |k| k == 8 || ((k / 2) % 2 == usize::from(at_one));
-                            if selected(i) && selected(j) {
-                                b += term;
-                            }
-                            if i < 8 && j < 8 {
-                                inf += term;
-                            }
-                        }
-                    }
-                    (
-                        Wide256::mul(b.reduce(), high),
-                        Wide256::mul(inf.reduce(), high),
-                    )
-                })
-                .reduce(zero, add),
-        )
     }
 }
 

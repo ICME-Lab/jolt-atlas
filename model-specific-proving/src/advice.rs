@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use std::{fs::File, io::Write};
 
 use crate::{
-    bitz::{Group, Query, RangeColumn, Source},
+    bitz::{Group, Query, RangeColumn},
     channel::Result,
     field::F,
     norm::{Claim, Width},
@@ -74,15 +74,6 @@ impl Advice {
         })
     }
 
-    pub fn column(
-        &mut self,
-        shape: Shape,
-        width: Width,
-        source: impl Fn(usize) -> i128 + Sync,
-    ) -> Result<Slot> {
-        self.record(shape, width, source)
-    }
-
     pub fn lookup(
         &mut self,
         shape: Shape,
@@ -105,7 +96,7 @@ impl Advice {
         slot
     }
 
-    fn record(
+    pub fn column(
         &mut self,
         shape: Shape,
         mut width: Width,
@@ -113,28 +104,19 @@ impl Advice {
     ) -> Result<Slot> {
         let slot = Slot(self.columns.len());
         if self.file.is_some() {
+            let signed = matches!(width, Width::Signed(_));
             let required = (0..shape.rows * shape.cols)
                 .into_par_iter()
                 .with_min_len(8192)
                 .map(|j| {
                     let x = source(j);
-                    let n = match width {
-                        Width::Signed(_) => {
-                            129 - if x < 0 {
-                                (!x as u128).leading_zeros()
-                            } else {
-                                (x as u128).leading_zeros()
-                            }
-                        }
-                        Width::Unsigned(_) => 128 - (x as u128).leading_zeros(),
-                    };
-                    n as usize
+                    let magnitude = if signed && x < 0 { !x } else { x } as u128;
+                    (128 - magnitude.leading_zeros()) as usize
                 })
                 .max()
-                .unwrap_or(0);
-            let mut required = required;
-            required = required.max(usize::from(matches!(width, Width::Signed(_))));
-            if required > bits(width) {
+                .unwrap_or(0)
+                + usize::from(signed);
+            if required > width.bits() {
                 return Err("advice exceeds declared integer range");
             }
             width = resized(width, required as u8);
@@ -157,7 +139,7 @@ impl Advice {
         width: Width,
         source: &(impl Fn(usize) -> i128 + Sync),
     ) -> Result<Packed> {
-        let n = bits(width);
+        let n = width.bits();
         let packed = Packed {
             at: self.cursor as usize,
             width: n as u8,
@@ -201,7 +183,7 @@ impl Advice {
     pub fn widths(&self) -> Vec<u8> {
         self.columns
             .iter()
-            .map(|x| bits(x.kind.width) as u8)
+            .map(|x| x.kind.width.bits() as u8)
             .collect()
     }
 
@@ -211,8 +193,8 @@ impl Advice {
         }
         for (column, &width) in self.columns.iter_mut().zip(widths) {
             let allowed = column.kind.width;
-            if usize::from(width) > bits(allowed)
-                || (column.digit.is_some() && usize::from(width) != bits(allowed))
+            if usize::from(width) > allowed.bits()
+                || (column.digit.is_some() && usize::from(width) != allowed.bits())
                 || (matches!(allowed, Width::Signed(_)) && width == 0)
             {
                 return Err("invalid witness width");
@@ -230,7 +212,7 @@ impl Advice {
             .iter()
             .enumerate()
             .map(|(i, c)| {
-                let n = (1 << c.kind.vars.max(9)) * bits(c.kind.width);
+                let n = (1 << c.kind.vars.max(9)) * c.kind.width.bits();
                 (i, n)
             })
             .collect();
@@ -281,28 +263,12 @@ impl Advice {
         let v = self.unpack(record.packed, cell);
         match record.digit {
             Some((shift, mask)) => 1i128 << ((v as usize >> shift) & mask),
-            None => v as i128 - offset(record.kind.width),
+            None => v as i128 - record.kind.width.offset(),
         }
     }
 
-    fn sources(&self, ids: &[usize]) -> Vec<Source> {
-        ids.iter()
-            .map(|&id| {
-                let record = &self.columns[id];
-                match record.digit {
-                    Some((shift, mask)) => Source::Digit {
-                        address: record.packed.at,
-                        shift,
-                        mask,
-                    },
-                    None => Source::Range,
-                }
-            })
-            .collect()
-    }
-
-    fn read<'a>(&'a self, ids: &'a [usize]) -> impl Fn(usize, usize) -> u128 + Sync + 'a {
-        move |slot, cell| self.unpack(self.columns[ids[slot]].packed, cell)
+    fn source<'a>(&'a self, ids: &'a [usize]) -> impl Fn(usize, usize) -> i128 + Sync + 'a {
+        move |slot, cell| self.value(Slot(ids[slot]), cell)
     }
 }
 
@@ -316,9 +282,7 @@ impl Buckets {
         self.0
             .iter()
             .map(|(group, ids)| {
-                let root = group
-                    .commit_detached(&advice.sources(ids), advice.read(ids))?
-                    .root;
+                let root = group.commit_detached(advice.source(ids))?.root;
                 channel.append_bytes(&root);
                 Ok(root)
             })
@@ -369,13 +333,12 @@ impl Buckets {
             for (i, (((group, ids), root), queries)) in
                 self.0.iter().zip(roots).zip(requests).enumerate()
             {
-                let job = group.reduce(
-                    *root,
-                    &queries,
-                    channel,
-                    &advice.sources(ids),
-                    advice.read(ids),
-                )?;
+                let source = advice.source(ids);
+                let committed = group.commit_detached(&source)?;
+                if &committed.root != root {
+                    return Err("advice commitment changed");
+                }
+                let job = group.reduce(committed, &queries, channel, source)?;
                 if let Some((send, receive)) = &queue {
                     if i != 0 {
                         emit(receive.recv().map_err(|_| "BitZ worker stopped")??)?;
@@ -436,26 +399,15 @@ impl Buckets {
     }
 }
 
-fn bits(width: Width) -> usize {
-    match width {
-        Width::Signed(n) | Width::Unsigned(n) => n.into(),
-    }
-}
 fn resized(width: Width, bits: u8) -> Width {
     match width {
         Width::Signed(_) => Width::Signed(bits),
         Width::Unsigned(_) => Width::Unsigned(bits),
     }
 }
-fn offset(width: Width) -> i128 {
-    match width {
-        Width::Signed(n) => 1 << (n - 1),
-        Width::Unsigned(_) => 0,
-    }
-}
 fn encode(x: i128, width: Width) -> Option<i128> {
-    let n = x.checked_add(offset(width))?;
-    (0..1i128 << bits(width)).contains(&n).then_some(n)
+    let n = x.checked_add(width.offset())?;
+    (0..1i128 << width.bits()).contains(&n).then_some(n)
 }
 
 #[cfg(test)]

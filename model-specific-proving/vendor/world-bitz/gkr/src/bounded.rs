@@ -199,7 +199,7 @@ fn prove_relation(
             #[cfg(all(feature = "metal", target_os = "macos", target_arch = "aarch64"))]
             let gpu = source_lut.and_then(|(lut, level)| {
                 if level == LEAVES && side > dense_nodes {
-                    metal::Leaves::new(lut, point, side / 2 > dense_nodes)
+                    metal::Leaves::new(lut, point)
                 } else {
                     None
                 }
@@ -222,7 +222,6 @@ fn prove_relation(
                 let gpu_sum = gpu.as_ref().and_then(|leaves| match prefix.len() {
                     1 => Some(leaves.first(at_one)),
                     2 => Some(leaves.second(challenges[i + 1], at_one)),
-                    4 => leaves.third(&prefix, at_one),
                     _ => None,
                 });
                 let mut sums = round_sum(gpu_sum, &point[..i], |range, eq, scratch| {

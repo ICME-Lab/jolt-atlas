@@ -1,13 +1,11 @@
 //! Joint reduction for fixed-point matrix projections with the same input tensor.
 
+use crate::channel::Channel;
 use crate::field::{Mixing, F};
 use crate::fold::{basis, InnerProducts};
 use crate::norm::Claim;
-use jolt_field::{Field, One, Ring, Zero};
-use jolt_sumcheck::single::{
-    prove_single, verify_single, SingleFormat, SingleInstance, SingleSumcheckProof,
-};
-use jolt_transcript::{Encoding, FieldTranscript, ProverTranscript};
+use jolt_field::{One, Ring, Zero};
+use jolt_sumcheck::single::{SingleFormat, SingleInstance, SingleReduction};
 use rayon::prelude::*;
 
 type Result<T> = std::result::Result<T, &'static str>;
@@ -31,12 +29,6 @@ pub struct Query<'a, F> {
     pub projection: Projection<'a>,
     pub output: &'a Claim<F>,
     pub remainder: F,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct Proof<F> {
-    rounds: SingleSumcheckProof<F>,
-    values: Vec<F>,
 }
 
 struct Group<F> {
@@ -166,15 +158,12 @@ impl Input {
                 .iter()
                 .any(|next| same(next.projection.weights, &next.output.point[row_bits..]));
             let project = |out: &mut [F], scale: F| {
-                for (&w, src) in weights
-                    .iter()
-                    .zip(q.projection.weights.chunks_exact(self.width))
-                {
-                    let factor = scale * w;
-                    for (out, &v) in out.iter_mut().zip(src) {
-                        *out += factor.mul_integer(i128::from(v));
-                    }
-                }
+                crate::tensor::add_rows(
+                    out,
+                    q.projection.weights,
+                    self.width,
+                    weights.iter().map(|&w| scale * w),
+                );
             };
             if reuse {
                 let mut reduced = vec![F::zero(); width];
@@ -198,52 +187,45 @@ impl Input {
         })
     }
 
-    pub(crate) fn prove(
+    pub(crate) fn reduce(
         self,
-        input: &[i32],
+        io: &mut Channel<'_, '_>,
+        input: Option<&[i32]>,
         queries: &[Query<'_, F>],
-        channel: &mut (impl Mixing<F> + ProverTranscript),
-    ) -> Result<(Proof<F>, Vec<Claim<F>>)> {
+    ) -> Result<Vec<Claim<F>>> {
         let (_, width) = self.dimensions()?;
-        if input.len() != self.rows * self.width {
+        if input.is_some_and(|v| v.len() != self.rows * self.width) {
             return Err("invalid projection input");
         }
-        let batch = self.batch(queries, channel)?;
-        let tables = batch
-            .groups
-            .iter()
-            .map(|group| {
-                let mut restricted = vec![F::zero(); width];
-                for (row, w) in input.chunks_exact(self.width).zip(basis(&group.point)) {
-                    for (y, &x) in restricted.iter_mut().zip(row) {
-                        *y += w.mul_integer(i128::from(x));
-                    }
-                }
-                (restricted, group.public.clone())
-            })
-            .collect();
-        let mut witness = InnerProducts {
-            pairs: tables,
-            rounds: batch.instance.rounds,
+        let batch = match io {
+            Channel::Send(t, ..) => self.batch(queries, *t)?,
+            Channel::Check(t, ..) => self.batch(queries, *t)?,
         };
-        let (rounds, end) = prove_single(&mut witness, &batch.instance, channel)
-            .map_err(|_: jolt_sumcheck::SumcheckError<F>| "projection Sumcheck failed")?;
-        let values = witness.pairs.iter().map(|part| part.0[0]).collect();
-        let proof = Proof { rounds, values };
-        let claims = batch.finish(end, &proof.values, channel)?;
-        Ok((proof, claims))
-    }
-
-    pub(crate) fn verify(
-        self,
-        queries: &[Query<'_, F>],
-        proof: &Proof<F>,
-        channel: &mut impl Mixing<F>,
-    ) -> Result<Vec<Claim<F>>> {
-        let batch = self.batch(queries, channel)?;
-        let end = verify_single(&batch.instance, &proof.rounds, channel)
-            .map_err(|_| "invalid projection Sumcheck")?;
-        batch.finish(end, &proof.values, channel)
+        let witness = || {
+            let input = input.unwrap();
+            let pairs = batch
+                .groups
+                .iter()
+                .map(|group| {
+                    let mut restricted = vec![F::zero(); width];
+                    crate::tensor::add_rows(
+                        &mut restricted,
+                        input,
+                        self.width,
+                        basis(&group.point),
+                    );
+                    (restricted, group.public.clone())
+                })
+                .collect();
+            InnerProducts {
+                pairs,
+                rounds: batch.instance.rounds,
+            }
+        };
+        let (end, values) = io.sumcheck(&batch.instance, batch.groups.len(), witness, |w| {
+            w.pairs.into_iter().map(|part| part.0[0]).collect()
+        })?;
+        batch.finish(end, &values)
     }
 }
 
@@ -255,17 +237,8 @@ impl Projection<'_> {
     }
 }
 
-impl<F: Field + Encoding> Batch<F> {
-    fn finish(
-        self,
-        end: jolt_sumcheck::single::SingleReduction<F>,
-        values: &[F],
-        channel: &mut impl FieldTranscript<F>,
-    ) -> Result<Vec<Claim<F>>> {
-        if values.len() != self.groups.len() {
-            return Err("invalid number of projection evaluations");
-        }
-        channel.append_values(values);
+impl Batch<F> {
+    fn finish(self, end: SingleReduction<F>, values: &[F]) -> Result<Vec<Claim<F>>> {
         let weights = basis(&end.challenges);
         let expected: F = self
             .groups
@@ -367,7 +340,10 @@ mod tests {
         ];
         let tag = [0x58; 32];
         let mut prover = prover_transcript::<Keccak>(&tag, b"");
-        let (proof, claims) = shape.prove(&input, &queries, &mut prover).unwrap();
+        let advice = crate::advice::Advice::new(false).unwrap();
+        let mut proof = crate::channel::Messages::default();
+        let mut send = Channel::Send(&mut prover, &mut proof, &advice);
+        let claims = shape.reduce(&mut send, Some(&input), &queries).unwrap();
         assert_eq!(claims.len(), 2);
         for claim in &claims {
             let expected = basis(&claim.point)
@@ -378,9 +354,8 @@ mod tests {
             assert_eq!(claim.value, expected);
         }
         let mut verifier = verifier_transcript::<Keccak>(&tag, b"", prover.narg_string());
-        assert_eq!(
-            shape.verify(&queries, &proof, &mut verifier).unwrap(),
-            claims
-        );
+        let mut check = Channel::checking(&mut verifier, &proof);
+        assert_eq!(shape.reduce(&mut check, None, &queries).unwrap(), claims);
+        check.finish().unwrap();
     }
 }

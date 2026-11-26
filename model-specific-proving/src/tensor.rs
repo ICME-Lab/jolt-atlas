@@ -70,6 +70,34 @@ impl Shape {
     }
 }
 
+pub(crate) fn add_rows(
+    out: &mut [F],
+    matrix: &[i32],
+    width: usize,
+    weights: impl IntoIterator<Item = F>,
+) {
+    for (row, w) in matrix.chunks_exact(width).zip(weights) {
+        for (out, &x) in out.iter_mut().zip(row) {
+            *out += w.mul_integer(i128::from(x));
+        }
+    }
+}
+
+pub(crate) fn eval_rows(matrix: &[i32], width: usize, point: &[F], rows: usize) -> Vec<F> {
+    let weights = basis(point);
+    let mut values: Vec<_> = matrix
+        .chunks_exact(width)
+        .map(|r| {
+            r.iter()
+                .zip(&weights)
+                .map(|(&x, &w)| w.mul_integer(i128::from(x)))
+                .sum()
+        })
+        .collect();
+    values.resize(rows.next_power_of_two(), F::zero());
+    values
+}
+
 pub(crate) fn dot(a: &[i32], b: &[i32], narrow: bool) -> i128 {
     if !narrow {
         return a

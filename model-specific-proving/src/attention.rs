@@ -1,15 +1,15 @@
 use crate::{
-    advice::{Advice, Requests, Slot},
+    advice::{Advice, Requests},
     channel::{Channel, Result},
     field::F,
     fold::{agreement, basis, Column},
     layers::{Attention, NormalizationParameters, Projection, Rotary},
     linear,
     lookup::Lookups,
-    norm::{Claim, Norm, Witness},
+    norm::{Claim, Norm, Normalized},
     rounding::Rounded,
     softmax::{Soft, SoftTrace},
-    tensor::Shape,
+    tensor::{eval_rows, Shape},
 };
 use jolt_field::{Ring, Zero};
 
@@ -23,7 +23,7 @@ pub(crate) struct Context<'a> {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Projected {
     transformed: Rounded,
-    norm: Option<(Option<Witness>, Vec<Slot>)>,
+    norm: Option<Normalized>,
     rotary: Option<Rounded>,
 }
 
@@ -40,16 +40,9 @@ impl Projected {
         let transformed = linear::project(advice, shape, bits, projection, input)?;
         let p = transformed.values.as_deref();
         let norm = norm
-            .map(|params| {
-                let plan = params.at(shape.rows, bits)?;
-                let output = p.map(|v| plan.witness(v)).transpose()?;
-                let slots = plan.record(advice, p, output.as_ref())?;
-                Ok((output, slots))
-            })
+            .map(|params| Normalized::forward(advice, transformed.shape, bits, params, p))
             .transpose()?;
-        let values = norm
-            .as_ref()
-            .map_or(p, |(x, _)| x.as_ref().map(|x| x.result.as_slice()));
+        let values = norm.as_ref().map_or(p, Normalized::values);
         let rotary = rotation
             .map(|r| r.apply(advice, transformed.shape, bits, values))
             .transpose()?;
@@ -63,8 +56,8 @@ impl Projected {
     fn values(&self) -> Option<&[i32]> {
         if let Some(rope) = &self.rotary {
             rope.values.as_deref()
-        } else if let Some((x, _)) = &self.norm {
-            x.as_ref().map(|w| w.result.as_slice())
+        } else if let Some(norm) = &self.norm {
+            norm.values()
         } else {
             self.transformed.values.as_deref()
         }
@@ -80,22 +73,19 @@ impl Projected {
     ) -> Result<Vec<Claim<F>>> {
         if let Some((r, rounded)) = ctx.settings.rotary.zip(self.rotary.as_ref()) {
             let p = self.transformed.values.as_deref();
-            let v = self
-                .norm
-                .as_ref()
-                .map_or(p, |(x, _)| x.as_ref().map(|x| x.result.as_slice()));
+            let v = self.norm.as_ref().map_or(p, Normalized::values);
             claims = vec![r.reverse(io, requests, rounded, &claims, v)?];
         }
-        if let Some((norm, (trace, slots))) = norm.zip(self.norm.as_ref()) {
-            let n = norm.at(ctx.shape.rows, ctx.bits)?;
-            claims = vec![n.reduce_model(
+        if let Some((params, norm)) = norm.zip(self.norm.as_ref()) {
+            claims = vec![norm.reverse(
                 io,
+                requests,
+                self.transformed.shape,
+                ctx.bits,
+                params,
                 self.transformed.values.as_deref(),
-                trace.as_ref(),
                 &claims,
                 &[],
-                slots,
-                requests,
             )?];
         }
         Ok(claims)
@@ -352,20 +342,10 @@ impl<'a> Context<'a> {
         let shift = p.factor.trailing_zeros().min(2 * self.bits);
         for (g, key) in trace.keys.iter().enumerate() {
             let v = &trace.values[g];
-            let bound_v = v.values.as_ref().map(|v| {
-                let weight = basis(col);
-                let mut rows: Vec<F> = v
-                    .chunks_exact(channels)
-                    .map(|row| {
-                        row.iter()
-                            .zip(&weight)
-                            .map(|(&x, &w)| w.mul_integer(i128::from(x)))
-                            .sum()
-                    })
-                    .collect();
-                rows.resize(self.shape.rows.next_power_of_two(), F::zero());
-                rows
-            });
+            let bound_v = v
+                .values
+                .as_ref()
+                .map(|v| eval_rows(v, channels, col, self.shape.rows));
             let mut k_claims = Vec::new();
             for i in g * group..(g + 1) * group {
                 let head = &trace.heads[i];
@@ -500,20 +480,7 @@ fn score_product(
         *a *= b;
     }
     let key = io.dot(k, col_weights, || {
-        let weights = basis(c);
-        let mut columns: Vec<_> = witness
-            .unwrap()
-            .1
-            .chunks_exact(d)
-            .map(|r| {
-                r.iter()
-                    .zip(&weights)
-                    .map(|(&a, &b)| F::from_i32(a) * b)
-                    .sum()
-            })
-            .collect();
-        columns.resize(shape.rows.next_power_of_two(), F::zero());
-        columns
+        eval_rows(witness.unwrap().1, d, c, shape.rows)
     })?;
     Ok([
         Claim {

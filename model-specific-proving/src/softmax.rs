@@ -327,34 +327,16 @@ impl<'a> Soft<'a> {
                     v.resize(stride, F::zero());
                     Column::table(v, n, stride)
                 };
-                let column = |read: fn(&[u32], Table<'_>, usize) -> F| {
-                    let get = move |i| read(addresses, table, i);
-                    if self.mask == SoftmaxMask::Causal {
-                        Column::causal(n, stride, self.shape.rows, false, get)
-                    } else {
-                        Column::source(n, get)
-                    }
-                };
-                let overflow = |i| self.at(trace, addresses[i], i / stride, i % stride)[1];
-                let mask = |i| F::from_bool(i % stride < self.count(i / stride));
-                // With both rows masked, the remaining row-statistics term is also zero:
-                // either the column is nonzero or the row is padding.
-                let (overflow_column, mask_column) = if self.mask == SoftmaxMask::Causal {
-                    (
-                        Column::causal(n, stride, self.shape.rows, false, overflow),
-                        Column::causal(n, stride, self.shape.rows, true, mask),
-                    )
-                } else {
-                    (Column::source(n, overflow), Column::source(n, mask))
-                };
                 [
-                    column(|a, _, i| F::from_u32(a[i])),
-                    column(|a, t, i| t.values(a[i] as usize).0),
-                    column(|a, t, i| t.values(a[i] as usize).1),
-                    overflow_column,
+                    Column::source(n, |i| F::from_u32(addresses[i])),
+                    Column::source(n, |i| table.values(addresses[i] as usize).0),
+                    Column::source(n, |i| table.values(addresses[i] as usize).1),
+                    Column::source(n, |i| {
+                        self.at(trace, addresses[i], i / stride, i % stride)[1]
+                    }),
                     numbers(1),
                     numbers(2),
-                    mask_column,
+                    Column::source(n, |i| F::from_bool(i % stride < self.count(i / stride))),
                     Column::table((0..stride).map(|i| F::from_bool(i == 0)).collect(), n, 1),
                     Column::Product(basis(output_row), values.unwrap().to_vec()),
                     Column::table(basis(spot), n, 1),

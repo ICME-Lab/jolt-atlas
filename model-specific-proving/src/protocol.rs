@@ -22,11 +22,23 @@ pub struct Proof {
     pub(crate) evaluations: Vec<crate::bitz::Proof>,
 }
 
+impl Proof {
+    pub(crate) fn evaluation(
+        &self,
+        index: usize,
+    ) -> Result<std::borrow::Cow<'_, crate::bitz::Proof>> {
+        self.evaluations
+            .get(index)
+            .map(std::borrow::Cow::Borrowed)
+            .ok_or("missing BitZ evaluation")
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Header {
     pub(crate) widths: Vec<u8>,
     pub(crate) state: crate::channel::Messages,
-    #[serde(with = "crate::bitz::bytes")]
+    #[serde(with = "serde_bytes")]
     pub(crate) transcript: Vec<u8>,
     pub(crate) roots: Vec<[u8; 32]>,
 }

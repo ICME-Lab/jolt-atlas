@@ -66,20 +66,7 @@ pub(crate) fn reverse(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    match io {
-        Channel::Send(t, messages, _) => {
-            let (proof, claims) = parameters.prove(input.unwrap(), &queries, *t)?;
-            messages.projections.push(proof);
-            Ok(claims)
-        }
-        Channel::Check(t, _, _, _, projections) => {
-            let (proof, rest) = projections
-                .split_first()
-                .ok_or("missing projection proof")?;
-            *projections = rest;
-            parameters.verify(&queries, proof, *t)
-        }
-    }
+    parameters.reduce(io, input, &queries)
 }
 
 #[derive(Clone, Copy)]

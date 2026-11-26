@@ -274,24 +274,22 @@ impl ModelWeights {
         {
             return Err("decoder requires tied embeddings".into());
         }
-        let positions = if qwen {
-            None
+        let position_key = if gpt {
+            "wpe.weight"
         } else {
-            let field = if gpt {
-                "wpe.weight"
-            } else {
-                "embeddings.position_embeddings.weight"
-            };
-            Some(reader.read(&format!("{prefix}{field}"), &[limit, width])?)
+            "embeddings.position_embeddings.weight"
         };
-        let segments = if bert {
-            Some(reader.read(
-                &format!("{prefix}embeddings.token_type_embeddings.weight"),
-                &[count("type_vocab_size")?, width],
-            )?)
-        } else {
-            None
-        };
+        let positions = (!qwen)
+            .then(|| reader.read(&format!("{prefix}{position_key}"), &[limit, width]))
+            .transpose()?;
+        let segments = bert
+            .then(|| {
+                reader.read(
+                    &format!("{prefix}embeddings.token_type_embeddings.weight"),
+                    &[count("type_vocab_size")?, width],
+                )
+            })
+            .transpose()?;
         let root = if qwen {
             "model.norm"
         } else if gpt {
@@ -321,17 +319,16 @@ impl ModelWeights {
                     b: all.b[j * width..(j + 1) * width].to_vec(),
                 })
             } else if bert {
-                [
-                    "attention.self.query",
-                    "attention.self.key",
-                    "attention.self.value",
-                ]
-                .map(|path| linear(path, width, width, true))
-                .into_iter()
-                .collect::<Load<Vec<_>>>()?
-                .try_into()
-                .ok()
-                .unwrap()
+                let [q, k, v] = ["query", "key", "value"].map(|name| {
+                    reader.affine(
+                        &format!("{stem}.attention.self.{name}"),
+                        width,
+                        width,
+                        true,
+                        false,
+                    )
+                });
+                [q?, k?, v?]
             } else {
                 [
                     linear("self_attn.q_proj", width, heads * head, attention_bias)?,
@@ -401,16 +398,14 @@ impl ModelWeights {
             };
             (-(1 << bound_log), t.entries)
         };
-        let theta = if qwen {
-            Some(
+        let theta = qwen
+            .then(|| {
                 cfg["rope_theta"]
                     .as_f64()
                     .filter(|x| x.is_finite() && *x > 0.0)
-                    .ok_or("invalid RoPE base")?,
-            )
-        } else {
-            None
-        };
+                    .ok_or("invalid RoPE base")
+            })
+            .transpose()?;
         Ok(Self {
             family,
             width,
@@ -439,7 +434,17 @@ impl ModelWeights {
         }
         let qwen = matches!(self.family, Family::Qwen2 | Family::Qwen3);
         let encoder = self.family == Family::Bert;
-        let normalize = |p: &'a Affine| self.norm_params(p, qwen);
+        let kind = if qwen {
+            NormalizationKind::Rms
+        } else {
+            NormalizationKind::Layer
+        };
+        let normalize = |p: &'a Affine| NormalizationParameters {
+            kind,
+            gain: &p.w,
+            bias: &p.b,
+            epsilon_variance_units: self.epsilon,
+        };
         let rotary = self.theta.map(|theta| {
             let size = rows.next_power_of_two();
             let slot = size.ilog2() as usize;
@@ -538,18 +543,5 @@ impl ModelWeights {
             architecture,
             &qk,
         )
-    }
-
-    fn norm_params<'a>(&self, p: &'a Affine, qwen: bool) -> NormalizationParameters<'a> {
-        NormalizationParameters {
-            kind: if qwen {
-                NormalizationKind::Rms
-            } else {
-                NormalizationKind::Layer
-            },
-            gain: &p.w,
-            bias: &p.b,
-            epsilon_variance_units: self.epsilon,
-        }
     }
 }

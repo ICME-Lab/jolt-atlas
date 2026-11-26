@@ -3,45 +3,7 @@ use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
-pub(crate) struct Causal<'a, F> {
-    len: usize,
-    stride: usize,
-    rows: usize,
-    skip_empty: bool,
-    data: CausalData<'a, F>,
-}
-
-enum CausalData<'a, F> {
-    Source(Box<dyn Fn(usize) -> F + Sync + 'a>),
-    Table(Vec<usize>, Vec<F>),
-}
-
-impl<F: Field> Causal<'_, F> {
-    // Row binding keeps the union of the two prefixes. Column binding halves their stride.
-    fn width(&self, row: usize) -> usize {
-        if row >= self.rows {
-            return 0;
-        }
-        let rows = self.len / self.stride;
-        let last = row + (self.rows - 1 - row) / rows * rows;
-        (last + 1).min(self.stride)
-    }
-
-    fn at(&self, index: usize) -> F {
-        let row = index >> self.stride.trailing_zeros();
-        let col = index & (self.stride - 1);
-        match &self.data {
-            CausalData::Source(read) if row < self.rows && col <= row => read(index),
-            CausalData::Table(offsets, values) if col < offsets[row + 1] - offsets[row] => {
-                values[offsets[row] + col]
-            }
-            _ => F::zero(),
-        }
-    }
-}
-
 pub(crate) enum Column<'a, F> {
-    Causal(Causal<'a, F>),
     Source(usize, Box<dyn Fn(usize) -> F + Sync + 'a>),
     Selector {
         len: usize,
@@ -60,22 +22,6 @@ pub(crate) enum Column<'a, F> {
 impl<'a, F: Field> Column<'a, F> {
     pub(crate) fn source(len: usize, read: impl Fn(usize) -> F + Sync + 'a) -> Self {
         Self::Source(len, Box::new(read))
-    }
-
-    pub(crate) fn causal(
-        len: usize,
-        stride: usize,
-        rows: usize,
-        skip_empty: bool,
-        read: impl Fn(usize) -> F + Sync + 'a,
-    ) -> Self {
-        Self::Causal(Causal {
-            len,
-            stride,
-            rows,
-            skip_empty,
-            data: CausalData::Source(Box::new(read)),
-        })
     }
 
     pub(crate) fn selector(
@@ -106,7 +52,6 @@ impl<'a, F: Field> Column<'a, F> {
 
     fn len(&self) -> usize {
         match self {
-            Self::Causal(c) => c.len,
             Self::Product(left, right) => left.len() * right.len(),
             Self::Source(len, _) | Self::Table { len, .. } | Self::Selector { len, .. } => *len,
         }
@@ -114,7 +59,6 @@ impl<'a, F: Field> Column<'a, F> {
 
     fn at(&self, index: usize) -> F {
         match self {
-            Self::Causal(c) => c.at(index),
             Self::Product(left, right) => left[index / right.len()] * right[index % right.len()],
             Self::Source(_, read) => read(index),
             Self::Selector {
@@ -135,48 +79,6 @@ impl<'a, F: Field> Column<'a, F> {
 
     fn bind(&mut self, point: F) {
         let half = self.len() / 2;
-        if let Self::Causal(c) = self {
-            let old = c;
-            let stride = old.stride.min(half);
-            let mut next = Causal {
-                len: half,
-                stride,
-                rows: old.rows,
-                skip_empty: old.skip_empty,
-                data: CausalData::Table(Vec::new(), Vec::new()),
-            };
-            let mut offsets = vec![0];
-            for row in 0..half / stride {
-                offsets.push(offsets[row] + next.width(row));
-            }
-            let total = *offsets.last().unwrap();
-            if total * 8 < half * 7 {
-                let mut values = vec![F::zero(); total];
-                let mut remaining = values.as_mut_slice();
-                let outputs: Vec<_> = offsets
-                    .windows(2)
-                    .map(|pair| {
-                        let (row, rest) =
-                            std::mem::take(&mut remaining).split_at_mut(pair[1] - pair[0]);
-                        remaining = rest;
-                        row
-                    })
-                    .collect();
-                outputs
-                    .into_par_iter()
-                    .enumerate()
-                    .for_each(|(row, values)| {
-                        for (col, out) in values.iter_mut().enumerate() {
-                            let i = row * stride + col;
-                            let a = old.at(i);
-                            *out = a + point * (old.at(i + half) - a);
-                        }
-                    });
-                next.data = CausalData::Table(offsets, values);
-                *self = Self::Causal(next);
-                return;
-            }
-        }
         if let Self::Product(left, right) = self {
             let values = if left.len() > 1 { left } else { right };
             let half = values.len() / 2;
@@ -266,42 +168,26 @@ impl<F: Field, G: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, F, G> {
             self.finish_rounds(point)?;
         }
         let half = self.columns[0].len() / 2;
-        let active = self.columns.iter().find_map(|column| match column {
-            Column::Causal(mask) if mask.skip_empty && half >= mask.stride => Some(mask),
-            _ => None,
-        });
         let scan = |start: usize, end: usize| {
             let mut sums = vec![F::zero(); self.degree + 1];
             let mut values = vec![F::zero(); self.columns.len()];
             let mut delta = values.clone();
-            let mut start = start;
-            while start < end {
-                let (visible, next) = if let Some(mask) = active {
-                    let row = start / mask.stride;
-                    let base = row * mask.stride;
-                    let width = mask.width(row).max(mask.width(row + half / mask.stride));
-                    ((base + width).min(end), (base + mask.stride).min(end))
-                } else {
-                    (end, end)
-                };
-                for i in start..visible {
-                    for (j, column) in self.columns.iter().enumerate() {
-                        let lo = column.at(i);
-                        values[j] = lo;
-                        delta[j] = column.at(i + half) - lo;
-                    }
-                    sums[0] += (self.relation)(&values);
+            for i in start..end {
+                for (j, column) in self.columns.iter().enumerate() {
+                    let lo = column.at(i);
+                    values[j] = lo;
+                    delta[j] = column.at(i + half) - lo;
+                }
+                sums[0] += (self.relation)(&values);
+                for (a, &d) in values.iter_mut().zip(&delta) {
+                    *a += d;
+                }
+                for total in &mut sums[2..] {
                     for (a, &d) in values.iter_mut().zip(&delta) {
                         *a += d;
                     }
-                    for total in &mut sums[2..] {
-                        for (a, &d) in values.iter_mut().zip(&delta) {
-                            *a += d;
-                        }
-                        *total += (self.relation)(&values);
-                    }
+                    *total += (self.relation)(&values);
                 }
-                start = next;
             }
             sums
         };

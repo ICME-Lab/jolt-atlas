@@ -594,6 +594,16 @@ Qwen3-0.6BのMLP中間幅3,072は、丸め出力と余りをコミットする�
 
 優先するのは、**範囲証明の見直しでパディング後のグループを減らすこと**と、**残るGKRの再計算をRAM上限内で減らすこと**。比較では4スレッドを基準にし、層間のSumcheck chainを維持したうえで最終RMSNormと最後の1位置のTop-Kを含める。証明時間に加えて、パディング後の配列の内訳、検証時間、証明データ、ピークRAMを記録する。
 
+## FlashProveから検討する案
+
+Anthropicの公開コード（`9e2bdd8ff5bf9c62f18263d7dac189b0400b260c`）と技術報告を参照。FlashProveは固定小数点のモデルを直接証明する。公開計測のLlama 4 Maverick・1,024トークン・H100 1枚では、単一リクエストの次トークン証明が58.8秒。24リクエストをまとめた場合は約221〜226秒で、111.23トークン毎秒はバッチ全体のprefill換算。証明サイズは平均18.78 MB。公開計測は量子化した重みをRAMに置いてGPUに流す構成で、AtlasのMac上のQwen3-0.6B、4位置のTop-8とはモデル、ハードウェア、証明する条件が異なる。 [性能資料](https://github.com/anthropics/FlashProve/blob/9e2bdd8ff5bf9c62f18263d7dac189b0400b260c/guide/performance.md) · [技術報告](https://assets.claude.com/a492b1fea80e6dcfe4e908ed77bd44961f8c02c2.pdf)
+
+- **行列の範囲をまとめて証明する。** FlashProveのsmallness testは、コミット後に列のランダムな符号付き和を取り、その和の数字をLookupで検査する。個々のセルには検査した和より緩い上限を保証する設計。複数の小整数を体要素に詰める部分には、別途、必要な線形評価を元の値と結ぶ処理がある。Atlasに持ち込むなら、最初の対象は演算の法またぎを排除するための広めの範囲だけで足りる中間値。丸めの余り、Top-Kの差、非負性などに必要な厳密条件は維持する。比較する量は消えるBitZのグループ数だけでなく、代わりに必要な整数行列のコミット、評価要求、Lookupを含む。現行FP119で緩い保証幅が各演算の法またぎを排除すること、拒否確率と証明の健全性を別々に評価する。 [範囲検査のコード](https://github.com/anthropics/FlashProve/blob/9e2bdd8ff5bf9c62f18263d7dac189b0400b260c/verifier/src/vf_smallness_test.h) · [Atlasの丸め](src/layers/linear.rs#L111)
+- **生存期間の短い証人を層のまとまりで処理する。** FlashProveは区間ごとに中間値をコミットし、評価を帰着して、次の区間に必要な値と短く折り畳んだコミットメントを残す。Atlasは全層の圧縮トレースを持ってから逆順を開始し、Lookupのアドレスも最後の集約まで持つ。Atlasで小さく試すなら、層間のSumcheck chainを維持したまま、区間境界の残差だけからトレースを再生成する案と、圧縮アドレスを必要な区間だけ展開する案を比較する。Lookupバッチの縮小は追加のSumcheckを生むため、証人の読み出しを遅延させる案と区別する。前回の全層計測では逆順の序盤が5.71 GiBのピークで、BitZ後半はサンプル上3.75 GiBだった。 [FlashProveの区間処理](https://github.com/anthropics/FlashProve/blob/9e2bdd8ff5bf9c62f18263d7dac189b0400b260c/docs/protocol.md#the-proof-for-a-request) · [Atlasのトレース](src/models.rs#L485)
+- **Foldと次のラウンド和で同じ配列を読み直さない。** GPUのtoken sumcheckでは、前のチャレンジで折り畳んだ値を、その場で次のラウンド和にも使う。残りが小さくなったところは、チャレンジ生成を含む複数のラウンドを単一のGPU起動にまとめる。Atlasでは密な列が多いAttentionやLookupのSumcheckで入力を連続した区画ごとに処理できる。今回の実測ではAtlas側のBitZの行Sumcheckは1.05秒なので、優先するのは逆順の証明とLookup。GPUではCommit/PCSだけを移す場合より、係数生成からチャレンジと折り畳みまでの転送を抑えられる。 [token Sumcheckの実装](https://github.com/anthropics/FlashProve/blob/9e2bdd8ff5bf9c62f18263d7dac189b0400b260c/prover/hiding/token_sumcheck.cuh#L148-L209) · [AtlasのSumcheck](src/protocol/sumcheck.rs)
+- **Attentionの丸める位置を変える案。** FlashProveは整数の指数表から得た重みでVを積和してから、行の重みの和で割る。Atlasは表から固定小数点の確率を求めてからVと掛ける。FlashProveの形だと確率の作業配列を省き、余りの検査を出力側の割り算に寄せられるが、丸めの順序が変わるため現行Qwen3の整数出力と同じになる保証はない。固定したモデルをそのまま証明する変更としては扱わない。 [FlashProveのAttention](https://github.com/anthropics/FlashProve/blob/9e2bdd8ff5bf9c62f18263d7dac189b0400b260c/docs/format/11-3-attention-segment.md) · [Atlasの確率とVの積和](src/layers/attention.rs#L335)
+- **証明サイズを減らす場合はPCSを含めて比較する。** FlashProveは線形評価の要求を折り畳み、短くしたコード語に近接性検査を行う。公表されている18.78 MBはその証明方式込みの値。現行Atlasの2.16 GiBではBitZが列ごとの折り畳み値を送る部分が大きい。範囲を狭める効果と、同じデータ量を保った状態で評価証明を小さくする効果は別に見積もる。複数リクエストのバッチは、FlashProveでは秘密重みへの要求を共有してスループットを上げる効果が中心。公開重みのAtlasで1件のレイテンシを改善する候補としては優先しない。 [近接性検査とバッチ](https://assets.claude.com/a492b1fea80e6dcfe4e908ed77bd44961f8c02c2.pdf)
+
 ## 計測の元データ
 
 比較の再集計に必要な値をここに記録する。秒数は各試行の区間計測。ピークは計測対象プロセスの物理メモリ使用量で、ビット配列の容量はパディング後のPCS入力。1 MiBは2²⁰バイト。

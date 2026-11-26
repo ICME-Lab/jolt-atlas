@@ -24,7 +24,9 @@ use super::{
     Result,
 };
 
-const ROW_BITS: usize = 7;
+const ROW_BITS: usize = 9;
+const WORD_BITS: usize = u128::BITS as usize;
+const WORDS_PER_COLUMN: usize = ROWS / WORD_BITS;
 const ROWS: usize = 1 << ROW_BITS;
 const GROUP_LIMIT: usize = 32 << 23;
 const DOMAIN: &[u8] = b"atlas/transformer/witness";
@@ -42,6 +44,12 @@ struct Region {
 
 #[derive(Clone, Default)]
 pub(crate) struct Layout(Vec<Region>);
+
+impl Region {
+    fn words_per_plane(self) -> usize {
+        (1 << self.bits.max(ROW_BITS)) / WORD_BITS
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Placement {
@@ -216,8 +224,8 @@ impl Spool {
     fn group(&mut self, slots: &[(usize, Placement)], len: usize) -> Result<Vec<F128>> {
         let mut group = F128::zeroed_vec(len);
         for &(slot, placement) in slots {
-            let stride = 1 << placement.region.bits.saturating_sub(ROW_BITS);
-            let base = placement.offset;
+            let stride = placement.region.words_per_plane();
+            let base = placement.offset * WORDS_PER_COLUMN;
             for &record in &self.slots[slot] {
                 self.file
                     .seek(SeekFrom::Start(record.offset))
@@ -227,8 +235,8 @@ impl Spool {
                 let mut rows = [0u128; 128];
                 for word in 0..stride {
                     rows[..record.width].fill(0);
-                    let start = word * ROWS;
-                    for i in start..(start + ROWS).min(codes.len()) {
+                    let start = word * WORD_BITS;
+                    for i in start..(start + WORD_BITS).min(codes.len()) {
                         let value = codes.get(i);
                         if let Some(shift) = record.shift {
                             let digit = (value >> shift) as usize & (record.width - 1);
@@ -297,7 +305,7 @@ impl Packed<'_> {
             }
             return Ok(());
         }
-        let stride = len.div_ceil(ROWS);
+        let stride = len.max(ROWS).div_ceil(WORD_BITS);
         for &(slot, _, width) in digits {
             self.blocks[slot.0] = F128::zeroed_vec(stride << width);
         }
@@ -305,8 +313,8 @@ impl Packed<'_> {
         let mut rows = vec![[0u128; 16]; digits.len()];
         for word in 0..stride {
             rows.fill([0; 16]);
-            let start = word * ROWS;
-            for i in start..(start + ROWS).min(len) {
+            let start = word * WORD_BITS;
+            for i in start..(start + WORD_BITS).min(len) {
                 let code = address(i);
                 for (bits, &(_, shift, width)) in rows.iter_mut().zip(digits) {
                     let digit = (code >> shift) & ((1 << width) - 1);
@@ -350,7 +358,7 @@ impl Packed<'_> {
             });
             return Ok(());
         }
-        let stride = 1 << region.bits.saturating_sub(ROW_BITS);
+        let stride = region.words_per_plane();
         let words = &mut self.blocks[slot.0];
         if words.is_empty() {
             *words = F128::zeroed_vec(self.widths[slot.0] * stride);
@@ -358,14 +366,14 @@ impl Packed<'_> {
         let mut rows = [0u128; 128];
         for word in 0..stride {
             rows[..width].fill(0);
-            let start = word * ROWS;
-            for i in start..(start + ROWS).min(1 << region.bits) {
+            let start = word * WORD_BITS;
+            for i in start..(start + WORD_BITS).min(1 << region.bits) {
                 let mut bits = code(i);
                 if bits >> width != 0 {
                     return Err("integer outside the witness range");
                 }
                 while bits != 0 {
-                    rows[bits.trailing_zeros() as usize] |= 1 << (i % ROWS);
+                    rows[bits.trailing_zeros() as usize] |= 1 << (i % WORD_BITS);
                     bits &= bits - 1;
                 }
             }
@@ -465,11 +473,18 @@ impl Plan {
                             let scale = p * *mix;
                             cols.iter().map(move |&c| scale * c)
                         });
-                        for (&word, weight) in packed[*offset..].iter().zip(coeffs) {
-                            let mut bits = word.to_u128();
-                            while bits != 0 {
-                                projection[bits.trailing_zeros() as usize] += weight;
-                                bits &= bits - 1;
+                        for (words, weight) in packed[*offset * WORDS_PER_COLUMN..]
+                            .chunks_exact(WORDS_PER_COLUMN)
+                            .zip(coeffs)
+                        {
+                            for (&word, rows) in
+                                words.iter().zip(projection.chunks_exact_mut(WORD_BITS))
+                            {
+                                let mut bits = word.to_u128();
+                                while bits != 0 {
+                                    rows[bits.trailing_zeros() as usize] += weight;
+                                    bits &= bits - 1;
+                                }
                             }
                         }
                         [Column::Dense(projection), Column::Dense(weights(row))]
@@ -584,7 +599,8 @@ impl Plan {
                 let mut block = F128::zeroed_vec(pcs.packed_len());
                 for &(slot, placement) in slots {
                     let words = std::mem::take(&mut blocks[slot]);
-                    block[placement.offset..][..words.len()].copy_from_slice(&words);
+                    block[placement.offset * WORDS_PER_COLUMN..][..words.len()]
+                        .copy_from_slice(&words);
                 }
                 block
             };

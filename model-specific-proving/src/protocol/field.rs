@@ -10,7 +10,7 @@ use jolt_transcript::{
 };
 use num_traits::{ConstOne, ConstZero, Zero};
 
-const PRIME: u128 = (1 << 121) - 73;
+const PRIME: u128 = (1 << 119) - 69;
 pub(crate) type Scalar = world_field::Fq<PRIME>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -83,7 +83,7 @@ impl CanonicalBytes for F {
 }
 
 impl CanonicalEncoding for F {
-    const MODULUS_BITS: u32 = 121;
+    const MODULUS_BITS: u32 = PRIME.ilog2() + 1;
     const CHALLENGE_SET_LIMBS: [u64; 4] = [PRIME as u64, (PRIME >> 64) as u64, 0, 0];
 
     fn num_bits(&self) -> u32 {

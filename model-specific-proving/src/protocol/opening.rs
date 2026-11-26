@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use jolt_field::Zero;
+use jolt_field::{Ring, Zero};
 use jolt_transcript::{
     prover_transcript, verifier_transcript, Keccak, ProverState, Transcript, VerifierState,
 };
@@ -29,6 +29,7 @@ struct Region {
     bits: usize,
     capacity: usize,
     variable: bool,
+    signed: bool,
 }
 
 #[derive(Clone, Default)]
@@ -69,12 +70,14 @@ impl Layout {
             bits,
             capacity,
             variable: false,
+            signed: false,
         });
         slot
     }
 
-    pub(crate) fn variable(&mut self, slot: Slot) {
+    pub(crate) fn variable(&mut self, slot: Slot, signed: bool) {
         self.0[slot.0].variable = true;
+        self.0[slot.0].signed = signed;
     }
 
     pub(crate) fn packed(&self) -> Packed<'_> {
@@ -261,6 +264,10 @@ impl Plan {
                     return Err("invalid evaluation of omitted bits");
                 }
                 continue;
+            }
+            if placement.region.signed {
+                // The missing planes select the signed offset before the batch is reduced.
+                request.claim.value += F::from_i128(1 << (placement.planes - 1));
             }
             request.planes.truncate(placement.planes);
             groups[placement.group].push(request);

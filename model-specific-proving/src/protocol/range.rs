@@ -121,8 +121,28 @@ impl<const N: usize> Ranges<N> {
 impl Ranges<1> {
     pub(crate) fn adaptive(layout: &mut Layout, shape: Shape, capacity: usize) -> Self {
         let range = Self::new(layout, shape, [Width::unsigned(capacity)]);
-        layout.variable(range.slot);
+        layout.variable(range.slot, false);
         range
+    }
+
+    pub(crate) fn adaptive_signed(layout: &mut Layout, shape: Shape, capacity: usize) -> Self {
+        let range = Self::new(layout, shape, [Width::unsigned(capacity)]);
+        layout.variable(range.slot, true);
+        range
+    }
+
+    pub(crate) fn record_signed(&self, packed: &mut Packed<'_>, values: &[i32]) -> Result<()> {
+        let maximum = values
+            .iter()
+            .map(|&x| if x < 0 { !x } else { x } as u32)
+            .max()
+            .unwrap_or(0);
+        let bits = if maximum == 0 && values.iter().all(|&x| x == 0) {
+            0
+        } else {
+            (33 - maximum.leading_zeros()) as usize
+        };
+        self.record_packed(packed, values, bits, (1i128 << bits) / 2)
     }
 
     pub(crate) fn record_adaptive<T: Copy + Into<i128>>(
@@ -130,25 +150,36 @@ impl Ranges<1> {
         packed: &mut Packed<'_>,
         values: &[T],
     ) -> Result<()> {
-        let shape = self.shape;
-        if !values.is_empty() && values.len() != shape.len() {
-            return Err("invalid range witness dimensions");
-        }
         let value = values.iter().try_fold(0, |maximum, &value| {
             u128::try_from(value.into())
                 .map(|value| maximum.max(value))
                 .map_err(|_| "negative unsigned witness")
         })?;
         let bits = (128 - value.leading_zeros()) as usize;
+        self.record_packed(packed, values, bits, 0)
+    }
+
+    fn record_packed<T: Copy + Into<i128>>(
+        &self,
+        packed: &mut Packed<'_>,
+        values: &[T],
+        bits: usize,
+        offset: i128,
+    ) -> Result<()> {
+        let shape = self.shape;
+        if !values.is_empty() && values.len() != shape.len() {
+            return Err("invalid range witness dimensions");
+        }
         packed.shrink(self.slot, bits)?;
         let stride = shape.width.next_power_of_two();
         packed.write(self.slot, 0, bits, |i| {
             let (row, col) = (i / stride, i % stride);
-            if row < shape.rows && col < shape.width {
-                values[row * shape.width + col].into() as u128
+            let value = if row < shape.rows && col < shape.width {
+                values[row * shape.width + col].into()
             } else {
                 0
-            }
+            };
+            (value + offset) as u128
         })
     }
 }

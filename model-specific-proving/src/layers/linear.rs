@@ -5,7 +5,7 @@ use super::{Projection, Rotary};
 use crate::protocol::{
     field::F,
     opening::{Layout, Packed, Request},
-    range::{Ranges, Width, I32},
+    range::{Ranges, Width},
     sumcheck::{Column, Session},
     tensor::{bind_rows, equality, inner, weights, Claim, Shape},
     Result,
@@ -43,16 +43,17 @@ impl Rounded {
 pub(crate) struct Rounding {
     pub shape: Shape,
     bits: usize,
-    ranges: Ranges<2>,
+    output: Ranges<1>,
+    remainder: Ranges<1>,
 }
 
 impl Rounding {
     pub(crate) fn new(layout: &mut Layout, shape: Shape, bits: usize) -> Self {
-        let ranges = Ranges::new(layout, shape, [I32, Width::unsigned(bits)]);
         Self {
             shape,
             bits,
-            ranges,
+            output: Ranges::adaptive_signed(layout, shape, 32),
+            remainder: Ranges::new(layout, shape, [Width::unsigned(bits)]),
         }
     }
 
@@ -62,8 +63,8 @@ impl Rounding {
         compute: impl Fn(usize, usize) -> i128 + Sync,
     ) -> Result<Rounded> {
         let rounded = Rounded::make(self.shape, self.bits, compute)?;
-        self.ranges
-            .record(packed, [&rounded.values, &rounded.remainder])?;
+        self.output.record_signed(packed, &rounded.values)?;
+        self.remainder.record(packed, [&rounded.remainder])?;
         Ok(rounded)
     }
 
@@ -75,8 +76,10 @@ impl Rounding {
         trace: impl FnOnce() -> &'w [i32],
     ) -> Result<F> {
         let [remainder] = io.values(|| [self.shape.evaluate(trace(), &claim.point)])?;
-        self.ranges
-            .open(io, requests, &claim.point, [claim.value, remainder])?;
+        self.output
+            .open(io, requests, &claim.point, [claim.value])?;
+        self.remainder
+            .open(io, requests, &claim.point, [remainder])?;
         Ok(F::from_u64(1 << self.bits) * claim.value + remainder)
     }
 }

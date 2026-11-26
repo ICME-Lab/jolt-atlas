@@ -5,6 +5,7 @@ pub(crate) mod lookup;
 pub(crate) mod opening;
 pub(crate) mod output;
 pub(crate) mod range;
+pub(crate) mod storage;
 pub(crate) mod sumcheck;
 pub(crate) mod tensor;
 

@@ -26,7 +26,9 @@ struct Activate<'a> {
     excess: Ranges<1>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct ActivationTrace {
+    #[serde(with = "crate::protocol::storage::i32s")]
     output: Vec<i32>,
     addresses: Arc<Addresses>,
 }
@@ -95,6 +97,13 @@ impl<'a> Activate<'a> {
         }
     }
 
+    fn evaluate(&self, value: i32, address: usize) -> Result<i32> {
+        value
+            .max(0)
+            .checked_add(self.correction[address])
+            .ok_or("activation overflow")
+    }
+
     fn execute(&self, x: &[i32], packed: &mut Packed<'_>) -> Result<ActivationTrace> {
         let stride = self.shape.width.next_power_of_two();
         let mut addresses = Addresses::new(1 << self.shape.bits(), self.lookup.bits);
@@ -109,12 +118,7 @@ impl<'a> Activate<'a> {
             for (column, number) in columns.iter_mut().zip(range) {
                 column.push(number);
             }
-            output.push(
-                value
-                    .max(0)
-                    .checked_add(self.correction[address])
-                    .ok_or("activation overflow")?,
-            );
+            output.push(self.evaluate(value, address)?);
         }
         let [sign, absolute, low, excess] = &columns;
         self.constraints.record(packed, [sign, absolute, low])?;
@@ -237,6 +241,7 @@ pub(crate) struct FeedForward<'a> {
     input: Shape,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct FeedTrace {
     gate: Rounded,
     activation: ActivationTrace,
@@ -245,6 +250,10 @@ pub(crate) struct FeedTrace {
 }
 
 impl FeedTrace {
+    pub(crate) fn discard_derived(&mut self) {
+        self.activation.output = Vec::new();
+    }
+
     pub(crate) fn values(&self) -> &[i32] {
         &self.down.values
     }
@@ -304,6 +313,25 @@ impl<'a> FeedForward<'a> {
             up,
             down,
         })
+    }
+
+    pub(crate) fn restore(&self, trace: &mut FeedTrace) -> Result<()> {
+        let width = self.activation.shape.width;
+        let stride = width.next_power_of_two();
+        trace.activation.output = trace
+            .gate
+            .values
+            .iter()
+            .enumerate()
+            .map(|(i, &value)| {
+                let address = trace
+                    .activation
+                    .addresses
+                    .get(i / width * stride + i % width);
+                self.activation.evaluate(value, address)
+            })
+            .collect::<Result<_>>()?;
+        Ok(())
     }
 
     pub(crate) fn reverse<'w>(

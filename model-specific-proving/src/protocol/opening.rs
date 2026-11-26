@@ -1,8 +1,12 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
+    fs::File,
+    io::{Read, Seek, SeekFrom, Write},
     sync::{Arc, OnceLock},
 };
 
+use bincode::Options;
 use jolt_field::{Ring, Zero};
 use jolt_transcript::{
     prover_transcript, verifier_transcript, Keccak, ProverState, Transcript, VerifierState,
@@ -14,6 +18,7 @@ use world_transcript::{build_prover, build_verifier, Proof as BitProof};
 
 use super::{
     field::{Scalar, F},
+    storage::Codes,
     sumcheck::{Column, Messages, Session},
     tensor::{equality, inner, weights, Claim},
     Result,
@@ -59,11 +64,17 @@ pub(crate) struct Request {
 }
 
 pub struct Proof {
-    roots: Vec<Root>,
+    pub(crate) metadata: ProofMetadata,
+    bit_proofs: Vec<BitProof>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProofMetadata {
+    roots: Vec<[u8; 32]>,
     pub(crate) widths: Vec<usize>,
     messages: Messages,
     openings: Messages,
-    bit_proofs: Vec<BitProof>,
+    #[serde(with = "super::storage::bytes")]
     transcript: Vec<u8>,
 }
 
@@ -89,7 +100,17 @@ impl Layout {
             layout: self,
             widths: self.0.iter().map(|r| r.capacity).collect(),
             blocks: (0..self.0.len()).map(|_| Vec::new()).collect(),
+            spool: None,
         }
+    }
+
+    pub(crate) fn streamed(&self) -> Result<Packed<'_>> {
+        let mut packed = self.packed();
+        packed.spool = Some(Spool {
+            file: tempfile::tempfile().map_err(|_| "could not create witness file")?,
+            slots: (0..self.0.len()).map(|_| Vec::new()).collect(),
+        });
+        Ok(packed)
     }
 
     pub(crate) fn finish(&self, widths: &[usize]) -> Result<Plan> {
@@ -164,12 +185,87 @@ pub(crate) struct Packed<'a> {
     layout: &'a Layout,
     pub(crate) widths: Vec<usize>,
     blocks: Vec<Vec<F128>>,
+    spool: Option<Spool>,
+}
+
+// Each range column or lookup address array has one file record. Lookup digits
+// share that record even when their slots land in different BitZ groups.
+struct Spool {
+    file: File,
+    slots: Vec<Vec<Record>>,
+}
+
+#[derive(Clone, Copy)]
+struct Record {
+    offset: u64,
+    plane: usize,
+    width: usize,
+    shift: Option<usize>,
+}
+
+impl Spool {
+    fn save(&mut self, codes: &Codes) -> Result<u64> {
+        let offset = self
+            .file
+            .stream_position()
+            .map_err(|_| "could not locate witness")?;
+        bincode::serialize_into(&mut self.file, codes).map_err(|_| "could not write witness")?;
+        Ok(offset)
+    }
+
+    fn group(&mut self, slots: &[(usize, Placement)], len: usize) -> Result<Vec<F128>> {
+        let mut group = F128::zeroed_vec(len);
+        for &(slot, placement) in slots {
+            let stride = 1 << placement.region.bits.saturating_sub(ROW_BITS);
+            let base = placement.offset;
+            for &record in &self.slots[slot] {
+                self.file
+                    .seek(SeekFrom::Start(record.offset))
+                    .map_err(|_| "could not locate witness")?;
+                let codes: Codes = bincode::deserialize_from(&mut self.file)
+                    .map_err(|_| "could not read witness")?;
+                let mut rows = [0u128; 128];
+                for word in 0..stride {
+                    rows[..record.width].fill(0);
+                    let start = word * ROWS;
+                    for i in start..(start + ROWS).min(codes.len()) {
+                        let value = codes.get(i);
+                        if let Some(shift) = record.shift {
+                            let digit = (value >> shift) as usize & (record.width - 1);
+                            rows[digit] |= 1 << (i - start);
+                        } else {
+                            let mut bits = value;
+                            while bits != 0 {
+                                rows[bits.trailing_zeros() as usize] |= 1 << (i - start);
+                                bits &= bits - 1;
+                            }
+                        }
+                    }
+                    for (bit, &row) in rows[..record.width].iter().enumerate() {
+                        group[base + (record.plane + bit) * stride + word] = F128::from(row);
+                    }
+                }
+            }
+        }
+        Ok(group)
+    }
 }
 
 impl Packed<'_> {
+    pub(crate) fn is_streamed(&self) -> bool {
+        self.spool.is_some()
+    }
+
     pub(crate) fn shrink(&mut self, slot: Slot, width: usize) -> Result<()> {
         let region = self.layout.0[slot.0];
-        if !region.variable || width > region.capacity || !self.blocks[slot.0].is_empty() {
+        if !region.variable
+            || width > region.capacity
+            || !self.blocks[slot.0].is_empty()
+            || self
+                .spool
+                .as_ref()
+                .is_some_and(|spool| !spool.slots[slot.0].is_empty())
+        {
             return Err("invalid witness width");
         }
         self.widths[slot.0] = width;
@@ -181,7 +277,26 @@ impl Packed<'_> {
         digits: &[(Slot, usize, usize)],
         len: usize,
         address: impl Fn(usize) -> usize,
-    ) {
+    ) -> Result<()> {
+        if let Some(spool) = &mut self.spool {
+            let bits = digits
+                .iter()
+                .map(|&(_, shift, width)| shift + width)
+                .max()
+                .unwrap_or(0);
+            let codes = Codes::pack(len, bits, (0..len).map(|i| address(i) as u128))
+                .ok_or("invalid lookup witness")?;
+            let offset = spool.save(&codes)?;
+            for &(slot, shift, width) in digits {
+                spool.slots[slot.0].push(Record {
+                    offset,
+                    plane: 0,
+                    width: 1 << width,
+                    shift: Some(shift),
+                });
+            }
+            return Ok(());
+        }
         let stride = len.div_ceil(ROWS);
         for &(slot, _, width) in digits {
             self.blocks[slot.0] = F128::zeroed_vec(stride << width);
@@ -205,6 +320,7 @@ impl Packed<'_> {
                 }
             }
         }
+        Ok(())
     }
 
     pub(crate) fn write(
@@ -219,6 +335,19 @@ impl Packed<'_> {
             return Err("invalid witness plane");
         }
         if width == 0 {
+            return Ok(());
+        }
+        if let Some(spool) = &mut self.spool {
+            let len = 1 << region.bits;
+            let codes = Codes::pack(len, width, (0..len).map(code))
+                .ok_or("integer outside the witness range")?;
+            let offset = spool.save(&codes)?;
+            spool.slots[slot.0].push(Record {
+                offset,
+                plane,
+                width,
+                shift: None,
+            });
             return Ok(());
         }
         let stride = 1 << region.bits.saturating_sub(ROW_BITS);
@@ -395,7 +524,7 @@ impl Plan {
                 .commit(&block, &mut channel)
                 .map_err(|_| "could not commit witness")?;
             transcript.append_bytes(&root.0);
-            roots.push(root);
+            roots.push(root.0);
             commitments.push((data, block, channel));
         }
         let mut messages = Messages::default();
@@ -416,13 +545,106 @@ impl Plan {
             bit_proofs.push(channel.finish());
         }
         Ok(Proof {
+            metadata: ProofMetadata {
+                roots,
+                widths: packed.widths,
+                messages,
+                openings,
+                transcript: transcript.narg_string().to_vec(),
+            },
+            bit_proofs,
+        })
+    }
+
+    pub(crate) fn prove_streamed(
+        &self,
+        domain: &[u8; 32],
+        packed: Packed<'_>,
+        public: impl FnOnce(&mut ProverState<Keccak>),
+        check: impl FnOnce(&mut Session<'_, '_>) -> Result<Vec<Request>>,
+        mut writer: impl Write + Seek,
+    ) -> Result<()> {
+        let mut spool = packed.spool.ok_or("missing witness file")?;
+        let mut slots = vec![Vec::new(); self.groups.len()];
+        for (slot, &placement) in self.slots.iter().enumerate() {
+            if placement.planes != 0 {
+                slots[placement.group].push((slot, placement));
+            }
+        }
+
+        if writer
+            .seek(SeekFrom::End(0))
+            .map_err(|_| "could not locate proof destination")?
+            != 0
+        {
+            return Err("proof destination is not empty");
+        }
+        // Publish the header only after the group proofs and metadata have been written.
+        writer
+            .write_all(&[0; 16])
+            .map_err(|_| "could not write proof header")?;
+        let mut transcript = prover_transcript::<Keccak>(domain, b"");
+        public(&mut transcript);
+        bind_widths(&mut transcript, &packed.widths);
+        let mut roots = Vec::new();
+        for ((_, pcs), slots) in self.groups.iter().zip(&slots) {
+            let block = spool.group(slots, pcs.packed_len())?;
+            let mut channel = build_prover(DOMAIN, b"" as &[u8]);
+            let (root, _) = pcs
+                .commit(&block, &mut channel)
+                .map_err(|_| "could not commit witness")?;
+            transcript.append_bytes(&root.0);
+            roots.push(root.0);
+        }
+
+        let mut messages = Messages::default();
+        let requests =
+            self.requests(check(&mut Session::Prover(&mut transcript, &mut messages))?)?;
+        let mut openings = Messages::default();
+        let mut io = Session::Prover(&mut transcript, &mut openings);
+        for ((((params, pcs), slots), queries), expected) in
+            self.groups.iter().zip(slots).zip(requests).zip(&roots)
+        {
+            let block = spool.group(&slots, pcs.packed_len())?;
+            let mut channel = build_prover(DOMAIN, b"" as &[u8]);
+            let (root, data) = pcs
+                .commit(&block, &mut channel)
+                .map_err(|_| "could not recommit witness")?;
+            if &root.0 != expected {
+                return Err("regenerated witness root differs");
+            }
+            let claim = self.reduce(&queries, params, Some(&block), &mut io)?;
+            world_prover::BitZProver::new(*params, 8)
+                .prove(&claim, pcs, &data, block, &mut channel)
+                .map_err(|_| "could not prove witness evaluation")?;
+            let proof = channel.finish();
+            for bytes in [&proof.narg_string, &proof.hints] {
+                writer
+                    .write_all(&(bytes.len() as u64).to_le_bytes())
+                    .and_then(|_| writer.write_all(bytes))
+                    .map_err(|_| "could not write witness proof")?;
+            }
+        }
+        drop(spool);
+        let proof = ProofMetadata {
             roots,
             widths: packed.widths,
             messages,
             openings,
-            bit_proofs,
             transcript: transcript.narg_string().to_vec(),
-        })
+        };
+        let metadata = writer
+            .stream_position()
+            .map_err(|_| "could not locate proof metadata")?;
+        proof_codec()
+            .serialize_into(&mut writer, &proof)
+            .map_err(|_| "could not write proof metadata")?;
+        writer
+            .rewind()
+            .and_then(|_| writer.write_all(FILE_MAGIC))
+            .and_then(|_| writer.write_all(&metadata.to_le_bytes()))
+            .and_then(|_| writer.flush())
+            .map_err(|_| "could not finalize proof")
     }
 
     pub(crate) fn verify(
@@ -432,29 +654,71 @@ impl Plan {
         public: impl FnOnce(&mut VerifierState<'_, Keccak>),
         check: impl FnOnce(&mut Session<'_, '_>) -> Result<Vec<Request>>,
     ) -> Result<()> {
-        if proof.roots.len() != self.groups.len() || proof.bit_proofs.len() != self.groups.len() {
+        if proof.bit_proofs.len() != self.groups.len() {
+            return Err("invalid proof group count");
+        }
+        self.verify_with(domain, &proof.metadata, public, check, |i| {
+            Ok(Cow::Borrowed(&proof.bit_proofs[i]))
+        })
+    }
+
+    pub(crate) fn verify_streamed(
+        &self,
+        domain: &[u8; 32],
+        proof: &ProofMetadata,
+        end: u64,
+        mut reader: impl Read + Seek,
+        public: impl FnOnce(&mut VerifierState<'_, Keccak>),
+        check: impl FnOnce(&mut Session<'_, '_>) -> Result<Vec<Request>>,
+    ) -> Result<()> {
+        reader
+            .seek(SeekFrom::Start(16))
+            .map_err(|_| "could not locate witness proofs")?;
+        let mut reader = reader.take(end - 16);
+        self.verify_with(domain, proof, public, check, |_| {
+            Ok(Cow::Owned(BitProof {
+                narg_string: read_bytes(&mut reader)?,
+                hints: read_bytes(&mut reader)?,
+            }))
+        })?;
+        if reader.limit() != 0 {
+            return Err("unused witness proofs");
+        }
+        Ok(())
+    }
+
+    fn verify_with<'p>(
+        &self,
+        domain: &[u8; 32],
+        proof: &ProofMetadata,
+        public: impl FnOnce(&mut VerifierState<'_, Keccak>),
+        check: impl FnOnce(&mut Session<'_, '_>) -> Result<Vec<Request>>,
+        mut group_proof: impl FnMut(usize) -> Result<Cow<'p, BitProof>>,
+    ) -> Result<()> {
+        if proof.roots.len() != self.groups.len() {
             return Err("invalid proof group count");
         }
         let mut transcript = verifier_transcript::<Keccak>(domain, b"", &proof.transcript);
         public(&mut transcript);
         bind_widths(&mut transcript, &proof.widths);
         for root in &proof.roots {
-            transcript.append_bytes(&root.0);
+            transcript.append_bytes(root);
         }
         let mut io = proof.messages.verifier(&mut transcript);
         let requests = self.requests(check(&mut io)?)?;
         io.finish()?;
         let mut io = proof.openings.verifier(&mut transcript);
-        for ((((params, pcs), &root), bits), requests) in self
+        for (i, (((params, pcs), &root), requests)) in self
             .groups
             .iter()
             .zip(&proof.roots)
-            .zip(&proof.bit_proofs)
             .zip(requests)
+            .enumerate()
         {
-            let mut channel = build_verifier(DOMAIN, b"" as &[u8], bits);
+            let bits = group_proof(i)?;
+            let mut channel = build_verifier(DOMAIN, b"" as &[u8], &bits);
             let commitment = pcs
-                .receive_commitment(root, &mut channel)
+                .receive_commitment(Root(root), &mut channel)
                 .map_err(|_| "invalid commitment")?;
             let claim = self.reduce(&requests, params, None, &mut io)?;
             world_verifier::BitZVerifier::new(*params, 8)
@@ -473,4 +737,68 @@ fn bind_widths(transcript: &mut impl Transcript, widths: &[usize]) {
     for &width in widths {
         transcript.append(&(width as u64));
     }
+}
+
+// Header: magic and metadata offset. The group records occupy the bytes before metadata.
+const FILE_MAGIC: &[u8; 8] = b"ATLSPRF1";
+
+fn proof_codec() -> impl Options {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+}
+
+fn read_u64(mut reader: impl Read) -> Result<u64> {
+    let mut bytes = [0; 8];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|_| "truncated proof")?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+fn read_bytes(reader: &mut std::io::Take<impl Read>) -> Result<Vec<u8>> {
+    let len = read_u64(&mut *reader)?;
+    if len > reader.limit() {
+        return Err("invalid witness proof length");
+    }
+    let mut part = reader.take(len);
+    let mut bytes = Vec::new();
+    part.read_to_end(&mut bytes)
+        .map_err(|_| "could not read witness proof")?;
+    if part.limit() != 0 {
+        return Err("truncated witness proof");
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn read_proof(mut reader: impl Read + Seek) -> Result<(ProofMetadata, u64)> {
+    let length = reader
+        .seek(SeekFrom::End(0))
+        .map_err(|_| "could not locate proof end")?;
+    reader
+        .rewind()
+        .map_err(|_| "could not locate proof header")?;
+    let mut magic = [0; 8];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|_| "truncated proof header")?;
+    if &magic != FILE_MAGIC {
+        return Err("invalid proof header");
+    }
+    let metadata = read_u64(&mut reader)?;
+    if !(16..length).contains(&metadata) {
+        return Err("invalid proof metadata offset");
+    }
+    reader
+        .seek(SeekFrom::Start(metadata))
+        .map_err(|_| "could not locate proof metadata")?;
+    let mut tail = reader.take(length - metadata);
+    let proof = proof_codec()
+        .with_limit(length - metadata)
+        .deserialize_from(&mut tail)
+        .map_err(|_| "could not read proof metadata")?;
+    if tail.limit() != 0 {
+        return Err("unused proof metadata");
+    }
+    Ok((proof, metadata))
 }

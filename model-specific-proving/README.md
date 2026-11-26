@@ -85,3 +85,11 @@ cargo run --release --manifest-path model-specific-proving/Cargo.toml \
   --features safetensors-weights --bin prove-model -- \
   models/gpt2-tiny 14 17 42
 ```
+
+For large Top-K proofs, `Model::prove_top_k_to` writes to an empty,
+seekable file and returns the selected candidates. Pass those candidates
+and the proof file to `Model::verify_top_k_from` with the same model,
+tokens, and Top-K configuration. The prover compresses the computation
+records and uses a temporary file for the data needed to regenerate
+BitZ commitments. Both sides handle the BitZ proofs one group at a time.
+Provision disk space for the temporary data and the completed proof.

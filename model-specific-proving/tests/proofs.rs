@@ -176,6 +176,30 @@ fn proves_top_k_and_picks_the_lower_id_on_ties() {
 }
 
 #[test]
+fn streams_top_k_proof_and_reads_it_back() {
+    let model = fixture(true, 3, 2, true);
+    let tokens = [0, 1, 2];
+    let cfg = TopKConfig {
+        positions: 0..3,
+        k: 2,
+        rows_per_block: 2,
+        vocab_per_block: 4,
+    };
+    let (expected, _) = model.prove_top_k(&tokens, &cfg).unwrap();
+    let mut archive = std::io::Cursor::new(Vec::new());
+    let actual = model.prove_top_k_to(&tokens, &cfg, &mut archive).unwrap();
+    assert_eq!(actual, expected);
+    model
+        .verify_top_k_from(&tokens, &cfg, &actual, &mut archive)
+        .unwrap();
+
+    archive.get_mut().push(0);
+    assert!(model
+        .verify_top_k_from(&tokens, &cfg, &actual, archive)
+        .is_err());
+}
+
+#[test]
 fn activates_gate_before_multiplying_by_up_projection() {
     let model = fixture(true, 1, 1, true);
     let (output, proof) = model.prove(&[0], None).unwrap();

@@ -83,8 +83,10 @@ pub(crate) struct Soft<'a> {
     radix: u128,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct SoftTrace {
     addresses: Vec<Arc<Addresses>>,
+    #[serde(with = "crate::protocol::storage::optional_i64")]
     overflows: Vec<Option<Vec<i64>>>,
     stats: Vec<[i64; 3]>,
 }
@@ -263,6 +265,25 @@ impl<'a> Soft<'a> {
         }
         let (block, index) = self.find(row, col);
         self.tables.probabilities[trace.addresses[block].get(index)]
+    }
+
+    pub(crate) fn restore_scores(&self, trace: &SoftTrace, block: usize) -> Result<Vec<i32>> {
+        let Tile { row, col, shape } = self.blocks[block].tile;
+        let stride = shape.width.next_power_of_two();
+        (0..shape.len())
+            .map(|i| {
+                let r = row + i / shape.width;
+                let c = col + i % shape.width;
+                if c >= self.active(r) {
+                    return Ok(0);
+                }
+                let index = i / shape.width * stride + i % shape.width;
+                let address = trace.addresses[block].get(index) as i64;
+                let overflow = trace.overflows[block].as_ref().map_or(0, |v| v[i]);
+                i32::try_from(trace.stats[r][0] - address - overflow)
+                    .map_err(|_| "invalid restored QK score")
+            })
+            .collect()
     }
 
     pub(crate) fn reverse<'w>(

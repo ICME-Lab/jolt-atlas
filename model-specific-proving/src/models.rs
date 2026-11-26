@@ -1,4 +1,7 @@
-use std::sync::OnceLock;
+use std::{
+    io::{Read, Seek, Write},
+    sync::OnceLock,
+};
 
 use jolt_transcript::{protocol_tag, prover_transcript, Keccak, Transcript};
 
@@ -12,7 +15,7 @@ use crate::{
     },
     protocol::{
         lookup::Lookups,
-        opening::{Layout, Packed, Request},
+        opening::{read_proof, Layout, Packed, Request},
         output::Ranking,
         range::{Ranges, I32},
         sumcheck::Session,
@@ -53,10 +56,12 @@ struct Block<'a> {
     residuals: [Ranges<1>; 2],
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Trace {
     attention: AttentionTrace,
     mlp: FeedTrace,
     norms: [NormTrace; 2],
+    #[serde(with = "crate::protocol::storage::two_i32")]
     residuals: [Vec<i32>; 2],
 }
 
@@ -272,9 +277,71 @@ pub struct Model<'a> {
     ranking_bound: OnceLock<i128>,
 }
 
+enum LayerTrace {
+    Expanded(Box<Trace>),
+    Compact { bytes: Vec<u8>, output: Vec<i32> },
+}
+
+impl LayerTrace {
+    fn new(mut trace: Trace, pre: bool, compact: bool) -> Result<Self> {
+        if !compact {
+            return Ok(Self::Expanded(Box::new(trace)));
+        }
+        let output = std::mem::take(if pre {
+            &mut trace.residuals[1]
+        } else {
+            &mut trace.norms[1].values
+        });
+        trace.attention.discard_derived();
+        trace.mlp.discard_derived();
+        trace.residuals[0] = Vec::new();
+        for norm in &mut trace.norms {
+            norm.values = Vec::new();
+        }
+        let mut bytes = Vec::new();
+        bincode::serialize_into(&mut bytes, &trace)
+            .map_err(|_| "could not compress layer trace")?;
+        bytes.shrink_to_fit();
+        Ok(Self::Compact { bytes, output })
+    }
+
+    fn output(&self, pre: bool) -> &[i32] {
+        match self {
+            Self::Expanded(trace) => trace.output(pre),
+            Self::Compact { output, .. } => output,
+        }
+    }
+
+    fn expand(self, pre: bool, block: &Block<'_>, input: &[i32]) -> Result<Trace> {
+        match self {
+            Self::Expanded(trace) => Ok(*trace),
+            Self::Compact { bytes, output } => {
+                let mut trace: Trace =
+                    bincode::deserialize(&bytes).map_err(|_| "could not expand layer trace")?;
+                if pre {
+                    trace.residuals[1] = output;
+                } else {
+                    trace.norms[1].values = output;
+                }
+                block.attention.restore(&mut trace.attention)?;
+                block.mlp.restore(&mut trace.mlp)?;
+                for (norm, stored) in block.norms.iter().zip(&mut trace.norms) {
+                    norm.restore(stored)?;
+                }
+                trace.residuals[0] = input
+                    .iter()
+                    .zip(trace.attention.values())
+                    .map(|(&x, &y)| x.checked_add(y).ok_or("residual overflow"))
+                    .collect::<Result<_>>()?;
+                Ok(trace)
+            }
+        }
+    }
+}
+
 struct Run {
     norms: NormTrace,
-    layers: Vec<Trace>,
+    layers: Vec<LayerTrace>,
 }
 
 impl<'a> Model<'a> {
@@ -406,7 +473,8 @@ impl<'a> Model<'a> {
         let mut hidden = norms.as_ref().map_or(input, |n| &n.values);
         let mut layers = Vec::with_capacity(self.layers.len());
         for layer in &self.layers {
-            layers.push(layer.execute(hidden, pre, packed)?);
+            let trace = layer.execute(hidden, pre, packed)?;
+            layers.push(LayerTrace::new(trace, pre, packed.is_streamed())?);
             hidden = layers.last().unwrap().output(pre);
         }
         if pre {
@@ -435,16 +503,18 @@ impl<'a> Model<'a> {
             })?];
         }
         for block in self.layers.iter().rev() {
-            let layer = trace.as_mut().and_then(|run| run.layers.pop());
+            let saved = trace.as_mut().and_then(|run| run.layers.pop());
+            let input = match trace.as_ref() {
+                Some(run) => run.layers.last().map_or_else(
+                    || if pre { input } else { &run.norms.values },
+                    |previous| previous.output(pre),
+                ),
+                None => input,
+            };
+            let layer = saved
+                .map(|layer| layer.expand(pre, block, input))
+                .transpose()?;
             claims = block.reverse(io, &mut requests, &mut lookups, &claims, pre, || {
-                let run = trace.as_ref().expect("model trace");
-                let input = if let Some(previous) = run.layers.last() {
-                    previous.output(pre)
-                } else if pre {
-                    input
-                } else {
-                    &run.norms.values
-                };
                 (layer.as_ref().expect("layer trace"), input)
             })?;
         }
@@ -569,7 +639,7 @@ impl<'a> Model<'a> {
             return Err("invalid output dimensions");
         }
         let output = Output::Logits(y);
-        layout.finish(&proof.widths)?.verify(
+        layout.finish(&proof.metadata.widths)?.verify(
             &output.domain(),
             proof,
             |t| self.bind(t, tokens, segments, output),
@@ -629,6 +699,63 @@ impl<'a> Model<'a> {
         Ok((candidates, proof))
     }
 
+    /// Write a Top-K proof to an empty, seekable destination.
+    pub fn prove_top_k_to(
+        &self,
+        tokens: &[usize],
+        config: &TopKConfig,
+        writer: impl Write + Seek,
+    ) -> Result<Vec<Vec<Candidate>>> {
+        let input = self.input(tokens, None)?;
+        let mut layout = self.layout.clone();
+        let ranking = self.ranking(&mut layout, config)?;
+        let mut packed = layout.streamed()?;
+        let run = self.execute(&input, &mut packed)?;
+        let candidates = ranking.select(&run.norms.values, &mut packed)?;
+        let selected = &candidates;
+        let output = Output::Ranked(config, selected);
+        layout.finish(&packed.widths)?.prove_streamed(
+            &output.domain(),
+            packed,
+            |t| self.bind(t, tokens, None, output),
+            move |io| {
+                let mut requests = Vec::new();
+                let claims = ranking.reverse(io, &mut requests, selected, || &run.norms.values)?;
+                self.reverse(io, &input, claims, Some(run), requests)
+            },
+            writer,
+        )?;
+        Ok(candidates)
+    }
+
+    /// Verify a proof produced by `prove_top_k_to`, reading one BitZ group at a time.
+    pub fn verify_top_k_from(
+        &self,
+        tokens: &[usize],
+        config: &TopKConfig,
+        candidates: &[Vec<Candidate>],
+        mut reader: impl Read + Seek,
+    ) -> Result<()> {
+        let input = self.input(tokens, None)?;
+        let mut layout = self.layout.clone();
+        let ranking = self.ranking(&mut layout, config)?;
+        ranking.validate(candidates)?;
+        let output = Output::Ranked(config, candidates);
+        let (proof, end) = read_proof(&mut reader)?;
+        layout.finish(&proof.widths)?.verify_streamed(
+            &output.domain(),
+            &proof,
+            end,
+            reader,
+            |t| self.bind(t, tokens, None, output),
+            |io| {
+                let mut requests = Vec::new();
+                let claims = ranking.reverse(io, &mut requests, candidates, || unreachable!())?;
+                self.reverse(io, &input, claims, None, requests)
+            },
+        )
+    }
+
     pub fn verify_top_k(
         &self,
         tokens: &[usize],
@@ -641,7 +768,7 @@ impl<'a> Model<'a> {
         let ranking = self.ranking(&mut layout, config)?;
         ranking.validate(candidates)?;
         let output = Output::Ranked(config, candidates);
-        layout.finish(&proof.widths)?.verify(
+        layout.finish(&proof.metadata.widths)?.verify(
             &output.domain(),
             proof,
             |t| self.bind(t, tokens, None, output),

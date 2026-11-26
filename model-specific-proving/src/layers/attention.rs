@@ -21,6 +21,7 @@ struct Project<'a> {
     rotation: Option<Rotation<'a>>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct ProjectTrace {
     linear: Rounded,
     norm: Option<NormTrace>,
@@ -122,6 +123,7 @@ struct Head<'a> {
     value: Rounding,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct HeadTrace {
     scores: Vec<Rounded>,
     soft: SoftTrace,
@@ -140,15 +142,35 @@ pub(crate) struct AttentionPlan<'a> {
     output: Linear<'a>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct AttentionTrace {
     queries: Vec<ProjectTrace>,
     groups: Vec<(ProjectTrace, Rounded)>,
     heads: Vec<HeadTrace>,
+    #[serde(with = "crate::protocol::storage::i32s")]
     concatenated: Vec<i32>,
     output: Rounded,
 }
 
 impl AttentionTrace {
+    pub(crate) fn discard_derived(&mut self) {
+        for project in self
+            .queries
+            .iter_mut()
+            .chain(self.groups.iter_mut().map(|(key, _)| key))
+        {
+            if let Some(norm) = &mut project.norm {
+                norm.values = Vec::new();
+            }
+        }
+        for head in &mut self.heads {
+            for scores in &mut head.scores {
+                scores.values = Vec::new();
+            }
+        }
+        self.concatenated = Vec::new();
+    }
+
     pub(crate) fn values(&self) -> &[i32] {
         &self.output.values
     }
@@ -334,13 +356,7 @@ impl<'a> AttentionPlan<'a> {
                 });
             }
         }
-        let mut concatenated = Vec::with_capacity(self.joined.len());
-        for row in 0..n {
-            for head in &heads {
-                concatenated
-                    .extend_from_slice(&head.value.values[row * value_width..][..value_width]);
-            }
-        }
+        let concatenated = self.concatenate(&heads, value_width);
         let output = self.output.execute(&concatenated, packed)?;
         Ok(AttentionTrace {
             queries,
@@ -349,6 +365,36 @@ impl<'a> AttentionPlan<'a> {
             concatenated,
             output,
         })
+    }
+
+    fn concatenate(&self, heads: &[HeadTrace], width: usize) -> Vec<i32> {
+        let mut values = Vec::with_capacity(self.joined.len());
+        for row in 0..self.joined.rows {
+            for head in heads {
+                values.extend_from_slice(&head.value.values[row * width..][..width]);
+            }
+        }
+        values
+    }
+
+    pub(crate) fn restore(&self, trace: &mut AttentionTrace) -> Result<()> {
+        for (plan, project) in self.query.iter().zip(&mut trace.queries).chain(
+            self.groups
+                .iter()
+                .map(|(key, _)| key)
+                .zip(trace.groups.iter_mut().map(|(key, _)| key)),
+        ) {
+            if let (Some(norm), Some(trace)) = (&plan.norm, &mut project.norm) {
+                norm.restore(trace)?;
+            }
+        }
+        for (head, witness) in self.heads.iter().zip(&mut trace.heads) {
+            for (block, rounded) in witness.scores.iter_mut().enumerate() {
+                rounded.values = head.soft.restore_scores(&witness.soft, block)?;
+            }
+        }
+        trace.concatenated = self.concatenate(&trace.heads, self.groups[0].1.shape().width);
+        Ok(())
     }
 
     fn score(&self, head: usize, scores: &[Rounded], row: usize, col: usize) -> i32 {

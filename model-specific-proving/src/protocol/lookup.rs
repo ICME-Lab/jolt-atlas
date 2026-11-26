@@ -15,7 +15,9 @@ use super::{
 // This limits the simultaneously materialized digit columns, in bytes.
 const LOOKUP_LINK_BYTES: usize = 192 * 1024 * 1024;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Addresses {
+    #[serde(with = "super::storage::bytes")]
     slots: Vec<u8>,
     bits: usize,
     len: usize,
@@ -122,8 +124,7 @@ impl Lookup {
         if addresses.len != 1 << self.cells || addresses.bits != self.bits {
             return Err("invalid lookup witness");
         }
-        packed.one_hot(&self.digits, addresses.len, |i| addresses.get(i));
-        Ok(())
+        packed.one_hot(&self.digits, addresses.len, |i| addresses.get(i))
     }
 }
 

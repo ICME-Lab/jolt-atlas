@@ -721,6 +721,7 @@ name = "model-specific-proving"
 version = "0.1.0"
 dependencies = [
  "atlas-trace",
+ "bincode",
  "common",
  "crypto-primitives",
  "field",
@@ -738,6 +739,7 @@ dependencies = [
  "safetensors",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "transcript",

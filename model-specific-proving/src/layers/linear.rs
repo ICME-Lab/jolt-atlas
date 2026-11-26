@@ -11,14 +11,17 @@ use crate::protocol::{
     Result,
 };
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Rounded {
+    #[serde(with = "crate::protocol::storage::i32s")]
     pub values: Vec<i32>,
     pub(crate) remainder: Remainder,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) enum Remainder {
-    Narrow(Vec<u16>),
-    Wide(Vec<u32>),
+    Narrow(#[serde(with = "crate::protocol::storage::u16s")] Vec<u16>),
+    Wide(#[serde(with = "crate::protocol::storage::u32s")] Vec<u32>),
 }
 
 impl Rounded {

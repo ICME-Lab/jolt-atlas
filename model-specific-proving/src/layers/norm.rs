@@ -20,8 +20,11 @@ pub(crate) struct Norm<'a> {
     remainder_gap: Ranges<1>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct NormTrace {
+    #[serde(with = "crate::protocol::storage::i32s")]
     pub values: Vec<i32>,
+    #[serde(with = "crate::protocol::storage::i64s")]
     quotients: Vec<i64>,
     stats: Vec<[i128; 9]>,
 }
@@ -189,10 +192,7 @@ impl<'a> Norm<'a> {
             let stats = self.row_stats(row);
             for (col, &input) in row.iter().enumerate() {
                 let q = (((i128::from(input) - stats[6]) << self.bits).div_euclid(stats[3])) as i64;
-                let affine = i128::from(q) * i128::from(self.params.gain[col]);
-                let output =
-                    i32::try_from((affine >> self.bits) + i128::from(self.params.bias[col]))
-                        .map_err(|_| "normalization overflow")?;
+                let output = self.affine(q, col)?;
                 trace.values.push(output);
                 trace.quotients.push(q);
                 for (column, value) in columns
@@ -213,6 +213,25 @@ impl<'a> Norm<'a> {
         self.remainder.record_adaptive(packed, &columns[2])?;
         self.remainder_gap.record_adaptive(packed, &columns[3])?;
         Ok(trace)
+    }
+
+    fn affine(&self, quotient: i64, col: usize) -> Result<i32> {
+        let product = i128::from(quotient) * i128::from(self.params.gain[col]);
+        i32::try_from((product >> self.bits) + i128::from(self.params.bias[col]))
+            .map_err(|_| "normalization overflow")
+    }
+
+    pub(crate) fn restore(&self, trace: &mut NormTrace) -> Result<()> {
+        if trace.values.is_empty() {
+            let width = self.cells.shape.width;
+            trace.values = trace
+                .quotients
+                .iter()
+                .enumerate()
+                .map(|(i, &q)| self.affine(q, i % width))
+                .collect::<Result<_>>()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn reverse<'w>(

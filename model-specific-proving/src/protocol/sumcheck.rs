@@ -16,7 +16,7 @@ use super::{
     Result,
 };
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Messages {
     fields: Vec<F>,
     checks: Vec<SingleSumcheckProof<F>>,

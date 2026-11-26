@@ -10,10 +10,6 @@ resolver = "2"
 metal = ["world-prover/gkr-backend"]
 safetensors-weights = ["dep:safetensors", "dep:half", "dep:atlas-trace", "dep:libm", "dep:serde_json"]
 
-[[bin]]
-name = "prove-model"
-required-features = ["safetensors-weights"]
-
 [dependencies]
 bincode = "1.3"
 tracing = "0.1"

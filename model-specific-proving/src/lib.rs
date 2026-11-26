@@ -1,7 +1,9 @@
-//! Fixed-point transformer proofs over public model parameters.
+//! Model-specific proof relations and their reductions.
 
-pub mod layers;
-pub mod models;
-pub mod protocol;
-#[cfg(feature = "safetensors-weights")]
-pub mod weights;
+pub mod bitz;
+pub mod field;
+mod fold;
+pub mod norm;
+
+pub mod projection;
+pub mod residual;

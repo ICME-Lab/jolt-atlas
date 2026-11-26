@@ -7,7 +7,7 @@ use crate::{
     protocol::{Candidate, TopKConfig},
     tensor::Shape,
 };
-use jolt_field::Ring;
+use jolt_field::{Ring, Zero};
 use rayon::prelude::*;
 
 pub(crate) struct Top<'a> {
@@ -74,6 +74,25 @@ impl<'a> Top<'a> {
         let last = row.last().unwrap();
         let upper = self.scale * (i128::from(last.logit) + i128::from(candidate > last.id)) - 1;
         (self.scale * i128::from(i32::MIN), upper)
+    }
+
+    fn eval_bounds(&self, candidates: &[Candidate], start: usize, weights: &[F]) -> (F, F) {
+        let last = candidates.last().unwrap();
+        let min = self.scale * i128::from(i32::MIN);
+        let max = self.scale * i128::from(last.logit) - 1;
+        let above = (last.id + 1).saturating_sub(start);
+        let suffix: F = weights.iter().skip(above).copied().sum();
+        let mut lo = F::from_i128(min);
+        let mut hi = F::from_i128(max) + suffix * F::from_i128(self.scale);
+        for candidate in candidates {
+            if let Some(&w) = candidate.id.checked_sub(start).and_then(|i| weights.get(i)) {
+                let base = max + self.scale * i128::from(candidate.id > last.id);
+                let value = self.scale * i128::from(candidate.logit);
+                lo += w * F::from_i128(value - min);
+                hi += w * F::from_i128(value + self.scale - 1 - base);
+            }
+        }
+        (lo, hi)
     }
 
     pub fn select(&self, values: &[i32]) -> Result<(Vec<Vec<Candidate>>, Vec<i128>)> {
@@ -179,54 +198,84 @@ impl<'a> Top<'a> {
         let width = self.input.cols;
         let stride = self.input.stride();
         let mut claims = Vec::new();
-        for check in checks {
-            let d = check.shape;
-            let point = io.sample(d.bits(), d.bits())?;
-            let (row, col) = point.split_at(d.row_bits());
-            let cw = basis(col);
-            let rw = basis(row);
-            let mut weight = vec![F::from_u64(0); stride];
-            let mut lower = F::from_u64(0);
-            let mut upper = F::from_u64(0);
-            for (&a, matrix) in cw
-                .iter()
-                .zip(self.tokens[check.col * width..].chunks_exact(width))
-            {
-                for (out, &b) in weight.iter_mut().zip(matrix) {
-                    *out += a * F::from_i32(b);
-                }
-            }
-            for (r, &a) in rw.iter().enumerate() {
-                for (c, &b) in cw.iter().enumerate() {
-                    let (min, max) = self.bounds(
-                        &public[check.row + r - self.config.positions.start],
-                        check.col + c,
-                    );
-                    lower += a * b * F::from_i128(min);
-                    upper += a * b * F::from_i128(max);
-                }
-            }
-            let bound = || {
-                let input = values.unwrap();
-                let mut x = vec![F::from_u64(0); stride];
+        for blocks in checks.chunk_by(|a, b| a.row == b.row) {
+            let first = &blocks[0];
+            let rows = first.shape.rows;
+            let row_bits = first.shape.row_bits();
+            let row = if row_bits == 0 {
+                Vec::new()
+            } else {
+                io.sample(row_bits, row_bits)?
+            };
+            let rw = basis(&row);
+            let hidden = values.map(|input| {
+                let mut x = vec![F::zero(); stride];
                 for (r, &a) in rw.iter().enumerate() {
-                    for (out, &b) in x.iter_mut().zip(&input[(check.row + r) * width..][..width]) {
+                    for (out, &b) in x.iter_mut().zip(&input[(first.row + r) * width..][..width]) {
                         *out += a * F::from_i32(b);
                     }
                 }
                 x
-            };
-            let [raw] =
-                io.values(|| [bound().into_iter().zip(&weight).map(|(a, &b)| a * b).sum()])?;
-            requests.push(check.low, &point, raw - lower);
-            requests.push(check.high, &point, upper - raw);
-            let end = io.dot(raw, weight, bound)?;
-            let prefix = self.input.row_bits() - row.len();
-            let index = check.row / d.rows;
-            let point: Vec<_> = (0..prefix)
+            });
+            let mut terms = Vec::with_capacity(blocks.len());
+            for check in blocks {
+                let cols = check.shape.bits() - row_bits;
+                let col = if cols == 0 {
+                    Vec::new()
+                } else {
+                    io.sample(cols, cols)?
+                };
+                let cw = basis(&col);
+                let point: Vec<_> = row.iter().chain(&col).copied().collect();
+                let mut weight = vec![F::zero(); stride];
+                let mut lower = F::zero();
+                let mut upper = F::zero();
+                for (&a, matrix) in cw
+                    .iter()
+                    .zip(self.tokens[check.col * width..].chunks_exact(width))
+                {
+                    for (out, &b) in weight.iter_mut().zip(matrix) {
+                        *out += a * F::from_i32(b);
+                    }
+                }
+                for (r, &a) in rw.iter().enumerate() {
+                    let (min, max) = self.eval_bounds(
+                        &public[check.row + r - self.config.positions.start],
+                        check.col,
+                        &cw,
+                    );
+                    lower += a * min;
+                    upper += a * max;
+                }
+                let [raw] = io.values(|| {
+                    [hidden
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .zip(&weight)
+                        .map(|(&a, &b)| a * b)
+                        .sum()]
+                })?;
+                requests.push(check.low, &point, raw - lower);
+                requests.push(check.high, &point, upper - raw);
+                terms.push((raw, weight));
+            }
+            let mix = io.sample(terms.len(), terms.len())?;
+            let mut sum = F::zero();
+            let mut weight = vec![F::zero(); stride];
+            for ((raw, projected), a) in terms.into_iter().zip(mix) {
+                sum += a * raw;
+                for (out, w) in weight.iter_mut().zip(projected) {
+                    *out += a * w;
+                }
+            }
+            let end = io.dot(sum, weight, || hidden.unwrap())?;
+            let prefix = self.input.row_bits() - row_bits;
+            let index = first.row / rows;
+            let point = (0..prefix)
                 .rev()
                 .map(|i| F::from_bool(index & (1 << i) != 0))
-                .chain(row.iter().copied())
+                .chain(row)
                 .chain(end.point)
                 .collect();
             claims.push(Claim {

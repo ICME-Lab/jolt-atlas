@@ -153,19 +153,20 @@ impl Activated {
             mask * (where_output * y * if gated { up } else { F::one() }
                 + spot * (coefficients[0] * signed + clamp))
         };
+        let advice = io.advice();
         let (end, values) = io.fold(
             claim.value,
             vars,
             if gated { 5 } else { 4 },
             || {
                 let x = input.unwrap();
-                let indexes = self.lookup.addresses.as_ref().unwrap();
+                let index = |i| self.lookup.code(advice.unwrap(), i);
                 let q = crate::fold::basis(&claim.point);
                 let spot = crate::fold::basis(check);
                 [
                     Column::source(len, |i| shape.at(x, i)),
-                    Column::source(len, |i| F::from_u32(indexes[i])),
-                    Column::source(len, |i| F::from_i32(table[indexes[i] as usize])),
+                    Column::source(len, move |i| F::from_u32(index(i))),
+                    Column::source(len, move |i| F::from_i32(table[index(i) as usize])),
                     Column::source(len, |i| {
                         shape.index(i).map_or(F::zero(), |j| {
                             F::from_i64(address(x[j], p.lower, last, symmetric).1[0])

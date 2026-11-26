@@ -1,4 +1,5 @@
 use crate::{
+    advice::Advice,
     field::{Mixing, F},
     fold::{basis, Column, Fold},
     norm::Claim,
@@ -21,7 +22,7 @@ pub(crate) struct Messages {
 }
 
 pub(crate) enum Channel<'a, 'proof> {
-    Send(&'a mut ProverState<Keccak>, &'a mut Messages),
+    Send(&'a mut ProverState<Keccak>, &'a mut Messages, &'a Advice),
     Check(
         &'a mut VerifierState<'proof, Keccak>,
         &'proof [F],
@@ -42,6 +43,13 @@ impl<'a, 'p> Channel<'a, 'p> {
         )
     }
 
+    pub fn advice(&self) -> Option<&'a Advice> {
+        match self {
+            Self::Send(_, _, advice) => Some(*advice),
+            Self::Check(..) => None,
+        }
+    }
+
     pub fn finish(self) -> Result<()> {
         if let Self::Check(_, fields, rounds, norms, projections) = self {
             if !fields.is_empty()
@@ -57,14 +65,14 @@ impl<'a, 'p> Channel<'a, 'p> {
 
     pub fn sample(&mut self, count: usize, loss: usize) -> Result<Vec<F>> {
         match self {
-            Self::Send(t, _) => t.mix(count, loss),
+            Self::Send(t, _, _) => t.mix(count, loss),
             Self::Check(t, _, _, _, _) => t.mix(count, loss),
         }
     }
 
     pub fn values<const N: usize>(&mut self, produce: impl FnOnce() -> [F; N]) -> Result<[F; N]> {
         match self {
-            Self::Send(t, data) => {
+            Self::Send(t, data, _) => {
                 let values = produce();
                 t.append_values(&values);
                 data.fields.extend(values);
@@ -117,7 +125,7 @@ impl<'a, 'p> Channel<'a, 'p> {
             format: SingleFormat::Compressed,
         };
         let (end, values) = match self {
-            Self::Send(t, data) => {
+            Self::Send(t, data, _) => {
                 let mut kernel = Fold {
                     columns: columns(),
                     degree,
@@ -146,7 +154,7 @@ impl<'a, 'p> Channel<'a, 'p> {
 
     pub fn fields(&mut self, count: usize, produce: impl FnOnce() -> Vec<F>) -> Result<Vec<F>> {
         match self {
-            Self::Send(t, data) => {
+            Self::Send(t, data, _) => {
                 let values = produce();
                 t.append_values(&values);
                 data.fields.extend_from_slice(&values);

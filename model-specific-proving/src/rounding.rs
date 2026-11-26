@@ -12,7 +12,6 @@ use rayon::prelude::*;
 pub(crate) struct Rounded {
     pub shape: Shape,
     pub values: Option<Vec<i32>>,
-    remainder: Option<Vec<u32>>,
     value_slot: Option<Slot>,
     remainder_slot: Slot,
     bits: u32,
@@ -68,7 +67,6 @@ impl Rounded {
         Ok(Self {
             shape,
             values,
-            remainder,
             value_slot,
             remainder_slot,
             bits,
@@ -81,10 +79,13 @@ impl Rounded {
         requests: &mut Requests,
         claim: &Claim<F>,
     ) -> Result<F> {
+        let advice = io.advice();
         let [r] = io.values(|| {
-            [self
-                .shape
-                .eval(self.remainder.as_ref().unwrap(), &claim.point)]
+            let advice = advice.unwrap();
+            let stride = self.shape.stride();
+            [self.shape.eval_with(&claim.point, |r, c| {
+                advice.value(self.remainder_slot, r * stride + c)
+            })]
         })?;
         if let Some(slot) = self.value_slot {
             requests.push(slot, &claim.point, claim.value);

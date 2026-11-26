@@ -167,48 +167,73 @@ impl Block {
             self.m.values()
         }
     }
+
+    fn take_output(&mut self, decoder: bool) -> Vec<i32> {
+        if decoder {
+            self.after_mlp.values.take().unwrap()
+        } else {
+            std::mem::take(&mut self.m.trace.as_mut().unwrap().result)
+        }
+    }
 }
 
 struct Run {
     blocks: Vec<Saved>,
     trace: Option<std::cell::RefCell<std::fs::File>>,
     norm: Normalized,
+    last: Option<Vec<i32>>,
 }
 
 enum Saved {
     InMemory(Box<Block>),
-    OnDisk { offset: u64, output: Vec<i32> },
-}
-
-impl Saved {
-    fn output(&self, decoder: bool) -> Option<&[i32]> {
-        match self {
-            Self::InMemory(block) => block.output(decoder),
-            Self::OnDisk { output, .. } => Some(output),
-        }
-    }
+    OnDisk { offset: u64, body: u64 },
 }
 
 impl Run {
     fn output(&self, decoder: bool) -> Option<&[i32]> {
         if decoder {
             self.norm.values()
+        } else if let Some(last) = &self.last {
+            Some(last)
+        } else if let Saved::InMemory(block) = self.blocks.last().unwrap() {
+            block.output(false)
         } else {
-            self.blocks.last().unwrap().output(false)
+            unreachable!()
         }
     }
 
-    fn block(&self, index: usize) -> Result<BlockRef<'_>> {
+    fn layer_output(&self, index: usize, decoder: bool) -> Result<Option<Cow<'_, [i32]>>> {
         match &self.blocks[index] {
-            Saved::InMemory(b) => Ok(BlockRef::Borrowed(b)),
+            Saved::InMemory(b) => Ok(b.output(decoder).map(Cow::Borrowed)),
+            Saved::OnDisk { .. } if index + 1 == self.blocks.len() => {
+                Ok(self.last.as_deref().map(Cow::Borrowed))
+            }
             Saved::OnDisk { offset, .. } => {
                 let mut file = self.trace.as_ref().unwrap().borrow_mut();
                 file.seek(SeekFrom::Start(*offset))
-                    .map_err(|_| "could not locate layer trace")?;
-                codec()
+                    .map_err(|_| "could not locate layer output")?;
+                let output = codec()
                     .deserialize_from(std::io::BufReader::new(&mut *file))
-                    .map(BlockRef::Owned)
-                    .map_err(|_| "could not read layer trace")
+                    .map_err(|_| "could not read layer output")?;
+                Ok(Some(Cow::Owned(output)))
+            }
+        }
+    }
+
+    fn block(&self, index: usize, norm_output: Option<Cow<'_, [i32]>>) -> Result<BlockRef<'_>> {
+        match &self.blocks[index] {
+            Saved::InMemory(b) => Ok(BlockRef::Borrowed(b)),
+            Saved::OnDisk { body, .. } => {
+                let mut file = self.trace.as_ref().unwrap().borrow_mut();
+                file.seek(SeekFrom::Start(*body))
+                    .map_err(|_| "could not locate layer trace")?;
+                let mut block: Block = codec()
+                    .deserialize_from(std::io::BufReader::new(&mut *file))
+                    .map_err(|_| "could not read layer trace")?;
+                if let Some(output) = norm_output {
+                    block.m.trace.as_mut().unwrap().result = output.into_owned();
+                }
+                Ok(BlockRef::Owned(block))
             }
         }
     }
@@ -349,6 +374,7 @@ impl<'a> Model<'a> {
         } else {
             None
         };
+        let mut last = None;
         for (i, p) in self.layers.iter().enumerate() {
             let ctx = self.context(i);
             let mut a = if pre {
@@ -401,7 +427,7 @@ impl<'a> Model<'a> {
                     after_mlp.values.as_deref(),
                 )?);
             }
-            let block = Block {
+            let mut block = Block {
                 a,
                 attention,
                 after_attention,
@@ -413,20 +439,28 @@ impl<'a> Model<'a> {
                 let offset = file
                     .stream_position()
                     .map_err(|_| "could not locate layer trace")?;
+                let output = block.take_output(pre);
                 let mut writer = std::io::BufWriter::new(file);
+                codec()
+                    .serialize_into(&mut writer, &output)
+                    .map_err(|_| "could not store layer output")?;
+                let body = writer
+                    .stream_position()
+                    .map_err(|_| "could not locate layer trace")?;
+                last = Some(output);
                 codec()
                     .serialize_into(&mut writer, &block)
                     .map_err(|_| "could not store layer trace")?;
                 writer.flush().map_err(|_| "could not store layer trace")?;
-                Saved::OnDisk {
-                    offset,
-                    output: block.output(pre).unwrap().to_vec(),
-                }
+                Saved::OnDisk { offset, body }
             } else {
                 Saved::InMemory(Box::new(block))
             };
             blocks.push(saved);
-            x = blocks.last().unwrap().output(pre);
+            x = match blocks.last().unwrap() {
+                Saved::InMemory(block) => block.output(pre),
+                Saved::OnDisk { .. } => last.as_deref(),
+            };
         }
         if pre {
             norm = Some(Normalized::forward(advice, shape, bits, self.norm, x)?);
@@ -435,6 +469,7 @@ impl<'a> Model<'a> {
             blocks,
             trace: trace.map(std::cell::RefCell::new),
             norm: norm.unwrap(),
+            last,
         })
     }
 
@@ -450,22 +485,33 @@ impl<'a> Model<'a> {
         let (shape, bits) = (self.shape, self.bits);
         let mut lookups = Lookups::default();
         if pre {
+            let last = run.layer_output(run.blocks.len() - 1, true)?;
             claims = vec![run.norm.reverse(
                 io,
                 requests,
                 shape,
                 bits,
                 self.norm,
-                run.blocks.last().unwrap().output(true),
+                last.as_deref(),
                 &claims,
                 &[],
             )?];
         }
+        let mut norm_output = if pre {
+            None
+        } else {
+            run.layer_output(run.blocks.len() - 1, false)?
+        };
         for i in (0..run.blocks.len()).rev() {
-            let b = run.block(i)?;
+            let b = run.block(i, norm_output.take())?;
             let p = &self.layers[i];
+            let previous = i
+                .checked_sub(1)
+                .map(|j| run.layer_output(j, pre))
+                .transpose()?
+                .flatten();
             let x = if i > 0 {
-                run.blocks[i - 1].output(pre)
+                previous.as_deref()
             } else if pre {
                 Some(input)
             } else {
@@ -540,6 +586,9 @@ impl<'a> Model<'a> {
                 from_att.push(skip);
                 from_att
             };
+            if !pre {
+                norm_output = previous;
+            }
         }
         if !pre {
             claims = vec![run.norm.reverse(
@@ -745,6 +794,7 @@ impl<'a> Model<'a> {
             .unwrap_or(hidden.unwrap())
             .to_vec();
         let mut evaluations = Vec::new();
+        let expected = &output;
         let header = self.prove_with(
             &mut advice,
             tokens,
@@ -754,8 +804,9 @@ impl<'a> Model<'a> {
                 evaluations.push(one);
                 Ok(())
             },
-            |io, requests| {
-                let claims = self.output_claims(io, requests, logits.as_ref(), &output, hidden)?;
+            move |io, requests| {
+                let hidden = run.output(self.decoder.is_some());
+                let claims = self.output_claims(io, requests, logits.as_ref(), expected, hidden)?;
                 self.reverse(io, requests, &input, &run, claims)
             },
         )?;
@@ -839,14 +890,15 @@ impl<'a> Model<'a> {
         let (results, raw) = top.select(hidden.unwrap())?;
         let rank = top.record(&mut advice, &results, Some(&raw))?;
         drop(raw);
+        let expected = &results;
         let proof = self.prove_with(
             &mut advice,
             tokens,
             None,
             Output::Top(cfg, &results),
             emit,
-            |io, requests| {
-                let claims = top.reverse(io, requests, &rank, &results, hidden)?;
+            move |io, requests| {
+                let claims = top.reverse(io, requests, &rank, expected, run.output(true))?;
                 self.reverse(io, requests, &input, &run, claims)
             },
         )?;
@@ -911,7 +963,7 @@ impl<'a> Model<'a> {
         emit: impl FnMut(crate::bitz::Proof) -> Result<()>,
         work: impl FnOnce(&mut Channel<'_, '_>, &mut Requests) -> Result<()>,
     ) -> Result<Header> {
-        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v2");
+        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v3");
         let mut transcript = prover_transcript::<Keccak>(&tag, b"");
         self.bind(&mut transcript, tokens, segments, expected);
         let widths = advice.widths();
@@ -923,7 +975,7 @@ impl<'a> Model<'a> {
         let mut requests = Requests(Vec::new());
         tracing::info_span!("atlas reduce").in_scope(|| {
             work(
-                &mut Channel::Send(&mut transcript, &mut state),
+                &mut Channel::Send(&mut transcript, &mut state, advice),
                 &mut requests,
             )
         })?;
@@ -947,7 +999,7 @@ impl<'a> Model<'a> {
         read: impl FnMut(usize) -> Result<Cow<'p, crate::bitz::Proof>>,
         work: impl FnOnce(&mut Channel<'_, '_>, &mut Requests) -> Result<()>,
     ) -> Result<()> {
-        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v2");
+        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v3");
         let mut transcript = verifier_transcript::<Keccak>(&tag, b"", &proof.transcript);
         self.bind(&mut transcript, tokens, segments, expected);
         advice.bind_widths(&proof.widths)?;

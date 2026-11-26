@@ -56,7 +56,7 @@ pub(crate) fn reverse(
         })
         .collect::<Result<Vec<_>>>()?;
     match io {
-        Channel::Send(t, messages) => {
+        Channel::Send(t, messages, _) => {
             let (proof, claims) = parameters.prove(input.unwrap(), &queries, *t)?;
             messages.projections.push(proof);
             Ok(claims)

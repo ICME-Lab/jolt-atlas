@@ -381,7 +381,7 @@ impl<'a> Context<'a> {
                     value: y,
                 };
                 let pv = head.value.raw(io, requests, &y)?;
-                let codes = soft.addresses(&head.soft);
+                let codes = soft.addresses(&head.soft, io.advice());
                 let [prob, vc] =
                     values_product(io, &soft, pv, r, col, codes.as_deref(), bound_v.as_deref())?;
                 let score = soft.reverse(

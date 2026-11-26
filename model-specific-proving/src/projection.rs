@@ -136,9 +136,10 @@ impl Input {
         }
         let mix = channel.mix(queries.len(), queries.len())?;
         let mut groups: Vec<Group<F>> = Vec::new();
+        let mut shared: Vec<(&[i32], &[F], Vec<F>)> = Vec::new();
         let mut claim = F::zero();
         let scale = F::from_u64(1 << self.bits);
-        for (q, a) in queries.iter().zip(mix) {
+        for (index, (q, a)) in queries.iter().zip(mix).enumerate() {
             let (row, col) = q.output.point.split_at(row_bits);
             let rows: F = basis(row).into_iter().take(self.rows).sum();
             let weights = basis(col);
@@ -158,14 +159,36 @@ impl Input {
                     groups.last_mut().unwrap()
                 }
             };
-            for (&w, src) in weights
-                .iter()
-                .zip(q.projection.weights.chunks_exact(self.width))
-            {
-                let factor = a * w;
-                for (out, &v) in group.public.iter_mut().zip(src) {
-                    *out += factor * F::from_i32(v);
+            let same = |w: &[i32], c: &[F]| std::ptr::eq(w, q.projection.weights) && c == col;
+            if let Some((_, _, reduced)) = shared.iter().find(|(w, c, _)| same(w, c)) {
+                for (out, &value) in group.public.iter_mut().zip(reduced) {
+                    *out += a * value;
                 }
+                continue;
+            }
+            let reuse = queries[index + 1..]
+                .iter()
+                .any(|next| same(next.projection.weights, &next.output.point[row_bits..]));
+            let project = |out: &mut [F], scale: F| {
+                for (&w, src) in weights
+                    .iter()
+                    .zip(q.projection.weights.chunks_exact(self.width))
+                {
+                    let factor = scale * w;
+                    for (out, &v) in out.iter_mut().zip(src) {
+                        *out += factor * F::from_i32(v);
+                    }
+                }
+            };
+            if reuse {
+                let mut reduced = vec![F::zero(); width];
+                project(&mut reduced, F::one());
+                for (out, &value) in group.public.iter_mut().zip(&reduced) {
+                    *out += a * value;
+                }
+                shared.push((q.projection.weights, col, reduced));
+            } else {
+                project(&mut group.public, a);
             }
         }
         Ok(Batch {

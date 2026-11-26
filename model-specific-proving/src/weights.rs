@@ -75,7 +75,7 @@ pub struct ModelWeights {
     activation: (i32, Vec<i32>),
     softmax: softmax::SoftmaxTables,
     theta: Option<f64>,
-    rotary: std::sync::OnceLock<(Vec<i32>, Vec<i32>)>,
+    rotary: Vec<std::sync::OnceLock<(Vec<i32>, Vec<i32>)>>,
 }
 
 struct Reader<'a> {
@@ -427,7 +427,9 @@ impl ModelWeights {
             activation,
             softmax: softmax::softmax_tables(scale, SemVersion::V3),
             theta,
-            rotary: std::sync::OnceLock::new(),
+            rotary: (0..=limit.next_power_of_two().ilog2())
+                .map(|_| std::sync::OnceLock::new())
+                .collect(),
         })
     }
 
@@ -439,21 +441,28 @@ impl ModelWeights {
         let encoder = self.family == Family::Bert;
         let normalize = |p: &'a Affine| self.norm_params(p, qwen);
         let rotary = self.theta.map(|theta| {
-            let (cos, sin) = self.rotary.get_or_init(|| {
-                let half = self.head / 2;
-                let factor = (1u64 << self.bits) as f64;
-                let frequencies: Vec<_> = (0..half)
-                    .map(|i| libm::pow(theta, -((i * 2) as f64) / self.head as f64))
-                    .collect();
-                (0..self.limit)
-                    .flat_map(|r| {
-                        frequencies.iter().map(move |&f| {
-                            let (sin, cos) = libm::sincos(r as f64 * f);
-                            ((cos * factor).round() as i32, (sin * factor).round() as i32)
-                        })
+            let size = rows.next_power_of_two();
+            let slot = size.ilog2() as usize;
+            let (cos, sin) = self.rotary[slot..]
+                .iter()
+                .find_map(std::sync::OnceLock::get)
+                .unwrap_or_else(|| {
+                    self.rotary[slot].get_or_init(|| {
+                        let half = self.head / 2;
+                        let factor = (1u64 << self.bits) as f64;
+                        let frequencies: Vec<_> = (0..half)
+                            .map(|i| libm::pow(theta, -((i * 2) as f64) / self.head as f64))
+                            .collect();
+                        (0..size.min(self.limit))
+                            .flat_map(|r| {
+                                frequencies.iter().map(move |&f| {
+                                    let (sin, cos) = libm::sincos(r as f64 * f);
+                                    ((cos * factor).round() as i32, (sin * factor).round() as i32)
+                                })
+                            })
+                            .unzip()
                     })
-                    .unzip()
-            });
+                });
             let b = rows * self.head / 2;
             Rotary {
                 cos: &cos[..b],

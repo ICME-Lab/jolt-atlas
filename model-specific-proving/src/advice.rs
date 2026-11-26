@@ -22,8 +22,14 @@ pub(crate) struct Advice {
 
 struct Record {
     kind: RangeColumn,
-    at: u64,
-    fixed: bool,
+    packed: Packed,
+    digit: Option<(usize, usize)>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Packed {
+    at: usize,
+    width: u8,
 }
 
 pub(crate) struct Buckets(Vec<(Group, Vec<usize>)>);
@@ -74,56 +80,89 @@ impl Advice {
         width: Width,
         source: impl Fn(usize) -> i128 + Sync,
     ) -> Result<Slot> {
-        self.record(shape, width, false, source)
+        self.record(shape, width, source)
     }
 
-    pub fn planes(
+    pub fn lookup(
         &mut self,
         shape: Shape,
-        width: u8,
+        width: usize,
         source: impl Fn(usize) -> i128 + Sync,
-    ) -> Result<Slot> {
-        self.record(shape, Width::Unsigned(width), true, source)
+    ) -> Result<Packed> {
+        self.pack(shape, Width::Unsigned(width as u8), &source)
+    }
+
+    pub fn digit(&mut self, shape: Shape, packed: Packed, shift: usize, width: usize) -> Slot {
+        let slot = Slot(self.columns.len());
+        self.columns.push(Record {
+            kind: RangeColumn {
+                vars: shape.bits(),
+                width: Width::Unsigned(1 << width),
+            },
+            packed,
+            digit: Some((shift, (1 << width) - 1)),
+        });
+        slot
     }
 
     fn record(
         &mut self,
         shape: Shape,
         mut width: Width,
-        fixed: bool,
         source: impl Fn(usize) -> i128 + Sync,
     ) -> Result<Slot> {
         let slot = Slot(self.columns.len());
-        let start = self.cursor;
-        if let Some(file) = &mut self.file {
-            if !fixed {
-                let required = (0..shape.rows * shape.cols)
-                    .into_par_iter()
-                    .with_min_len(8192)
-                    .map(|j| {
-                        let x = source(j);
-                        let n = match width {
-                            Width::Signed(_) => {
-                                129 - if x < 0 {
-                                    (!x as u128).leading_zeros()
-                                } else {
-                                    (x as u128).leading_zeros()
-                                }
+        if self.file.is_some() {
+            let required = (0..shape.rows * shape.cols)
+                .into_par_iter()
+                .with_min_len(8192)
+                .map(|j| {
+                    let x = source(j);
+                    let n = match width {
+                        Width::Signed(_) => {
+                            129 - if x < 0 {
+                                (!x as u128).leading_zeros()
+                            } else {
+                                (x as u128).leading_zeros()
                             }
-                            Width::Unsigned(_) => 128 - (x as u128).leading_zeros(),
-                        };
-                        n as usize
-                    })
-                    .max()
-                    .unwrap_or(0);
-                let mut required = required;
-                required = required.max(usize::from(matches!(width, Width::Signed(_))));
-                if required > bits(width) {
-                    return Err("advice exceeds declared integer range");
-                }
-                width = resized(width, required as u8);
+                        }
+                        Width::Unsigned(_) => 128 - (x as u128).leading_zeros(),
+                    };
+                    n as usize
+                })
+                .max()
+                .unwrap_or(0);
+            let mut required = required;
+            required = required.max(usize::from(matches!(width, Width::Signed(_))));
+            if required > bits(width) {
+                return Err("advice exceeds declared integer range");
             }
-            let n = bits(width);
+            width = resized(width, required as u8);
+        }
+        let packed = self.pack(shape, width, &source)?;
+        self.columns.push(Record {
+            kind: RangeColumn {
+                vars: shape.bits(),
+                width,
+            },
+            packed,
+            digit: None,
+        });
+        Ok(slot)
+    }
+
+    fn pack(
+        &mut self,
+        shape: Shape,
+        width: Width,
+        source: &(impl Fn(usize) -> i128 + Sync),
+    ) -> Result<Packed> {
+        let n = bits(width);
+        let packed = Packed {
+            at: self.cursor as usize,
+            width: n as u8,
+        };
+        if let Some(file) = &mut self.file {
             if n != 0 {
                 let len = shape.padded();
                 let mut out = vec![0u8; (len * n).div_ceil(8)];
@@ -134,7 +173,7 @@ impl Advice {
                         let mut word = 0u128;
                         let mut used = 0;
                         for i in start..(start + 1024).min(len) {
-                            let x = shape.index(i).map_or(0, &source);
+                            let x = shape.index(i).map_or(0, source);
                             let value = encode(x, width)
                                 .ok_or("advice exceeds declared integer range")?
                                 as u128;
@@ -156,16 +195,7 @@ impl Advice {
                 self.cursor += out.len() as u64;
             }
         }
-        let kind = RangeColumn {
-            vars: shape.bits(),
-            width,
-        };
-        self.columns.push(Record {
-            kind,
-            at: start,
-            fixed,
-        });
-        Ok(slot)
+        Ok(packed)
     }
 
     pub fn widths(&self) -> Vec<u8> {
@@ -182,7 +212,7 @@ impl Advice {
         for (column, &width) in self.columns.iter_mut().zip(widths) {
             let allowed = column.kind.width;
             if usize::from(width) > bits(allowed)
-                || (column.fixed && usize::from(width) != bits(allowed))
+                || (column.digit.is_some() && usize::from(width) != bits(allowed))
                 || (matches!(allowed, Width::Signed(_)) && width == 0)
             {
                 return Err("invalid witness width");
@@ -234,17 +264,29 @@ impl Advice {
         Ok(())
     }
 
-    fn source<'a>(&'a self, ids: &'a [usize]) -> impl Fn(usize, usize) -> i128 + Sync + 'a {
-        let data = self.mapped.as_ref().unwrap();
-        move |slot, cell| {
-            let record = &self.columns[ids[slot]];
-            let width = record.kind.width;
-            let n = bits(width);
-            let bit = cell * n;
-            let at = record.at as usize + bit / 8;
-            let word = u128::from_le_bytes(data[at..][..16].try_into().unwrap());
-            ((word >> (bit % 8)) & ((1 << n) - 1)) as i128 - offset(width)
+    pub fn unpack(&self, packed: Packed, cell: usize) -> u128 {
+        let n = usize::from(packed.width);
+        if n == 0 {
+            return 0;
         }
+        let data = self.mapped.as_ref().unwrap();
+        let bit = cell * n;
+        let at = packed.at + bit / 8;
+        let word = u128::from_le_bytes(data[at..][..16].try_into().unwrap());
+        (word >> (bit % 8)) & ((1 << n) - 1)
+    }
+
+    pub fn value(&self, slot: Slot, cell: usize) -> i128 {
+        let record = &self.columns[slot.0];
+        let v = self.unpack(record.packed, cell);
+        match record.digit {
+            Some((shift, mask)) => 1i128 << ((v as usize >> shift) & mask),
+            None => v as i128 - offset(record.kind.width),
+        }
+    }
+
+    fn source<'a>(&'a self, ids: &'a [usize]) -> impl Fn(usize, usize) -> i128 + Sync + 'a {
+        move |slot, cell| self.value(Slot(ids[slot]), cell)
     }
 }
 
@@ -395,4 +437,35 @@ fn offset(width: Width) -> i128 {
 fn encode(x: i128, width: Width) -> Option<i128> {
     let n = x.checked_add(offset(width))?;
     (0..1i128 << bits(width)).contains(&n).then_some(n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jolt_transcript::{protocol_tag, prover_transcript};
+
+    #[test]
+    fn packed_lookup_commits_to_the_same_one_hot_columns() {
+        let mut packed = Advice::new(true).unwrap();
+        let mut explicit = Advice::new(true).unwrap();
+        let shape = Shape::new(8, 8).unwrap();
+        let key = packed.lookup(shape, 6, |i| i as i128).unwrap();
+        for shift in [0, 3] {
+            packed.digit(shape, key, shift, 3);
+            explicit
+                .column(shape, Width::Unsigned(8), |i| 1 << ((i >> shift) & 7))
+                .unwrap();
+        }
+        let roots = |advice: &mut Advice| {
+            let tag = protocol_tag(b"lookup-columns");
+            let mut transcript = prover_transcript::<Keccak>(&tag, b"");
+            advice
+                .buckets()
+                .unwrap()
+                .commit(advice, &mut transcript)
+                .unwrap()
+        };
+        assert_eq!(packed.widths(), explicit.widths());
+        assert_eq!(roots(&mut packed), roots(&mut explicit));
+    }
 }

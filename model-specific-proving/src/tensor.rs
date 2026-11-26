@@ -48,16 +48,22 @@ impl Shape {
     }
 
     pub fn eval<T: Copy + Into<i128>>(self, values: &[T], point: &[F]) -> F {
+        self.eval_with(point, |r, c| values[r * self.cols + c].into())
+    }
+
+    pub fn eval_with(self, point: &[F], at: impl Fn(usize, usize) -> i128) -> F {
         let (row, col) = point.split_at(self.row_bits());
         let col = basis(col);
         basis(row)
             .into_iter()
-            .zip(values.chunks_exact(self.cols))
-            .map(|(r, values)| {
+            .take(self.rows)
+            .enumerate()
+            .map(|(i, r)| {
                 r * col
                     .iter()
-                    .zip(values)
-                    .map(|(&c, &v)| c.mul_integer(v.into()))
+                    .take(self.cols)
+                    .enumerate()
+                    .map(|(j, &c)| c.mul_integer(at(i, j)))
                     .sum::<F>()
             })
             .sum()

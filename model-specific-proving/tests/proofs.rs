@@ -138,6 +138,15 @@ fn proves_encoder_with_public_segments() {
     assert!(model
         .verify(&tokens, Some(&[0, 0, 0]), &output, &proof)
         .is_err());
+
+    let rows = 128;
+    let model = fixture(false, rows, 2, false);
+    let tokens: Vec<_> = (0..rows).map(|i| i % 6).collect();
+    let segments = vec![0; rows];
+    let (output, proof) = model.prove(&tokens, Some(&segments)).unwrap();
+    model
+        .verify(&tokens, Some(&segments), &output, &proof)
+        .unwrap();
 }
 
 #[test]

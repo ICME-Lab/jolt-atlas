@@ -318,7 +318,7 @@ impl Norm<'_> {
     ) -> Result<Claim<Scalar>> {
         let domain = self.domain()?;
         let reduction = match io {
-            Channel::Send(t, data) => {
+            Channel::Send(t, data, _) => {
                 let (proof, reduction) =
                     self.prove_with(domain, input.unwrap(), witness.unwrap(), output, carry, *t)?;
                 data.norms.push(proof);

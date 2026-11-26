@@ -1,8 +1,7 @@
 use rayon::prelude::*;
-use std::sync::Arc;
 
 use crate::{
-    advice::{Advice, Requests, Slot},
+    advice::{Advice, Packed, Requests, Slot},
     channel::{Channel, Result},
     field::F,
     fold::{agreement, basis, basis_scaled, Column},
@@ -52,7 +51,7 @@ impl Table<'_> {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Lookup {
-    pub addresses: Option<Arc<[u32]>>,
+    packed: Packed,
     digits: Vec<(Slot, usize, usize)>,
     vars: usize,
 }
@@ -70,21 +69,22 @@ impl Lookup {
         let n = size.ilog2() as usize;
         let step = if (17..=24).contains(&n) { 3 } else { 4 };
         let domain = Shape::new(shape.rows.next_power_of_two(), shape.stride())?;
+        let packed = advice.lookup(domain, n, |i| i128::from(addresses.as_ref().unwrap()[i]))?;
         let mut digits = Vec::new();
         for shift in (0..n).step_by(step) {
             let width = (n - shift).min(step);
-            let positions = 1 << width;
-            let slot = advice.planes(domain, positions as u8, |i| {
-                let index = addresses.as_ref().unwrap()[i] as usize;
-                1 << ((index >> shift) & (positions - 1))
-            })?;
+            let slot = advice.digit(domain, packed, shift, width);
             digits.push((slot, shift, width));
         }
         Ok(Self {
-            addresses: addresses.map(Arc::from),
+            packed,
             digits,
             vars: domain.bits(),
         })
+    }
+
+    pub fn code(&self, advice: &Advice, i: usize) -> u32 {
+        advice.unpack(self.packed, i) as u32
     }
 }
 
@@ -156,6 +156,7 @@ impl<'a> Lookups<'a> {
             .zip(mix)
             .map(|(q, &m)| m * (a[0] * q.address + a[1] * q.outputs.0 + a[2] * q.outputs.1))
             .sum();
+        let advice = io.advice();
         let (at, [histogram]) = io.fold(
             start,
             b,
@@ -171,9 +172,9 @@ impl<'a> Lookups<'a> {
                     .map(|(reads, mix)| {
                         let mut local = vec![F::zero(); n];
                         for (r, &m) in reads.iter().zip(mix) {
-                            let codes = r.lookup.addresses.as_ref().unwrap();
-                            for (&addr, w) in codes.iter().zip(basis_scaled(&r.point, m)) {
-                                local[addr as usize] += w;
+                            let advice = advice.unwrap();
+                            for (i, w) in basis_scaled(&r.point, m).into_iter().enumerate() {
+                                local[r.lookup.code(advice, i) as usize] += w;
                             }
                         }
                         local
@@ -213,12 +214,14 @@ impl<'a> Lookups<'a> {
                             .iter()
                             .zip(mix)
                             .map(|(r, &scale)| {
-                                let codes = r.lookup.addresses.as_ref().unwrap();
+                                let advice = advice.unwrap();
                                 scale
-                                    * codes
-                                        .iter()
-                                        .zip(basis(&r.point))
-                                        .map(|(&code, w)| selection[code as usize] * w)
+                                    * basis(&r.point)
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(i, w)| {
+                                            selection[r.lookup.code(advice, i) as usize] * w
+                                        })
                                         .sum::<F>()
                             })
                             .sum()
@@ -263,6 +266,7 @@ impl<'a> Lookups<'a> {
         let terminals: Vec<_> = (0..reads.len() * size)
             .filter(|i| i % size < digits.len())
             .collect();
+        let advice = io.advice();
         let (end, results) = io.fold_many(
             partial,
             vars,
@@ -270,14 +274,17 @@ impl<'a> Lookups<'a> {
             || {
                 let mut cols = Vec::with_capacity(reads.len() * size);
                 for r in reads {
-                    let codes = r.lookup.addresses.as_ref().unwrap();
+                    let advice = advice.unwrap();
+                    let codes: Vec<_> = (0..len).map(|i| r.lookup.code(advice, i)).collect();
+                    let codes = std::sync::Arc::<[u32]>::from(codes);
                     for (&(_, shift, width), weights) in digits.iter().zip(weights) {
                         let mask = (1usize << width) - 1;
+                        let codes = codes.clone();
                         cols.push(Column::selector(len, weights, move |i| {
                             (codes[i] as usize >> shift) & mask
                         }));
                     }
-                    cols.push(Column::table(basis(&r.point), len, 1));
+                    cols.push(Column::equality(&r.point));
                 }
                 cols
             },

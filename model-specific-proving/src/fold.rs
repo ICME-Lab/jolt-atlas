@@ -11,6 +11,7 @@ pub(crate) enum Column<'a, F> {
         radix: usize,
         values: Vec<F>,
     },
+    Product(Vec<F>, Vec<F>),
     Table {
         values: Vec<F>,
         len: usize,
@@ -44,14 +45,21 @@ impl<'a, F: Field> Column<'a, F> {
         }
     }
 
+    pub(crate) fn equality(point: &[F]) -> Self {
+        let (left, right) = point.split_at(point.len() / 2);
+        Self::Product(basis(left), basis(right))
+    }
+
     fn len(&self) -> usize {
         match self {
+            Self::Product(left, right) => left.len() * right.len(),
             Self::Source(len, _) | Self::Table { len, .. } | Self::Selector { len, .. } => *len,
         }
     }
 
     fn at(&self, index: usize) -> F {
         match self {
+            Self::Product(left, right) => left[index / right.len()] * right[index % right.len()],
             Self::Source(_, read) => read(index),
             Self::Selector {
                 len,
@@ -71,6 +79,16 @@ impl<'a, F: Field> Column<'a, F> {
 
     fn bind(&mut self, point: F) {
         let half = self.len() / 2;
+        if let Self::Product(left, right) = self {
+            let values = if left.len() > 1 { left } else { right };
+            let half = values.len() / 2;
+            let (low, high) = values.split_at_mut(half);
+            for (a, &mut b) in low.iter_mut().zip(high) {
+                *a += point * (b - *a);
+            }
+            values.truncate(half);
+            return;
+        }
         if let Self::Table { values, len, shift } = self {
             *len = half;
             if half >= values.len() << *shift {

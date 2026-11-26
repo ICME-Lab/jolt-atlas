@@ -27,7 +27,6 @@ pub(crate) struct SoftTrace {
     lookups: Vec<TileTrace>,
     stats: Option<Vec<[i64; 3]>>,
     overflow: Option<Vec<i64>>,
-    remainders: Option<Vec<u32>>,
     stats_slots: [Slot; 3],
 }
 
@@ -238,19 +237,18 @@ impl<'a> Soft<'a> {
             lookups,
             stats,
             overflow,
-            remainders,
             stats_slots,
         })
     }
 
-    pub fn addresses(&self, trace: &SoftTrace) -> Option<Vec<u32>> {
-        trace.stats.as_ref()?;
+    pub fn addresses(&self, trace: &SoftTrace, advice: Option<&Advice>) -> Option<Vec<u32>> {
+        let advice = advice?;
         let mut addresses = vec![0; self.shape.padded()];
         let stride = self.shape.stride();
         for (&tile, block) in self.tiles.iter().zip(&trace.lookups) {
-            for (i, &code) in block.lookup.addresses.as_ref().unwrap().iter().enumerate() {
+            for i in 0..tile.size * tile.size {
                 let (r, c) = tile.at(i);
-                addresses[r * stride + c] = code;
+                addresses[r * stride + c] = block.lookup.code(advice, i);
             }
         }
         Some(addresses)
@@ -261,9 +259,9 @@ impl<'a> Soft<'a> {
     }
 
     #[inline]
-    fn at(&self, trace: &SoftTrace, address: u32, row: usize, col: usize) -> [F; 3] {
+    fn at(&self, trace: &SoftTrace, address: u32, row: usize, col: usize) -> [F; 2] {
         if col >= self.count(row) {
-            return [F::zero(); 3];
+            return [F::zero(); 2];
         }
         let i = row * self.shape.cols + col;
         let overflow = trace.overflow.as_ref().map_or(0, |v| v[i]);
@@ -271,7 +269,6 @@ impl<'a> Soft<'a> {
         [
             F::from_i64(shift - i64::from(address) - overflow),
             F::from_i64(overflow),
-            F::from_u32(trace.remainders.as_ref().unwrap()[i]),
         ]
     }
 
@@ -387,20 +384,24 @@ impl<'a> Soft<'a> {
         for (slot, value) in trace.stats_slots.into_iter().zip([shift, under, over]) {
             requests.push(slot, r, value);
         }
+        let advice = io.advice();
         let mut whole = [F::zero(); 6];
         for (&tile, trace_tile) in self.tiles.iter().zip(&trace.lookups) {
             let (factor, local) = tile.restrict(r, c);
             let values = io.values(|| {
-                let a = trace_tile.lookup.addresses.as_ref().unwrap();
+                let codes = codes.unwrap();
+                let advice = advice.unwrap();
                 let mut acc = [F::zero(); 6];
                 let (rp, cp) = local.split_at(tile.size.ilog2() as usize);
                 let cp = basis(cp);
                 for (i, w) in basis(rp).into_iter().enumerate() {
                     let mut totals = [F::zero(); 6];
                     for (j, &weight) in cp.iter().enumerate() {
-                        let address = a[i * tile.size + j];
-                        let [score, overflow, rem] =
-                            self.at(trace, address, tile.row + i, tile.col + j);
+                        let address = codes[(tile.row + i) * stride + tile.col + j];
+                        let rem = F::from_u32(
+                            advice.value(trace_tile.remainder, i * tile.size + j) as u32,
+                        );
+                        let [score, overflow] = self.at(trace, address, tile.row + i, tile.col + j);
                         let (p, t) = table.values(address as usize);
                         for (v, b) in totals.iter_mut().zip([
                             score,

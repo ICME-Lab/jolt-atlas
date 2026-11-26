@@ -3,7 +3,7 @@ mod layout;
 
 use std::sync::OnceLock;
 
-use jolt_field::Zero;
+use jolt_field::{One, Zero};
 use world_common::{BitZParams, LinearClaim, Root, SecurityLevel, Shape};
 use world_field::{gf128::smallest_generator, F128};
 use world_pcs::{Pcs, ProverData};
@@ -213,8 +213,27 @@ impl Query {
     }
 }
 
+fn project_columns<const N: usize>(queries: [&Query; N], words: &[F128]) -> [Vec<F>; N] {
+    let mut rows = std::array::from_fn(|_| vec![F::zero(); ROWS]);
+    let mut weights = queries.map(|q| q.column_weights(F::one()));
+    let first = queries[0];
+    let count = first.axes.len() * first.cells.len();
+    for word in &words[first.column..][..count] {
+        let column: [F; N] = weights.each_mut().map(|w| w.next().expect("column weight"));
+        let mut bits = word.to_u128();
+        while bits != 0 {
+            let row = bits.trailing_zeros() as usize;
+            for (values, weight) in rows.iter_mut().zip(column) {
+                values[row] += weight;
+            }
+            bits &= bits - 1;
+        }
+    }
+    rows
+}
+
 fn project(queries: &[Query], words: &[F128]) -> Vec<Vec<F>> {
-    let mut projected = vec![vec![F::zero(); ROWS]; queries.len()];
+    let mut projected = vec![Vec::new(); queries.len()];
     let mut order: Vec<_> = (0..queries.len()).collect();
     let span = |i: usize| {
         let q = &queries[i];
@@ -222,26 +241,13 @@ fn project(queries: &[Query], words: &[F128]) -> Vec<Vec<F>> {
     };
     order.sort_unstable_by_key(|&i| span(i));
     for indices in order.chunk_by(|&i, &j| span(i) == span(j)) {
-        let first = &queries[indices[0]];
-        let cols = first.axes.len() * first.cells.len();
-        let mut weighted = vec![F::zero(); indices.len()];
-        for (column, word) in words[first.column..][..cols].iter().enumerate() {
-            let mut bits = word.to_u128();
-            if bits == 0 {
-                continue;
-            }
-            for (&i, w) in indices.iter().zip(&mut weighted) {
-                let q = &queries[i];
-                let cells = q.cells.len();
-                *w = q.axes[column / cells] * q.cells[column % cells];
-            }
-            while bits != 0 {
-                let row = bits.trailing_zeros() as usize;
-                for (&i, &weight) in indices.iter().zip(&weighted) {
-                    projected[i][row] += weight;
-                }
-                bits &= bits - 1;
-            }
+        let pairs = indices.chunks_exact(2);
+        if let &[i] = pairs.remainder() {
+            [projected[i]] = project_columns([&queries[i]], words);
+        }
+        for pair in pairs {
+            let [i, j] = [pair[0], pair[1]];
+            [projected[i], projected[j]] = project_columns([&queries[i], &queries[j]], words);
         }
     }
     projected

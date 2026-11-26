@@ -157,44 +157,62 @@ impl<'a> Lookups<'a> {
             .map(|(q, &m)| m * (a[0] * q.address + a[1] * q.outputs.0 + a[2] * q.outputs.1))
             .sum();
         let advice = io.advice();
+        let count = reads.len().div_ceil(batch);
+        // Retain partial histograms only when their dense evaluation is cheaper than a rescan.
+        let cache =
+            count > 1 && count <= (32 << 20) / (n * size_of::<F>()) && n <= batch * (1 << vars);
+        let mut partial_bins = Vec::new();
+        let collect = |reads: &[Read], mix: &[F]| {
+            let mut local = vec![F::zero(); n];
+            for (r, &m) in reads.iter().zip(mix) {
+                for (i, w) in basis_scaled(&r.point, m).into_iter().enumerate() {
+                    local[r.lookup.code(advice.unwrap(), i) as usize] += w;
+                }
+            }
+            local
+        };
+        let add = |mut a: Vec<F>, b: &[F]| {
+            for (v, w) in a.iter_mut().zip(b) {
+                *v += *w;
+            }
+            a
+        };
         let (at, [histogram]) = io.fold(
             start,
             b,
             2,
             || {
-                let jobs = reads
-                    .len()
-                    .div_ceil(rayon::current_num_threads().min(4))
-                    .max(1);
-                let bins = reads
-                    .par_chunks(jobs)
-                    .zip(mix.par_chunks(jobs))
-                    .map(|(reads, mix)| {
-                        let mut local = vec![F::zero(); n];
-                        for (r, &m) in reads.iter().zip(mix) {
-                            let advice = advice.unwrap();
-                            for (i, w) in basis_scaled(&r.point, m).into_iter().enumerate() {
-                                local[r.lookup.code(advice, i) as usize] += w;
-                            }
-                        }
-                        local
-                    })
-                    .reduce_with(|mut a, b| {
-                        for (v, w) in a.iter_mut().zip(b) {
-                            *v += w;
-                        }
-                        a
-                    })
-                    .unwrap();
+                let bins = if cache {
+                    partial_bins = reads
+                        .par_chunks(batch)
+                        .zip(mix.par_chunks(batch))
+                        .map(|(reads, mix)| collect(reads, mix))
+                        .collect();
+                    partial_bins
+                        .iter()
+                        .fold(vec![F::zero(); n], |a, b| add(a, b))
+                } else {
+                    let jobs = reads
+                        .len()
+                        .div_ceil(rayon::current_num_threads().min(4))
+                        .max(1);
+                    reads
+                        .par_chunks(jobs)
+                        .zip(mix.par_chunks(jobs))
+                        .map(|(reads, mix)| collect(reads, mix))
+                        .reduce_with(|a, b| add(a, &b))
+                        .unwrap()
+                };
                 [Column::table(bins, n, 1), Column::source(n, value)]
             },
             [0],
             |v| v[0] * v[1],
         )?;
-        let table_eval: F = basis(&at.challenges)
-            .into_iter()
+        let selection = basis(&at.challenges);
+        let table_eval: F = selection
+            .iter()
             .enumerate()
-            .map(|(i, w)| w * value(i))
+            .map(|(i, &w)| w * value(i))
             .sum();
         if at.output_claim != histogram * table_eval {
             return Err("invalid lookup table evaluation");
@@ -203,9 +221,13 @@ impl<'a> Lookups<'a> {
         let parts = if reads.len() <= batch {
             vec![histogram]
         } else {
-            let count = reads.len().div_ceil(batch);
             let partials = io.fields(count, || {
-                let selection = basis(&at.challenges);
+                if cache {
+                    return partial_bins
+                        .into_par_iter()
+                        .map(|bins| bins.into_iter().zip(&selection).map(|(x, &w)| x * w).sum())
+                        .collect();
+                }
                 reads
                     .par_chunks(batch)
                     .zip(mix.par_chunks(batch))
@@ -233,6 +255,7 @@ impl<'a> Lookups<'a> {
             }
             partials
         };
+        drop(selection);
         let weights: Vec<_> = reads[0]
             .lookup
             .digits

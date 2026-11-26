@@ -1,9 +1,9 @@
 //! Joint reduction for fixed-point matrix projections with the same input tensor.
 
-use crate::field::Mixing;
+use crate::field::{Mixing, F};
 use crate::fold::{basis, InnerProducts};
 use crate::norm::Claim;
-use jolt_field::Field;
+use jolt_field::{Field, One, Ring, Zero};
 use jolt_sumcheck::single::{
     prove_single, verify_single, SingleFormat, SingleInstance, SingleSumcheckProof,
 };
@@ -114,11 +114,7 @@ impl Input {
         Ok((values, remainders))
     }
 
-    fn batch<F: Field + Encoding>(
-        self,
-        queries: &[Query<'_, F>],
-        channel: &mut impl Mixing<F>,
-    ) -> Result<Batch<F>> {
+    fn batch(self, queries: &[Query<'_, F>], channel: &mut impl Mixing<F>) -> Result<Batch<F>> {
         let (row_bits, width) = self.dimensions()?;
         if queries.is_empty()
             || queries.iter().any(|q| {
@@ -176,7 +172,7 @@ impl Input {
                 {
                     let factor = scale * w;
                     for (out, &v) in out.iter_mut().zip(src) {
-                        *out += factor * F::from_i32(v);
+                        *out += factor.mul_integer(i128::from(v));
                     }
                 }
             };
@@ -202,7 +198,7 @@ impl Input {
         })
     }
 
-    pub(crate) fn prove<F: Field + Encoding>(
+    pub(crate) fn prove(
         self,
         input: &[i32],
         queries: &[Query<'_, F>],
@@ -220,7 +216,7 @@ impl Input {
                 let mut restricted = vec![F::zero(); width];
                 for (row, w) in input.chunks_exact(self.width).zip(basis(&group.point)) {
                     for (y, &x) in restricted.iter_mut().zip(row) {
-                        *y += w * F::from_i32(x);
+                        *y += w.mul_integer(i128::from(x));
                     }
                 }
                 (restricted, group.public.clone())
@@ -238,7 +234,7 @@ impl Input {
         Ok((proof, claims))
     }
 
-    pub(crate) fn verify<F: Field + Encoding>(
+    pub(crate) fn verify(
         self,
         queries: &[Query<'_, F>],
         proof: &Proof<F>,

@@ -3,12 +3,13 @@
 use crate::field::{Mixing, Scalar, F};
 use crate::fold::{agreement, basis, InnerProducts};
 use crate::norm::{Claim, Width};
-use jolt_field::{Ring, Zero};
+use jolt_field::{One, Ring, Zero};
 use jolt_sumcheck::single::{
     prove_single, verify_single, SingleFormat, SingleInstance, SingleReduction, SingleSumcheckProof,
 };
 use jolt_transcript::{Keccak, ProverState, Transcript, VerifierState};
-use std::{ops::Range, sync::OnceLock};
+use rayon::prelude::*;
+use std::{collections::HashMap, ops::Range, sync::OnceLock};
 use world_common::{shape::MIN_LOG_BITS, BitZParams, LinearClaim, Root, SecurityLevel, Shape};
 use world_field::{gf128::smallest_generator, F128};
 use world_pcs::Pcs;
@@ -109,6 +110,79 @@ pub struct Committed {
     channel: world_transcript::ProverState,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Source {
+    Range,
+    Digit {
+        address: usize,
+        shift: usize,
+        mask: usize,
+    },
+}
+
+struct PackSlot<'a> {
+    place: Placement,
+    source: Source,
+    words: &'a mut [F128],
+    projections: Vec<(&'a WeightedQuery<'a>, Vec<F>)>,
+}
+
+impl PackSlot<'_> {
+    fn column(&mut self, col: usize, raw: &[u128], values: &mut [u128; ROWS]) -> Result<()> {
+        let width = self.place.range.bits();
+        let values = match self.source {
+            Source::Digit { shift, mask, .. } => {
+                let decoded = &mut values[..raw.len()];
+                for (out, &address) in decoded.iter_mut().zip(raw) {
+                    *out = 1 << ((address as usize >> shift) & mask);
+                }
+                decoded
+            }
+            Source::Range => raw,
+        };
+        for (word, chunk) in values.chunks(128).enumerate() {
+            let mut planes = [0u128; 65];
+            for (row, &value) in chunk.iter().enumerate() {
+                if value >= 1 << width {
+                    return Err("integer outside committed range");
+                }
+                let mut bits = value;
+                while bits != 0 {
+                    planes[bits.trailing_zeros() as usize] |= 1 << row;
+                    bits &= bits - 1;
+                }
+            }
+            for (bit, &encoded) in planes[..width].iter().enumerate() {
+                self.words[(bit * self.place.columns + col) * WORDS + word] = F128::from(encoded);
+            }
+        }
+        for (query, output) in &mut self.projections {
+            let weight = query.column[col] * query.scale;
+            if weight.is_zero() {
+                continue;
+            }
+            if query.binary {
+                let mut coefficients = [F::zero(); 65];
+                for (out, &plane) in coefficients.iter_mut().zip(&query.planes) {
+                    *out = weight * plane;
+                }
+                for (out, &value) in output.iter_mut().zip(values) {
+                    let mut bits = value;
+                    while bits != 0 {
+                        *out += coefficients[bits.trailing_zeros() as usize];
+                        bits &= bits - 1;
+                    }
+                }
+            } else {
+                for (out, &value) in output.iter_mut().zip(values) {
+                    *out += weight.mul_integer(value as i128);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Group {
     pub fn new(columns: &[RangeColumn]) -> Result<Self> {
         if columns.is_empty()
@@ -146,54 +220,96 @@ impl Group {
         })
     }
 
-    pub(crate) fn commit_detached(
+    // The reader returns the stored unsigned code before any one-hot expansion.
+    fn pack(
         &self,
-        source: impl Fn(usize, usize) -> i128 + Sync,
-    ) -> Result<Committed> {
+        sources: &[Source],
+        read: impl Fn(usize, usize) -> u128 + Sync,
+        queries: &[WeightedQuery<'_>],
+    ) -> Result<(Vec<F128>, Vec<(Vec<F>, Vec<F>)>)> {
         let mut packed = vec![F128::from(0u128); self.pcs.packed_len()];
-        use rayon::prelude::*;
-        let mut rest = packed.as_mut_slice();
-        let jobs: Vec<_> = self
-            .placements
-            .iter()
-            .enumerate()
-            .map(|(slot, placement)| {
-                let words = placement.range.bits() * placement.columns * WORDS;
-                let (here, tail) = std::mem::take(&mut rest).split_at_mut(words);
-                rest = tail;
-                (slot, placement, here)
-            })
-            .collect();
-        jobs.into_par_iter()
-            .try_for_each(|(slot, placement, output)| -> Result<()> {
-                let width = placement.range.bits();
-                let offset = placement.range.offset();
-                let cells = 1 << placement.range.vars;
-                for col in 0..placement.columns {
-                    for group in 0..WORDS {
-                        let mut planes = [0u128; 65];
-                        let start = col * ROWS + group * 128;
-                        for index in start..(start + 128).min(cells) {
-                            let value = source(slot, index)
-                                .checked_add(offset)
-                                .ok_or("range overflow")?;
-                            if !(0..1i128 << width).contains(&value) {
-                                return Err("integer outside committed range");
-                            }
-                            let mut value = value as u128;
-                            while value != 0 {
-                                planes[value.trailing_zeros() as usize] |= 1 << (index - start);
-                                value &= value - 1;
-                            }
-                        }
-                        for (bit, &encoded) in planes[..width].iter().enumerate() {
-                            let pos = (bit * placement.columns + col) * WORDS + group;
-                            output[pos] = F128::from(encoded);
-                        }
+        let mut words = packed.as_mut_slice();
+        let mut jobs = Vec::<(usize, Vec<PackSlot<'_>>)>::new();
+        let mut addresses = HashMap::new();
+        let mut by_slot = vec![Vec::new(); sources.len()];
+        let mut rows = HashMap::new();
+        let mut pairs = Vec::<(Vec<F>, Vec<F>)>::new();
+        for q in queries {
+            let row = *rows.entry(&q.row).or_insert_with(|| {
+                pairs.push((basis(&q.row), vec![F::zero(); ROWS]));
+                pairs.len() - 1
+            });
+            if q.binary && q.planes.iter().all(|&x| x == F::one()) {
+                // Lookup advice is one-hot. The verifier still checks the committed bits.
+                let count = 1 << q.placement.range.vars.min(ROW_BITS);
+                for value in &mut pairs[row].1[..count] {
+                    *value += q.scale;
+                }
+            } else {
+                by_slot[q.slot].push((q, vec![F::zero(); ROWS]));
+            }
+        }
+        for (slot, (&place, &source)) in self.placements.iter().zip(sources).enumerate() {
+            let (here, rest) = words.split_at_mut(place.range.bits() * place.columns * WORDS);
+            words = rest;
+            let pack = PackSlot {
+                place,
+                source,
+                words: here,
+                projections: std::mem::take(&mut by_slot[slot]),
+            };
+            if place.range.bits() == 0 {
+                continue;
+            }
+            if let Source::Digit { address, .. } = source {
+                let job = *addresses
+                    .entry((address, place.range.vars))
+                    .or_insert(jobs.len());
+                if job < jobs.len() {
+                    jobs[job].1.push(pack);
+                    continue;
+                }
+            }
+            jobs.push((slot, vec![pack]));
+        }
+        let jobs = jobs
+            .into_par_iter()
+            .map(|(slot, mut outputs)| -> Result<_> {
+                let place = outputs[0].place;
+                let count = 1 << place.range.vars.min(ROW_BITS);
+                let mut raw = [0; ROWS];
+                let mut values = [0; ROWS];
+                for col in 0..place.columns {
+                    for (row, value) in raw[..count].iter_mut().enumerate() {
+                        *value = read(slot, col * ROWS + row);
+                    }
+                    for output in &mut outputs {
+                        output.column(col, &raw[..count], &mut values)?;
                     }
                 }
-                Ok(())
-            })?;
+                Ok(outputs)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for output in jobs.into_iter().flatten() {
+            for (query, values) in output.projections {
+                for (out, value) in pairs[rows[&query.row]].1.iter_mut().zip(values) {
+                    *out += value;
+                }
+            }
+        }
+        Ok((packed, pairs))
+    }
+
+    pub(crate) fn commit_detached(
+        &self,
+        sources: &[Source],
+        read: impl Fn(usize, usize) -> u128 + Sync,
+    ) -> Result<Committed> {
+        let (packed, _) = self.pack(sources, read, &[])?;
+        self.commit_packed(packed)
+    }
+
+    fn commit_packed(&self, packed: Vec<F128>) -> Result<Committed> {
         let mut channel = build_prover(DOMAIN, b"");
         let (root, data) = self
             .pcs
@@ -273,48 +389,18 @@ impl Group {
 
     pub(crate) fn reduce(
         &self,
-        committed: Committed,
+        root: RootBytes,
         queries: &[Query],
         outer: &mut ProverState<Keccak>,
-        source: impl Fn(usize, usize) -> i128 + Sync,
+        sources: &[Source],
+        read: impl Fn(usize, usize) -> u128 + Sync,
     ) -> Result<Pending<'_>> {
-        use rayon::prelude::*;
         let (instance, queries) = self.prepare(queries, outer)?;
-        let pairs = queries
-            .par_iter()
-            .map(|q| {
-                let mut values = vec![F::zero(); ROWS];
-                let layout = q.placement.range;
-                let count = (1 << layout.vars).min(ROWS);
-                if q.binary && q.planes.iter().all(|&x| x == F::from_u64(1)) {
-                    // Lookup advice is one-hot. The verifier still checks the committed bits.
-                    values[..count].fill(q.scale);
-                    return (basis(&q.row), values);
-                }
-                let mut coefficients = [F::zero(); 65];
-                for (col, &weight) in q.column.iter().enumerate() {
-                    let w = weight * q.scale;
-                    if q.binary {
-                        for (out, &x) in coefficients.iter_mut().zip(&q.planes) {
-                            *out = w * x;
-                        }
-                    }
-                    for (row, v) in values[..count].iter_mut().enumerate() {
-                        let x = (source(q.slot, col * ROWS + row) + layout.offset()) as u128;
-                        if q.binary {
-                            let mut bits = x;
-                            while bits != 0 {
-                                *v += coefficients[bits.trailing_zeros() as usize];
-                                bits &= bits - 1;
-                            }
-                        } else {
-                            *v += w.mul_integer(x as i128);
-                        }
-                    }
-                }
-                (basis(&q.row), values)
-            })
-            .collect();
+        let (packed, pairs) = self.pack(sources, read, &queries)?;
+        let committed = self.commit_packed(packed)?;
+        if committed.root != root {
+            return Err("advice commitment changed");
+        }
         let mut witness = InnerProducts {
             pairs,
             rounds: ROW_BITS,
@@ -467,11 +553,14 @@ mod tests {
             .collect();
         let tag = [0x63; 32];
         let mut prover = prover_transcript::<Keccak>(&tag, b"");
-        let committed = group.commit_detached(|slot, i| data[slot][i]).unwrap();
+        let sources = [Source::Range; 2];
+        let read =
+            |slot: usize, i: usize| (data[slot][i] + group.placements[slot].range.offset()) as u128;
+        let committed = group.commit_detached(&sources, read).unwrap();
         prover.append_bytes(&committed.root);
         let root = committed.root;
         let proof = group
-            .reduce(committed, &queries, &mut prover, |slot, i| data[slot][i])
+            .reduce(root, &queries, &mut prover, &sources, read)
             .unwrap()
             .open(&mut std::collections::HashMap::new())
             .unwrap();

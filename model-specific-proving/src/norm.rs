@@ -653,17 +653,28 @@ mod tests {
                     witness.stats.get(i).map_or(0, |r| r[slot - 5])
                 }
             };
-            let committed = group.commit_detached(source)?;
+            let (cells, stats) = self.widths();
+            let columns: Vec<_> = cells.into_iter().chain(stats).collect();
+            let sources = vec![bitz::Source::Range; columns.len()];
+            let read = |slot, i| {
+                let offset = match columns[slot] {
+                    Width::Unsigned(_) => 0,
+                    Width::Signed(n) => 1 << (n - 1),
+                };
+                (source(slot, i) + offset) as u128
+            };
+            let committed = group.commit_detached(&sources, read)?;
             channel.append_bytes(&committed.root);
             let root = committed.root;
             let (relation, reduction) =
                 self.prove_with(domain, input, &witness, output, carry, channel)?;
             let evaluations = group
                 .reduce(
-                    committed,
+                    root,
                     &reduction.queries(domain.row_bits()),
                     channel,
-                    source,
+                    &sources,
+                    read,
                 )?
                 .open(&mut std::collections::HashMap::new())?;
             Ok((

@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use std::{fs::File, io::Write};
 
 use crate::{
-    bitz::{Group, Query, RangeColumn},
+    bitz::{Group, Query, RangeColumn, Source},
     channel::Result,
     field::F,
     norm::{Claim, Width},
@@ -285,8 +285,24 @@ impl Advice {
         }
     }
 
-    fn source<'a>(&'a self, ids: &'a [usize]) -> impl Fn(usize, usize) -> i128 + Sync + 'a {
-        move |slot, cell| self.value(Slot(ids[slot]), cell)
+    fn sources(&self, ids: &[usize]) -> Vec<Source> {
+        ids.iter()
+            .map(|&id| {
+                let record = &self.columns[id];
+                match record.digit {
+                    Some((shift, mask)) => Source::Digit {
+                        address: record.packed.at,
+                        shift,
+                        mask,
+                    },
+                    None => Source::Range,
+                }
+            })
+            .collect()
+    }
+
+    fn read<'a>(&'a self, ids: &'a [usize]) -> impl Fn(usize, usize) -> u128 + Sync + 'a {
+        move |slot, cell| self.unpack(self.columns[ids[slot]].packed, cell)
     }
 }
 
@@ -300,7 +316,9 @@ impl Buckets {
         self.0
             .iter()
             .map(|(group, ids)| {
-                let root = group.commit_detached(advice.source(ids))?.root;
+                let root = group
+                    .commit_detached(&advice.sources(ids), advice.read(ids))?
+                    .root;
                 channel.append_bytes(&root);
                 Ok(root)
             })
@@ -351,12 +369,13 @@ impl Buckets {
             for (i, (((group, ids), root), queries)) in
                 self.0.iter().zip(roots).zip(requests).enumerate()
             {
-                let source = advice.source(ids);
-                let committed = group.commit_detached(&source)?;
-                if &committed.root != root {
-                    return Err("advice commitment changed");
-                }
-                let job = group.reduce(committed, &queries, channel, source)?;
+                let job = group.reduce(
+                    *root,
+                    &queries,
+                    channel,
+                    &advice.sources(ids),
+                    advice.read(ids),
+                )?;
                 if let Some((send, receive)) = &queue {
                     if i != 0 {
                         emit(receive.recv().map_err(|_| "BitZ worker stopped")??)?;

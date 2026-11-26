@@ -1,4 +1,4 @@
-use jolt_field::{Field, One, Zero};
+use jolt_field::{Field, One, Ring, Zero};
 use jolt_poly::{BindingOrder, GruenSplitEqPolynomial, MultilinearPoly, UnivariatePoly};
 use jolt_sumcheck::{
     prove_single, round_pow_bits, verify_single, ProveRounds, SingleFormat, SingleInstance,
@@ -94,7 +94,11 @@ impl Session<'_, '_> {
         }
     }
 
-    fn fields(&mut self, count: usize, witness: impl FnOnce() -> Vec<F>) -> Result<Vec<F>> {
+    pub(crate) fn fields(
+        &mut self,
+        count: usize,
+        witness: impl FnOnce() -> Vec<F>,
+    ) -> Result<Vec<F>> {
         match self {
             Self::Prover(transcript, proof) => {
                 let values = witness();
@@ -254,11 +258,56 @@ pub(crate) enum Column<'a> {
         tables: Vec<F>,
     },
     Equality(Box<SplitEquality>),
+    Mask(RowMask),
     Axis {
         len: usize,
         repeat: usize,
         values: Vec<F>,
     },
+}
+
+pub(crate) struct RowMask {
+    rows: usize,
+    cols: usize,
+    stride: usize,
+    remaining: usize,
+    causal: bool,
+    prefix: Vec<F>,
+}
+
+impl RowMask {
+    fn get(&self, i: usize) -> F {
+        let (row, col) = (i / self.stride, i % self.stride);
+        if col >= self.cols {
+            return F::zero();
+        }
+        if self.remaining == self.stride {
+            return F::from_bool(row < self.rows && (!self.causal || col <= row));
+        }
+        // A valid original row lies in [col, rows) for the causal mask.
+        let lower = if self.causal {
+            col.saturating_sub(row).div_ceil(self.remaining)
+        } else {
+            0
+        };
+        let upper = self.rows.saturating_sub(row).div_ceil(self.remaining);
+        if lower < upper {
+            self.prefix[upper] - self.prefix[lower]
+        } else {
+            F::zero()
+        }
+    }
+
+    fn bind_row(&mut self, r: F) {
+        let mut prefix = Vec::with_capacity(2 * self.prefix.len() - 1);
+        prefix.push(F::zero());
+        for pair in self.prefix.windows(2) {
+            let high = r * (pair[1] - pair[0]);
+            prefix.extend([pair[1] - high, pair[1]]);
+        }
+        self.prefix = prefix;
+        self.remaining /= 2;
+    }
 }
 
 pub(crate) struct SplitEquality {
@@ -315,6 +364,19 @@ impl<'a> Column<'a> {
         Self::Equality(column)
     }
 
+    pub(crate) fn row_mask(rows: usize, cols: usize, causal: bool) -> Self {
+        let stride = rows.next_power_of_two();
+        debug_assert!(cols <= stride);
+        Self::Mask(RowMask {
+            rows,
+            cols,
+            stride,
+            remaining: stride,
+            causal,
+            prefix: vec![F::zero(), F::one()],
+        })
+    }
+
     // Each value spans 2^repeat consecutive cells; the axis can repeat in the outer dimensions.
     pub(crate) fn axis(len: usize, repeat: usize, values: Vec<F>) -> Self {
         debug_assert!(values.len().is_power_of_two() && values.len() << repeat <= len);
@@ -331,6 +393,7 @@ impl<'a> Column<'a> {
             Self::Public(v) => v.len(),
             Self::Source(n, _) | Self::Lookup { len: n, .. } => *n,
             Self::Equality(column) => column.len,
+            Self::Mask(mask) => mask.remaining * mask.stride,
             Self::Axis { len, .. } => *len,
         }
     }
@@ -351,6 +414,7 @@ impl<'a> Column<'a> {
                 .map(|(prefix, table)| table[read(prefix * len + i)])
                 .sum(),
             Self::Equality(column) => column.get(i),
+            Self::Mask(mask) => mask.get(i),
             Self::Axis { repeat, values, .. } => values[(i >> repeat) & (values.len() - 1)],
         }
     }
@@ -376,6 +440,13 @@ impl<'a> Column<'a> {
                     }
                 }
                 *len = half;
+                return;
+            }
+            Self::Mask(mask) => {
+                mask.bind_row(r);
+                if mask.remaining == 1 {
+                    *self = Self::Dense((0..mask.stride).map(|i| mask.get(i)).collect());
+                }
                 return;
             }
             Self::Equality(column) => {
@@ -508,9 +579,36 @@ impl<E: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, E> {
 
 #[cfg(test)]
 mod tests {
-    use jolt_field::Ring;
-
     use super::*;
+
+    #[test]
+    fn compact_masks_fold_like_dense_masks() {
+        for rows in [1usize, 5, 8] {
+            let stride = rows.next_power_of_two();
+            for (cols, causal) in [(1, false), (rows, false), (rows, true)] {
+                let mut mask = Column::row_mask(rows, cols, causal);
+                let mut dense = Column::Dense(
+                    (0..stride * stride)
+                        .map(|i| {
+                            let (row, col) = (i / stride, i % stride);
+                            F::from_bool(row < rows && col < cols && (!causal || col <= row))
+                        })
+                        .collect(),
+                );
+                for round in 0..=2 * stride.ilog2() {
+                    assert_eq!(mask.len(), dense.len());
+                    for i in 0..mask.len() {
+                        assert_eq!(mask.get(i), dense.get(i));
+                    }
+                    if mask.len() > 1 {
+                        let r = F::from_u64(u64::from(round) + 2);
+                        mask.bind(r);
+                        dense.bind(r);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn compact_lookup_columns_fold_like_dense_columns() {

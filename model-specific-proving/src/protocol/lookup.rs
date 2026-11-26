@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use jolt_field::{One, Ring, Zero};
 use jolt_poly::TensorEqTable;
+use rayon::prelude::*;
 
 use super::{
     field::F,
@@ -10,6 +11,9 @@ use super::{
     tensor::{equality, inner, weights, Claim},
     Result,
 };
+
+// This limits the simultaneously materialized digit columns, in bytes.
+const LOOKUP_LINK_BYTES: usize = 192 * 1024 * 1024;
 
 pub(crate) struct Addresses {
     slots: Vec<u8>,
@@ -169,6 +173,15 @@ impl<'a> Lookups<'a> {
         io: &mut Session<'_, '_>,
         requests: &mut Vec<Request>,
     ) -> Result<()> {
+        self.finish_with_budget(io, requests, LOOKUP_LINK_BYTES)
+    }
+
+    fn finish_with_budget(
+        self,
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        budget: usize,
+    ) -> Result<()> {
         for (tables, cells, reads) in self.0 {
             let size = tables[0].size();
             let bits = size.ilog2() as usize;
@@ -237,61 +250,178 @@ impl<'a> Lookups<'a> {
                 })
                 .collect();
 
-            let len = 1 << cells;
-            let endpoints: Vec<_> = (0..reads.len() * (digits + 1))
-                .filter(|i| i % (digits + 1) != digits)
-                .collect();
-            let (link, values) = io.fold_many(
-                selected,
-                cells,
-                digits + 1,
-                || {
-                    let mut columns = Vec::new();
-                    for q in &reads {
-                        for (choice, &(_, shift, n)) in selectors.iter().zip(&q.plan.digits) {
-                            let addresses = q.witness.as_ref().expect("lookup trace");
-                            columns.push(Column::lookup(len, choice, move |i| {
-                                (addresses.get(i) >> shift) & ((1 << n) - 1)
-                            }));
-                        }
-                        columns.push(Column::split_equality(&q.point));
-                    }
-                    columns
-                },
-                &endpoints,
-                |row| {
-                    inner(
-                        mix.iter().copied(),
-                        row.chunks_exact(digits + 1)
-                            .map(|part| part.iter().copied().product()),
-                    )
-                },
-            )?;
-
-            let mut terminal = F::zero();
-            for ((q, &scale), values) in reads.iter().zip(mix).zip(values.chunks_exact(digits)) {
-                let mut product = scale * equality(&q.point, &link.challenges);
-                for ((selection, &(slot, _, width)), &value) in
-                    selectors.iter().zip(&q.plan.digits).zip(values)
-                {
-                    product *= value;
-                    requests.push(Request {
-                        slot,
-                        claim: Claim::new(link.challenges.clone(), value),
-                        planes: selection.clone(),
-                        one_hot_sum: false,
-                    });
-                    requests.push(Request {
-                        slot,
-                        claim: Claim::new(q.point.clone(), F::one()),
-                        planes: vec![F::one(); 1 << width],
-                        one_hot_sum: true,
-                    });
+            let len = 1usize << cells;
+            let bytes_per_read = (len / 8)
+                .saturating_mul(digits * std::mem::size_of::<F>())
+                .max(1);
+            let chunk_size = (budget / bytes_per_read).max(1);
+            let chunks = reads.chunks(chunk_size).zip(mix.chunks(chunk_size));
+            let partials = if reads.len() <= chunk_size {
+                vec![selected]
+            } else {
+                // Bind every partial claim before any of the link challenges.
+                let parts = io.fields(chunks.len(), || {
+                    let address = TensorEqTable::new(&end.challenges);
+                    let dense = (size <= 1 << 19).then(|| weights(&end.challenges));
+                    reads
+                        .par_chunks(chunk_size)
+                        .zip(mix.par_chunks(chunk_size))
+                        .map(|(reads, mix)| {
+                            reads
+                                .iter()
+                                .zip(mix)
+                                .map(|(read, &scale)| {
+                                    let witness = read.witness.as_ref().expect("lookup trace");
+                                    let cells = TensorEqTable::new_with_scaling(&read.point, scale);
+                                    (0..len)
+                                        .map(|i| {
+                                            let addr = witness.get(i);
+                                            let weight = dense.as_ref().map_or_else(
+                                                || address.evaluate_index(addr),
+                                                |table| table[addr],
+                                            );
+                                            cells.evaluate_index(i) * weight
+                                        })
+                                        .sum::<F>()
+                                })
+                                .sum()
+                        })
+                        .collect()
+                })?;
+                if parts.iter().copied().sum::<F>() != selected {
+                    return Err("invalid lookup link partial sums");
                 }
-                terminal += product;
+                parts
+            };
+            for ((reads, mix), partial) in chunks.zip(partials) {
+                Self::link(io, requests, reads, mix, &selectors, partial)?;
             }
-            io.expect(&link, || terminal)?;
         }
         Ok(())
+    }
+
+    fn link(
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        reads: &[Read],
+        mix: &[F],
+        selectors: &[Vec<F>],
+        partial: F,
+    ) -> Result<()> {
+        let cells = reads[0].plan.cells;
+        let digits = selectors.len();
+        let len = 1 << cells;
+        let endpoints: Vec<_> = (0..reads.len() * (digits + 1))
+            .filter(|i| i % (digits + 1) != digits)
+            .collect();
+        let (link, values) = io.fold_many(
+            partial,
+            cells,
+            digits + 1,
+            || {
+                let mut columns = Vec::new();
+                for q in reads {
+                    for (choice, &(_, shift, n)) in selectors.iter().zip(&q.plan.digits) {
+                        let addresses = q.witness.as_ref().expect("lookup trace");
+                        columns.push(Column::lookup(len, choice, move |i| {
+                            (addresses.get(i) >> shift) & ((1 << n) - 1)
+                        }));
+                    }
+                    columns.push(Column::split_equality(&q.point));
+                }
+                columns
+            },
+            &endpoints,
+            |row| {
+                inner(
+                    mix.iter().copied(),
+                    row.chunks_exact(digits + 1)
+                        .map(|part| part.iter().copied().product()),
+                )
+            },
+        )?;
+
+        let mut terminal = F::zero();
+        for ((q, &scale), values) in reads.iter().zip(mix).zip(values.chunks_exact(digits)) {
+            let mut product = scale * equality(&q.point, &link.challenges);
+            for ((selection, &(slot, _, width)), &value) in
+                selectors.iter().zip(&q.plan.digits).zip(values)
+            {
+                product *= value;
+                requests.push(Request {
+                    slot,
+                    claim: Claim::new(link.challenges.clone(), value),
+                    planes: selection.clone(),
+                    one_hot_sum: false,
+                });
+                requests.push(Request {
+                    slot,
+                    claim: Claim::new(q.point.clone(), F::one()),
+                    planes: vec![F::one(); 1 << width],
+                    one_hot_sum: true,
+                });
+            }
+            terminal += product;
+        }
+        io.expect(&link, || terminal)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifies_lookup_link_split_across_multiple_chunks() {
+        let table = [3, 5, 7, 11];
+        let mut layout = Layout::default();
+        let reads: Vec<_> = (0..3)
+            .map(|_| Lookup::new(&mut layout, 3, table.len()).unwrap())
+            .collect();
+        let mut packed = layout.packed();
+        let point = [2, 3, 4].map(F::from_u64);
+        let points = weights(&point);
+        let witnesses: Vec<_> = (0..reads.len())
+            .map(|j| {
+                let mut witness = Addresses::new(8, 2);
+                for i in 0..8 {
+                    witness.set(i, ((i + j) ^ (i >> 1)) & 3);
+                }
+                Arc::new(witness)
+            })
+            .collect();
+        for (read, witness) in reads.iter().zip(&witnesses) {
+            read.record(&mut packed, witness).unwrap();
+        }
+
+        let check = |io: &mut Session<'_, '_>| {
+            let mut lookups = Lookups::default();
+            for (read, witness) in reads.iter().zip(&witnesses) {
+                let indices = (0..8).map(|i| witness.get(i));
+                lookups.read(
+                    read,
+                    &[Table::Direct(&table)],
+                    point.to_vec(),
+                    inner(
+                        points.iter().copied(),
+                        indices.clone().map(|i| F::from_u64(i as u64)),
+                    ),
+                    vec![inner(
+                        points.iter().copied(),
+                        indices.map(|i| F::from_i32(table[i])),
+                    )],
+                    io.proving().then(|| witness.clone()),
+                );
+            }
+            let mut requests = Vec::new();
+            lookups.finish_with_budget(io, &mut requests, 16)?;
+            assert_ne!(requests[0].claim.point, requests[2].claim.point);
+            Ok(requests)
+        };
+        let domain = [7; 32];
+        let plan = layout.finish(&packed.widths).unwrap();
+        let proof = plan.prove(&domain, packed, |_| {}, check).unwrap();
+        plan.verify(&domain, &proof, |_| {}, check).unwrap();
     }
 }

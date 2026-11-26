@@ -305,6 +305,15 @@ impl<'a> Soft<'a> {
                     let (row, col) = coordinates(i);
                     (row < self.shape.rows && col < self.active(row)).then(|| self.find(row, col))
                 };
+                let stats = |column: usize| {
+                    let mut values: Vec<_> = trace
+                        .stats
+                        .iter()
+                        .map(|row| F::from_i64(row[column]))
+                        .collect();
+                    values.resize(1 << rb, F::zero());
+                    Column::axis(len, vars - rb, values)
+                };
                 vec![
                     Column::source(len, move |i| {
                         let (row, col) = coordinates(i);
@@ -332,22 +341,18 @@ impl<'a> Soft<'a> {
                                 .map_or(0, |v| v[j / stride * shape.width + j % stride])
                         }))
                     }),
-                    Column::source(len, move |i| {
-                        F::from_i64(trace.stats.get(i / stride).map_or(0, |v| v[0]))
-                    }),
-                    Column::source(len, move |i| {
-                        F::from_i64(trace.stats.get(i / stride).map_or(0, |v| v[1]))
-                    }),
-                    Column::source(len, move |i| {
-                        F::from_i64(trace.stats.get(i / stride).map_or(0, |v| v[2]))
-                    }),
-                    Column::source(len, move |i| F::from_bool(cell(i).is_some())),
-                    Column::source(len, move |i| {
-                        F::from_bool(i / stride < self.shape.rows && i % stride == 0)
-                    }),
-                    Column::Dense(weights(&claim.point)),
-                    Column::Dense(weights(p)),
-                    Column::source(len, |i| rw[i / stride]),
+                    stats(0),
+                    stats(1),
+                    stats(2),
+                    Column::row_mask(
+                        self.shape.rows,
+                        self.shape.width,
+                        self.mask == SoftmaxMask::Causal,
+                    ),
+                    Column::row_mask(self.shape.rows, 1, false),
+                    Column::split_equality(&claim.point),
+                    Column::split_equality(p),
+                    Column::axis(len, vars - rb, rw.clone()),
                 ]
             },
             [0, 1, 2, 3, 4, 5, 6, 7],

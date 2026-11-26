@@ -192,41 +192,44 @@ impl<'a> Soft<'a> {
         let mut stats = Vec::with_capacity(self.shape.rows);
         let max_address = (self.tables.sums.len() - 1) as i64;
         let limit = i64::from(self.tables.limit);
+        let mut scores = Vec::with_capacity(self.shape.width);
         for row in 0..self.shape.rows {
-            let scores: Vec<_> = (0..self.active(row))
-                .map(|col| i64::from(score(row, col)))
-                .collect();
-            let table = |shift: i64, previous: bool| {
-                scores
-                    .iter()
-                    .map(|value| {
-                        let index = (shift - value).min(max_address) as usize;
-                        i64::from(if previous {
-                            index
-                                .checked_sub(1)
-                                .map_or(self.tables.limit + 1, |i| self.tables.sums[i])
-                        } else {
-                            self.tables.sums[index]
-                        })
-                    })
-                    .sum::<i64>()
+            scores.clear();
+            scores.extend((0..self.active(row)).map(|col| i64::from(score(row, col))));
+            let exceeds_limit = |shift: i64| {
+                let mut sum = 0;
+                for &score in &scores {
+                    let address = (shift - score).min(max_address) as usize;
+                    sum += i64::from(self.tables.sums[address]);
+                    if sum > limit {
+                        return true;
+                    }
+                }
+                false
             };
             let mut lo = *scores.iter().max().expect("nonempty row");
             let mut hi = lo + max_address;
             while lo < hi {
                 let mid = (lo + hi).div_euclid(2);
-                if table(mid, false) <= limit {
-                    hi = mid;
-                } else {
+                if exceeds_limit(mid) {
                     lo = mid + 1;
+                } else {
+                    hi = mid;
                 }
             }
-            stats.push([lo, limit - table(lo, false), table(lo, true) - limit - 1]);
-            for (col, value) in scores.into_iter().enumerate() {
+            let mut sum = 0;
+            let mut previous = 0;
+            for (col, &value) in scores.iter().enumerate() {
                 let (block, index) = self.find(row, col);
                 let difference = lo - value;
                 let address = difference.min(max_address);
                 addresses[block].set(index, address as usize);
+                sum += i64::from(self.tables.sums[address as usize]);
+                previous += i64::from(if address == 0 {
+                    self.tables.limit + 1
+                } else {
+                    self.tables.sums[address as usize - 1]
+                });
                 let overflow = difference - address;
                 if overflow != 0 {
                     let shape = self.blocks[block].tile.shape;
@@ -235,6 +238,7 @@ impl<'a> Soft<'a> {
                     values[index / stride * shape.width + index % stride] = overflow;
                 }
             }
+            stats.push([lo, limit - sum, previous - limit - 1]);
         }
         let column: [Vec<i64>; 3] =
             std::array::from_fn(|i| stats.iter().map(|row| row[i]).collect());

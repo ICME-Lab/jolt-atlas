@@ -254,6 +254,11 @@ pub(crate) enum Column<'a> {
         tables: Vec<F>,
     },
     Equality(Box<SplitEquality>),
+    Axis {
+        len: usize,
+        repeat: usize,
+        values: Vec<F>,
+    },
 }
 
 pub(crate) struct SplitEquality {
@@ -310,12 +315,23 @@ impl<'a> Column<'a> {
         Self::Equality(column)
     }
 
+    // Each value spans 2^repeat consecutive cells; the axis can repeat in the outer dimensions.
+    pub(crate) fn axis(len: usize, repeat: usize, values: Vec<F>) -> Self {
+        debug_assert!(values.len().is_power_of_two() && values.len() << repeat <= len);
+        Self::Axis {
+            len,
+            repeat,
+            values,
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
             Self::Dense(v) => v.len(),
             Self::Public(v) => v.len(),
             Self::Source(n, _) | Self::Lookup { len: n, .. } => *n,
             Self::Equality(column) => column.len,
+            Self::Axis { len, .. } => *len,
         }
     }
 
@@ -335,12 +351,33 @@ impl<'a> Column<'a> {
                 .map(|(prefix, table)| table[read(prefix * len + i)])
                 .sum(),
             Self::Equality(column) => column.get(i),
+            Self::Axis { repeat, values, .. } => values[(i >> repeat) & (values.len() - 1)],
         }
     }
 
     fn bind(&mut self, r: F) {
         let half = self.len() / 2;
         match self {
+            Self::Axis {
+                len,
+                repeat,
+                values,
+            } => {
+                if half < values.len() << *repeat {
+                    if values.len() == 1 {
+                        *repeat -= 1;
+                    } else {
+                        let half = values.len() / 2;
+                        let (lo, hi) = values.split_at_mut(half);
+                        for (x, y) in lo.iter_mut().zip(hi) {
+                            *x = r.mul_add(*y - *x, *x);
+                        }
+                        values.truncate(half);
+                    }
+                }
+                *len = half;
+                return;
+            }
             Self::Equality(column) => {
                 column.polynomial.bind(r);
                 column.len = half;

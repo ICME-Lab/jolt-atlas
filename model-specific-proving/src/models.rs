@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use jolt_transcript::{protocol_tag, prover_transcript, Keccak, Transcript};
 
 use crate::{
@@ -267,6 +269,7 @@ pub struct Model<'a> {
     decoder_bias: Option<&'a [i32]>,
     layout: Layout,
     digest: [u8; 32],
+    ranking_bound: OnceLock<i128>,
 }
 
 struct Run {
@@ -355,6 +358,7 @@ impl<'a> Model<'a> {
             decoder_bias,
             layout,
             digest,
+            ranking_bound: OnceLock::new(),
         })
     }
 
@@ -414,39 +418,43 @@ impl<'a> Model<'a> {
         })
     }
 
-    fn reverse<'w>(
+    fn reverse(
         &self,
         io: &mut Session<'_, '_>,
         input: &[i32],
         mut claims: Vec<Claim>,
-        trace: impl Fn() -> &'w Run + Sync,
+        mut trace: Option<Run>,
         mut requests: Vec<Request>,
     ) -> Result<Vec<Request>> {
         let pre = self.decoder_bias.is_some();
         let mut lookups = Lookups::default();
         if pre {
             claims = vec![self.norm.reverse(io, &mut requests, &claims, || {
-                let run = trace();
+                let run = trace.as_ref().expect("model trace");
                 (&run.norms, run.layers.last().unwrap().output(true))
             })?];
         }
-        for (i, block) in self.layers.iter().enumerate().rev() {
+        for block in self.layers.iter().rev() {
+            let layer = trace.as_mut().and_then(|run| run.layers.pop());
             claims = block.reverse(io, &mut requests, &mut lookups, &claims, pre, || {
-                let run = trace();
-                let input = if i > 0 {
-                    run.layers[i - 1].output(pre)
+                let run = trace.as_ref().expect("model trace");
+                let input = if let Some(previous) = run.layers.last() {
+                    previous.output(pre)
                 } else if pre {
                     input
                 } else {
                     &run.norms.values
                 };
-                (&run.layers[i], input)
+                (layer.as_ref().expect("layer trace"), input)
             })?;
         }
         if !pre {
-            claims = vec![self
-                .norm
-                .reverse(io, &mut requests, &claims, || (&trace().norms, input))?];
+            claims = vec![self.norm.reverse(io, &mut requests, &claims, || {
+                (
+                    &trace.as_ref().expect("embedding normalization trace").norms,
+                    input,
+                )
+            })?];
         }
         if claims
             .iter()
@@ -454,6 +462,7 @@ impl<'a> Model<'a> {
         {
             return Err("invalid input embedding evaluation");
         }
+        drop(trace);
         lookups.finish(io, &mut requests)?;
         Ok(requests)
     }
@@ -494,24 +503,30 @@ impl<'a> Model<'a> {
             .transpose()
     }
 
-    fn reverse_logits<'w>(
+    fn reverse_logits(
         &self,
         io: &mut Session<'_, '_>,
         input: &[i32],
         y: &[i32],
         logits: Option<&Linear<'_>>,
-        run: impl Fn() -> &'w Run + Sync,
-        values: impl Fn() -> &'w Rounded,
+        run: Option<Run>,
+        values: Option<Rounded>,
     ) -> Result<Vec<Request>> {
         let shape = logits.map_or(self.shape, Linear::shape);
         let point = io.random(shape.bits(), shape.bits())?;
         let claim = Claim::new(point.clone(), shape.evaluate(y, &point));
         let mut requests = Vec::new();
         let claim = if let Some(logits) = logits {
-            logits.reverse(io, &mut requests, claim, || (values(), &run().norms.values))?
+            logits.reverse(io, &mut requests, claim, || {
+                (
+                    values.as_ref().expect("logits trace"),
+                    &run.as_ref().expect("model trace").norms.values,
+                )
+            })?
         } else {
             claim
         };
+        drop(values);
         self.reverse(io, input, vec![claim], run, requests)
     }
 
@@ -535,16 +550,7 @@ impl<'a> Model<'a> {
             &output.domain(),
             packed,
             |t| self.bind(t, tokens, segments, output),
-            move |io| {
-                self.reverse_logits(
-                    io,
-                    &input,
-                    values,
-                    logits.as_ref(),
-                    || &run,
-                    || score.as_ref().unwrap(),
-                )
-            },
+            move |io| self.reverse_logits(io, &input, values, logits.as_ref(), Some(run), score),
         )?;
         Ok((y, proof))
     }
@@ -567,16 +573,7 @@ impl<'a> Model<'a> {
             &output.domain(),
             proof,
             |t| self.bind(t, tokens, segments, output),
-            |io| {
-                self.reverse_logits(
-                    io,
-                    &input,
-                    y,
-                    logits.as_ref(),
-                    || unreachable!(),
-                    || unreachable!(),
-                )
-            },
+            |io| self.reverse_logits(io, &input, y, logits.as_ref(), None, None),
         )
     }
 
@@ -601,7 +598,8 @@ impl<'a> Model<'a> {
             self.embeddings.tokens,
             self.bits,
             config,
-            &self.norm.bounds(),
+            &self.ranking_bound,
+            || self.norm.bounds(),
         )
     }
 
@@ -625,7 +623,7 @@ impl<'a> Model<'a> {
             move |io| {
                 let mut requests = Vec::new();
                 let claims = ranking.reverse(io, &mut requests, selected, || &run.norms.values)?;
-                self.reverse(io, &input, claims, || &run, requests)
+                self.reverse(io, &input, claims, Some(run), requests)
             },
         )?;
         Ok((candidates, proof))
@@ -650,7 +648,7 @@ impl<'a> Model<'a> {
             |io| {
                 let mut requests = Vec::new();
                 let claims = ranking.reverse(io, &mut requests, candidates, || unreachable!())?;
-                self.reverse(io, &input, claims, || unreachable!(), requests)
+                self.reverse(io, &input, claims, None, requests)
             },
         )
     }

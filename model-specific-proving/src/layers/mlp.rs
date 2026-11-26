@@ -22,7 +22,8 @@ struct Activate<'a> {
     lower: i32,
     symmetric: bool,
     lookup: Lookup,
-    constraints: Ranges<4>,
+    constraints: Ranges<3>,
+    excess: Ranges<1>,
 }
 
 struct ActivationTrace {
@@ -57,7 +58,6 @@ impl<'a> Activate<'a> {
                 unsigned(1),
                 unsigned(if symmetric { 0 } else { 32 }),
                 unsigned(if symmetric { 0 } else { 32 }),
-                unsigned(32),
             ],
         );
         let lookup = Lookup::new(layout, shape.bits(), correction.len())?;
@@ -68,6 +68,7 @@ impl<'a> Activate<'a> {
             symmetric,
             lookup,
             constraints,
+            excess: Ranges::adaptive(layout, shape, 32),
         })
     }
 
@@ -115,8 +116,9 @@ impl<'a> Activate<'a> {
                     .ok_or("activation overflow")?,
             );
         }
-        self.constraints
-            .record(packed, columns.each_ref().map(Vec::as_slice))?;
+        let [sign, absolute, low, excess] = &columns;
+        self.constraints.record(packed, [sign, absolute, low])?;
+        self.excess.record_adaptive(packed, excess)?;
         self.lookup.record(packed, &addresses)?;
         Ok(ActivationTrace {
             output,
@@ -178,6 +180,10 @@ impl<'a> Activate<'a> {
                     }),
                 ];
                 for j in 0..4 {
+                    if self.symmetric && matches!(j, 1 | 2) {
+                        columns.push(Column::axis(len, vars, vec![F::zero()]));
+                        continue;
+                    }
                     columns.push(Column::source(len, move |i| {
                         if active(i) {
                             F::from_i64(self.cell(x[i / stride * shape.width + i % stride]).1[j])
@@ -188,8 +194,8 @@ impl<'a> Activate<'a> {
                 }
                 columns.extend([
                     Column::source(len, move |i| F::from_bool(active(i))),
-                    Column::Dense(weights(&claim.point)),
-                    Column::Dense(weights(p)),
+                    Column::split_equality(&claim.point),
+                    Column::split_equality(p),
                 ]);
                 columns
             },
@@ -208,12 +214,9 @@ impl<'a> Activate<'a> {
             ]);
             formula(&values)
         })?;
-        self.constraints.open(
-            io,
-            requests,
-            &end.challenges,
-            v[3..].try_into().expect("activation ranges"),
-        )?;
+        self.constraints
+            .open(io, requests, &end.challenges, [v[3], v[4], v[5]])?;
+        self.excess.open(io, requests, &end.challenges, [v[6]])?;
         lookups.read(
             &self.lookup,
             &[Table::Direct(self.correction)],

@@ -88,6 +88,7 @@ impl<const N: usize> Ranges<N> {
             slot: self.slot,
             claim: Claim::new(point, F::zero()),
             planes,
+            one_hot_sum: false,
         });
     }
 
@@ -113,6 +114,7 @@ impl<const N: usize> Ranges<N> {
             slot: self.slot,
             claim: Claim::new(point.to_vec(), value),
             planes,
+            one_hot_sum: false,
         });
         Ok(())
     }

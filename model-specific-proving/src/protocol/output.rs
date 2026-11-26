@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use jolt_field::{One, Ring, Zero};
 use rayon::prelude::*;
 
@@ -37,7 +39,8 @@ impl<'a> Ranking<'a> {
         weights: &'a [i32],
         bits: usize,
         configuration: &'a TopKConfig,
-        bound: &[u128],
+        ranking_bound: &OnceLock<i128>,
+        bounds: impl FnOnce() -> Vec<u128>,
     ) -> Result<Self> {
         let cfg = configuration;
         let vocab = weights.len() / input.width;
@@ -48,21 +51,23 @@ impl<'a> Ranking<'a> {
             || !cfg.rows_per_block.is_power_of_two()
             || !cfg.vocab_per_block.is_power_of_two()
             || weights.len() != vocab * input.width
-            || bound.len() != input.width
         {
             return Err("invalid Top-K configuration");
         }
         let scale = 1i128 << bits;
-        let maximum = weights
-            .chunks_exact(input.width)
-            .map(|w| {
-                w.iter()
-                    .zip(bound)
-                    .map(|(&x, &m)| i128::from(x.unsigned_abs()) * m as i128)
-                    .sum::<i128>()
-            })
-            .max()
-            .ok_or("empty vocabulary")?;
+        let maximum = *ranking_bound.get_or_init(|| {
+            let bound = bounds();
+            weights
+                .chunks_exact(input.width)
+                .map(|w| {
+                    w.iter()
+                        .zip(&bound)
+                        .map(|(&x, &m)| i128::from(x.unsigned_abs()) * m as i128)
+                        .sum::<i128>()
+                })
+                .max()
+                .expect("validated vocabulary")
+        });
         let one_sided = maximum <= scale * i128::from(i32::MAX);
         let span = maximum
             + if one_sided {
@@ -155,23 +160,27 @@ impl<'a> Ranking<'a> {
         let mut result = Vec::with_capacity(cfg.positions.len());
         for blocks in self.blocks.chunk_by(|a, b| a.row == b.row) {
             let first = &blocks[0];
-            let mut values = Vec::new();
+            let rows = first.bounds.shape.rows;
+            let hidden = &hidden[first.row * width..][..rows * width];
+            let mut values = vec![0; self.weights.len() / width * rows];
+            self.weights
+                .par_chunks_exact(width)
+                .with_min_len(128)
+                .zip(values.par_chunks_exact_mut(rows))
+                .for_each(|(weight, scores)| {
+                    for (score, row) in scores.iter_mut().zip(hidden.chunks_exact(width)) {
+                        *score = wide_dot(row, weight);
+                    }
+                });
             let start = result.len();
-            for position in first.row..first.row + first.bounds.shape.rows {
-                let h = &hidden[position * width..][..width];
-                let raw: Vec<_> = self
-                    .weights
-                    .par_chunks_exact(width)
-                    .with_min_len(128)
-                    .map(|w| wide_dot(h, w))
-                    .collect();
-                let mut row = raw
-                    .iter()
+            for position in 0..rows {
+                let mut row = values
+                    .chunks_exact(rows)
                     .enumerate()
-                    .map(|(id, &value)| {
+                    .map(|(id, values)| {
                         Ok(Candidate {
                             id,
-                            logit: i32::try_from(value.div_euclid(self.scale))
+                            logit: i32::try_from(values[position].div_euclid(self.scale))
                                 .map_err(|_| "Top-K overflow")?,
                         })
                     })
@@ -181,19 +190,19 @@ impl<'a> Ranking<'a> {
                     row.truncate(cfg.k);
                 }
                 row.sort_unstable_by_key(order);
-                values.push(raw);
                 result.push(row);
             }
             for block in blocks {
                 let mut lower = Vec::new();
                 let mut upper = Vec::with_capacity(block.bounds.shape.len());
-                for (raw, row) in values.iter().zip(&result[start..]) {
+                for (position, row) in result[start..].iter().enumerate() {
                     for index in block.col..block.col + block.bounds.shape.width {
                         let (min, max, _) = self.limits(row, index);
+                        let raw = values[index * rows + position];
                         if !self.one_sided {
-                            lower.push(raw[index] - min);
+                            lower.push(raw - min);
                         }
-                        upper.push(max - raw[index]);
+                        upper.push(max - raw);
                     }
                 }
                 block.bounds.record(packed, [&lower, &upper])?;
@@ -220,15 +229,20 @@ impl<'a> Ranking<'a> {
                 &self.weights[block.col * width..][..shape.width * width],
                 col,
             );
-            let private = || {
+            let private = io.proving().then(|| {
                 bind_rows(
                     width,
                     &hidden()[block.row * width..][..shape.rows * width],
                     row,
                 )
-            };
-            let [value] = io.values(|| [inner(private(), public.iter().copied())])?;
-            let claim = io.dot(value, &public, private)?;
+            });
+            let [value] = io.values(|| {
+                [inner(
+                    private.as_ref().unwrap().iter().copied(),
+                    public.iter().copied(),
+                )]
+            })?;
+            let claim = io.dot(value, &public, || private.unwrap())?;
             let low = self.scale * i128::from(i32::MIN);
             let lo = F::from_i128(low);
             let mut lower = F::zero();

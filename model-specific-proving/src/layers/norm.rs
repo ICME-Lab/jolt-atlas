@@ -1,4 +1,5 @@
 use jolt_field::{Ring, Zero};
+use jolt_poly::TensorEqTable;
 
 use super::{NormalizationKind, NormalizationParameters};
 use crate::protocol::{
@@ -285,23 +286,6 @@ impl<'a> Norm<'a> {
             .iter_mut()
             .skip(shape.rows)
             .for_each(|x| *x = F::zero());
-        let blend = |i| {
-            inner(
-                batch.iter().copied(),
-                claims.iter().map(|q| {
-                    q.point
-                        .iter()
-                        .enumerate()
-                        .fold(F::from_u64(1), |acc, (b, &x)| {
-                            acc * if i >> (vars - b - 1) & 1 != 0 {
-                                x
-                            } else {
-                                F::from_u64(1) - x
-                            }
-                        })
-                }),
-            )
-        };
         let (end, values) = io.fold(
             sum,
             vars,
@@ -327,44 +311,45 @@ impl<'a> Norm<'a> {
                         )
                     }));
                 }
+                let cols_bits = vars - row_bits;
                 for c in 0..9 {
-                    cols.push(Column::source(len, move |i| {
-                        F::from_i128(trace.stats.get(i / stride).map_or(0, |row| row[c]))
-                    }));
+                    let mut values: Vec<_> =
+                        trace.stats.iter().map(|row| F::from_i128(row[c])).collect();
+                    values.resize(1 << row_bits, F::zero());
+                    cols.push(Column::axis(len, cols_bits, values));
                 }
+                let blend: Vec<_> = claims
+                    .iter()
+                    .zip(batch)
+                    .map(|(q, &scale)| TensorEqTable::new_with_scaling(&q.point, scale))
+                    .collect();
                 cols.extend([
-                    Column::source(len, |i| gain[i % stride]),
-                    Column::source(len, |i| bias[i % stride]),
+                    Column::axis(len, 0, gain.clone()),
+                    Column::axis(len, 0, bias.clone()),
                     Column::source(len, |i| F::from_bool(i % stride < shape.width)),
                     Column::source(len, |i| {
                         F::from_bool(i / stride < shape.rows && i % stride < shape.width)
                     }),
                     Column::source(len, |i| F::from_bool(i % stride == 0)),
-                    Column::source(len, blend),
-                    Column::Dense(weights(p)),
-                    Column::source(len, |i| row_values[i / stride]),
+                    Column::source(len, move |i| {
+                        blend.iter().map(|table| table.evaluate_index(i)).sum()
+                    }),
+                    Column::split_equality(p),
+                    Column::axis(len, cols_bits, row_values.clone()),
                 ]);
                 cols
             },
-            [0, 1, 2, 3, 4, 5],
+            std::array::from_fn::<_, 15, _>(|i| i),
             formula,
         )?;
         let (rp, cp) = end.challenges.split_at(row_bits);
-        let fields = io.values(|| {
-            std::array::from_fn::<_, 9, _>(|i| {
-                inner(
-                    weights(rp),
-                    witness().0.stats.iter().map(|row| F::from_i128(row[i])),
-                )
-            })
-        })?;
+        let fields: [F; 9] = values[6..].try_into().expect("row statistics");
         io.expect(&end, || {
             let cw = weights(cp);
             let rw = weights(rp);
             let lanes: F = cw.iter().take(shape.width).copied().sum();
             let active_rows: F = rw.iter().take(shape.rows).copied().sum();
             let mut endpoints = values.to_vec();
-            endpoints.extend(fields);
             endpoints.extend([
                 inner(cw.iter().copied(), gain.iter().copied()),
                 inner(cw.iter().copied(), bias.iter().copied()),

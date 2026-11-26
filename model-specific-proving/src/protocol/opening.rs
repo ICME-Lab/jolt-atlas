@@ -1,4 +1,7 @@
-use std::sync::OnceLock;
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 
 use jolt_field::{Ring, Zero};
 use jolt_transcript::{
@@ -52,6 +55,7 @@ pub(crate) struct Request {
     pub slot: Slot,
     pub claim: Claim,
     pub planes: Vec<F>,
+    pub one_hot_sum: bool,
 }
 
 pub struct Proof {
@@ -287,6 +291,7 @@ impl Plan {
     ) -> Result<LinearClaim<Scalar>> {
         let mix = io.random(requests.len(), requests.len())?;
         let sum = inner(requests.iter().map(|r| r.claim.value), mix.iter().copied());
+        let mut column_weights: HashMap<&[F], Arc<[F]>> = HashMap::new();
         let queries: Vec<_> = requests
             .iter()
             .zip(mix)
@@ -298,7 +303,18 @@ impl Plan {
                     .split_at(r.claim.point.len().saturating_sub(ROW_BITS));
                 let mut row_point = vec![F::zero(); ROW_BITS - row.len()];
                 row_point.extend_from_slice(row);
-                (offset, weights(column), row_point, r.planes.as_slice(), mix)
+                let weights = column_weights
+                    .entry(column)
+                    .or_insert_with(|| weights(column).into())
+                    .clone();
+                (
+                    offset,
+                    weights,
+                    row_point,
+                    r.planes.as_slice(),
+                    mix,
+                    r.one_hot_sum.then_some(1 << row.len()),
+                )
             })
             .collect();
         let (end, _) = io.fold(
@@ -309,8 +325,13 @@ impl Plan {
                 let packed = packed.expect("prover witness");
                 queries
                     .iter()
-                    .flat_map(|(offset, cols, row, planes, mix)| {
+                    .flat_map(|(offset, cols, row, planes, mix, one_hot_lanes)| {
                         let mut projection = vec![F::zero(); ROWS];
+                        if let Some(lanes) = one_hot_lanes {
+                            // The honest witness has exactly one set bit per cell.
+                            projection[..*lanes].fill(*mix);
+                            return [Column::Dense(projection), Column::Dense(weights(row))];
+                        }
                         let coeffs = planes.iter().flat_map(|&p| {
                             let scale = p * *mix;
                             cols.iter().map(move |&c| scale * c)
@@ -331,7 +352,7 @@ impl Plan {
         )?;
 
         let mut columns = vec![Scalar::from(0u64); params.shape().columns()];
-        for (offset, cols, row, planes, mix) in queries {
+        for (offset, cols, row, planes, mix, _) in queries {
             let scale = mix * equality(&row, &end.challenges);
             let factors = planes.iter().flat_map(|&p| {
                 let scale = p * scale;

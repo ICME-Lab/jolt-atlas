@@ -146,7 +146,7 @@ fn proves_top_k_and_picks_the_lower_id_on_ties() {
     let tokens = [0, 1, 2];
     let (logits, _) = model.prove(&tokens, None).unwrap();
     let cfg = TopKConfig {
-        positions: 1..3,
+        positions: 0..3,
         k: 2,
         rows_per_block: 2,
         vocab_per_block: 4,
@@ -154,7 +154,6 @@ fn proves_top_k_and_picks_the_lower_id_on_ties() {
     let (mut candidates, proof) = model.prove_top_k(&tokens, &cfg).unwrap();
     let expected: Vec<_> = logits
         .chunks_exact(6)
-        .skip(1)
         .map(|row| {
             let mut r: Vec<_> = row
                 .iter()

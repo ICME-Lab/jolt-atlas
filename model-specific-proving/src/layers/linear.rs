@@ -13,17 +13,38 @@ use crate::protocol::{
 
 pub(crate) struct Rounded {
     pub values: Vec<i32>,
-    pub(crate) remainder: Vec<i32>,
+    pub(crate) remainder: Remainder,
+}
+
+pub(crate) enum Remainder {
+    Narrow(Vec<u16>),
+    Wide(Vec<u32>),
 }
 
 impl Rounded {
-    pub(crate) fn make(
+    fn make(
         shape: Shape,
         bits: usize,
         compute: impl Fn(usize, usize) -> i128 + Sync,
     ) -> Result<Self> {
+        let (values, remainder) = if bits <= u16::BITS as usize {
+            let (values, remainder) = Self::round(shape, bits, compute, |r| r as u16)?;
+            (values, Remainder::Narrow(remainder))
+        } else {
+            let (values, remainder) = Self::round(shape, bits, compute, |r| r)?;
+            (values, Remainder::Wide(remainder))
+        };
+        Ok(Self { values, remainder })
+    }
+
+    fn round<T: Copy + Default + Send>(
+        shape: Shape,
+        bits: usize,
+        compute: impl Fn(usize, usize) -> i128 + Sync,
+        store: impl Fn(u32) -> T + Sync,
+    ) -> Result<(Vec<i32>, Vec<T>)> {
         let mut values = vec![0; shape.len()];
-        let mut remainder = vec![0; shape.len()];
+        let mut remainder = vec![T::default(); shape.len()];
         values
             .par_chunks_mut(shape.width)
             .zip(remainder.par_chunks_mut(shape.width))
@@ -32,11 +53,11 @@ impl Rounded {
                 for (col, (value, rem)) in values.iter_mut().zip(remainder).enumerate() {
                     let raw = compute(row, col);
                     *value = i32::try_from(raw >> bits).map_err(|_| "fixed-point overflow")?;
-                    *rem = (raw & ((1 << bits) - 1)) as i32;
+                    *rem = store((raw & ((1 << bits) - 1)) as u32);
                 }
                 Ok(())
             })?;
-        Ok(Self { values, remainder })
+        Ok((values, remainder))
     }
 }
 
@@ -64,7 +85,10 @@ impl Rounding {
     ) -> Result<Rounded> {
         let rounded = Rounded::make(self.shape, self.bits, compute)?;
         self.output.record_signed(packed, &rounded.values)?;
-        self.remainder.record(packed, [&rounded.remainder])?;
+        match &rounded.remainder {
+            Remainder::Narrow(values) => self.remainder.record(packed, [values])?,
+            Remainder::Wide(values) => self.remainder.record(packed, [values])?,
+        }
         Ok(rounded)
     }
 
@@ -73,9 +97,14 @@ impl Rounding {
         io: &mut Session<'_, '_>,
         requests: &mut Vec<Request>,
         claim: &Claim,
-        trace: impl FnOnce() -> &'w [i32],
+        trace: impl FnOnce() -> &'w Remainder,
     ) -> Result<F> {
-        let [remainder] = io.values(|| [self.shape.evaluate(trace(), &claim.point)])?;
+        let [remainder] = io.values(|| {
+            [match trace() {
+                Remainder::Narrow(values) => self.shape.evaluate(values, &claim.point),
+                Remainder::Wide(values) => self.shape.evaluate(values, &claim.point),
+            }]
+        })?;
         self.output
             .open(io, requests, &claim.point, [claim.value])?;
         self.remainder

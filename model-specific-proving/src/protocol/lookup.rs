@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use jolt_field::{One, Ring, Zero};
+use jolt_poly::TensorEqTable;
 
 use super::{
     field::F,
@@ -195,20 +196,28 @@ impl<'a> Lookups<'a> {
                 bits,
                 2,
                 || {
-                    let mut histogram = BTreeMap::new();
-                    for (q, &scale) in reads.iter().zip(mix) {
-                        let addresses = q.witness.as_ref().expect("lookup trace");
-                        for (cell, weight) in weights(&q.point).into_iter().enumerate() {
-                            *histogram.entry(addresses.get(cell)).or_insert_with(F::zero) +=
-                                scale * weight;
+                    let scan = |update: &mut dyn FnMut(usize, F)| {
+                        for (q, &scale) in reads.iter().zip(mix) {
+                            let addresses = q.witness.as_ref().expect("lookup trace");
+                            let weights = TensorEqTable::new_with_scaling(&q.point, scale);
+                            let inner = weights.e_in();
+                            for (block, &outer) in weights.e_out().iter().enumerate() {
+                                for (i, &weight) in inner.iter().enumerate() {
+                                    update(addresses.get(block * inner.len() + i), outer * weight);
+                                }
+                            }
                         }
-                    }
-                    vec![
-                        Column::source(size, move |i| {
-                            histogram.get(&i).copied().unwrap_or_else(F::zero)
-                        }),
-                        Column::source(size, table),
-                    ]
+                    };
+                    let histogram = if size <= 1 << 19 {
+                        let mut bins = vec![F::zero(); size];
+                        scan(&mut |i, weight| bins[i] += weight);
+                        Column::Dense(bins)
+                    } else {
+                        let mut bins = BTreeMap::new();
+                        scan(&mut |i, weight| *bins.entry(i).or_insert_with(F::zero) += weight);
+                        Column::source(size, move |i| bins.get(&i).copied().unwrap_or_else(F::zero))
+                    };
+                    vec![histogram, Column::source(size, table)]
                 },
                 [0],
                 |v| v[0] * v[1],
@@ -270,11 +279,13 @@ impl<'a> Lookups<'a> {
                         slot,
                         claim: Claim::new(link.challenges.clone(), value),
                         planes: selection.clone(),
+                        one_hot_sum: false,
                     });
                     requests.push(Request {
                         slot,
                         claim: Claim::new(q.point.clone(), F::one()),
                         planes: vec![F::one(); 1 << width],
+                        one_hot_sum: true,
                     });
                 }
                 terminal += product;

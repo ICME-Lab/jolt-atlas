@@ -875,6 +875,37 @@ fn layer3(lut_layers: &LutLayers) -> Vec<Field> {
     layer3
 }
 
+#[cfg(feature = "gkr-backend")]
+type TreeBackend = fn(&[Field], usize, bool) -> Option<Vec<Vec<Field>>>;
+
+#[cfg(feature = "gkr-backend")]
+static TREE_BACKEND: std::sync::OnceLock<TreeBackend> = std::sync::OnceLock::new();
+
+/// Installs an optional implementation of the upper product-tree layers.
+#[cfg(feature = "gkr-backend")]
+pub fn set_tree_backend(backend: TreeBackend) {
+    let _ = TREE_BACKEND.set(backend);
+}
+
+#[cfg(feature = "gkr-backend")]
+pub trait DenseRounds {
+    /// Evaluates a round after applying the previous challenge, if any.
+    fn step(&mut self, previous: Option<Field>, at_one: bool, low: &[Field], high: &[Field]) -> Option<[Field; 2]>;
+
+    /// Copies the columns at the last successful step.
+    fn snapshot(&self, left: &mut [Field], right: &mut [Field]);
+}
+
+#[cfg(feature = "gkr-backend")]
+type DenseBackend = fn(&[Field], &[Field]) -> Option<Box<dyn DenseRounds>>;
+#[cfg(feature = "gkr-backend")]
+static DENSE_BACKEND: std::sync::OnceLock<DenseBackend> = std::sync::OnceLock::new();
+
+#[cfg(feature = "gkr-backend")]
+pub fn set_dense_backend(backend: DenseBackend) {
+    let _ = DENSE_BACKEND.set(backend);
+}
+
 /// Multiplies `layer` pairwise, left half against right half, until one
 /// value per group remains. Returns that output layer and every layer before
 /// it, `layer` first.
@@ -885,6 +916,15 @@ fn fold_layers(
 ) -> (Vec<Field>, Vec<Vec<Field>>) {
     let rounds = (layer.len() / groups).checked_ilog2().unwrap_or(0);
     let mut witnesses = Vec::with_capacity(rounds as usize);
+    #[cfg(feature = "gkr-backend")]
+    if rounds > 0 {
+        if let Some(mut upper) = TREE_BACKEND.get().and_then(|run| run(&layer, groups, include_output)) {
+            let output = if include_output { upper.pop().unwrap() } else { Vec::new() };
+            witnesses.push(layer);
+            witnesses.extend(upper);
+            return (output, witnesses);
+        }
+    }
 
     // Stop when there is one output per group
     while layer.len() > groups {

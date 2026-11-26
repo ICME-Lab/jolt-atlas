@@ -5,6 +5,9 @@ edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"
 
+[features]
+gkr-backend = []
+
 [dependencies]
 bytemuck = "1.25"
 field = { git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }

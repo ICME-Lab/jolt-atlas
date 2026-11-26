@@ -14,6 +14,11 @@ impl Codes {
         Self { len, width, bytes }
     }
 
+    #[cfg(all(feature = "metal", target_os = "macos"))]
+    pub(super) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     pub(crate) fn at(&self, i: usize) -> usize {
         let bit = i * self.width;
         let word = u64::from_le_bytes(self.bytes[bit / 8..][..8].try_into().unwrap());

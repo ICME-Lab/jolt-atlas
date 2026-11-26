@@ -3,7 +3,7 @@ use std::{cell::OnceCell, sync::Arc};
 use jolt_field::{Ring, Zero};
 
 use super::{
-    linear::{narrow_dot, wide_dot, Linear, Remainder, Rotation, Rounded, Rounding},
+    linear::{narrow_dot, wide_dot, Linear, Rotation, Rounded, Rounding},
     norm::{Norm, NormTrace},
     softmax::{tiles, Soft, SoftTrace, Tile},
     Attention, NormalizationParameters, Projection, Rotary, SoftmaxMask,
@@ -589,18 +589,7 @@ impl<'a> AttentionPlan<'a> {
                     reads,
                     Claim::new([rows, &end.challenges].concat(), probability),
                     || &trace().soft,
-                    |r, c| self.score(i, &trace().scores, r, c),
-                    |j, index| {
-                        let shape = self.tiles[j].shape;
-                        let score = &trace().scores[j];
-                        [
-                            shape.at(&score.values, index),
-                            match &score.remainder {
-                                Remainder::Narrow(values) => shape.at(values, index),
-                                Remainder::Wide(values) => shape.at(values, index),
-                            },
-                        ]
-                    },
+                    |j| &trace().scores[j],
                 )?;
                 value_claims.push(Claim::new(end.challenges, value_input));
                 let mut raw = F::zero();

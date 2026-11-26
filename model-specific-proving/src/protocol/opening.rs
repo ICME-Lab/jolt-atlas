@@ -982,6 +982,8 @@ impl Plan {
         check: impl FnOnce(&mut Session<'_, '_>) -> Result<Vec<Request>>,
         mut emit: impl FnMut(BitProof) -> Result<()>,
     ) -> Result<ProofMetadata> {
+        #[cfg(all(feature = "metal", target_os = "macos"))]
+        super::metal::enable_bitz();
         let streamed = packed.is_streamed();
         let Packed {
             widths,

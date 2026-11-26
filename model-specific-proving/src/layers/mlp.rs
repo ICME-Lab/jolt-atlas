@@ -164,7 +164,7 @@ impl<'a> Activate<'a> {
             active * (q * output + p * (coefficients[0] * signed + clamp))
         };
         let active = |i| i / stride < shape.rows && i % stride < shape.width;
-        let (end, v) = io.fold_many(
+        let (end, v) = io.fold_accelerated(
             claim.value,
             vars,
             if gated { 5 } else { 4 },
@@ -204,6 +204,26 @@ impl<'a> Activate<'a> {
                 &[0, 1, 2, 3, 4, 5, 6]
             },
             formula,
+            || {
+                #[cfg(all(feature = "metal", target_os = "macos"))]
+                {
+                    let (addresses, x, up) = witness();
+                    crate::protocol::metal::mlp(
+                        shape,
+                        addresses,
+                        x,
+                        up,
+                        self.correction,
+                        self.symmetric,
+                        self.lower,
+                        &claim.point,
+                        p,
+                        coefficients,
+                    )
+                }
+                #[cfg(not(all(feature = "metal", target_os = "macos")))]
+                None
+            },
         )?;
         io.expect(&end, || {
             let (r, c) = end.challenges.split_at(shape.row_bits());

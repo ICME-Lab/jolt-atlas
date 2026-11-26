@@ -2,6 +2,8 @@ use std::ops::Range;
 
 pub(crate) mod field;
 pub(crate) mod lookup;
+#[cfg(all(feature = "metal", target_os = "macos"))]
+pub(crate) mod metal;
 pub(crate) mod opening;
 pub(crate) mod output;
 pub(crate) mod range;

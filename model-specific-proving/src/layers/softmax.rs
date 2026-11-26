@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use jolt_field::{CanonicalEncoding, One, Ring, Zero};
 
-use super::{SoftmaxMask, SoftmaxTables};
+use super::{
+    linear::{Remainder, Rounded},
+    SoftmaxMask, SoftmaxTables,
+};
 use crate::protocol::{
     field::F,
     lookup::{Addresses, Lookup, Lookups, Table},
@@ -301,8 +304,7 @@ impl<'a> Soft<'a> {
         lookups: &mut Lookups<'a>,
         claim: Claim,
         witness: impl Fn() -> &'w SoftTrace,
-        score: impl Fn(usize, usize) -> i32 + Sync,
-        qk: impl Fn(usize, usize) -> [F; 2],
+        scores: impl Fn(usize) -> &'w Rounded + Sync,
     ) -> Result<(Claim, Vec<TileEvaluation>)> {
         let (vars, rb) = (self.shape.bits(), self.shape.row_bits());
         let stride = self.shape.width.next_power_of_two();
@@ -323,13 +325,13 @@ impl<'a> Soft<'a> {
             active * (query * prob + check * clamp) + row * totals
         };
         let rw = weights(r);
-        let (end, v) = io.fold(
+        let (end, v) = io.fold_accelerated(
             claim.value,
             vars,
             4,
             || {
                 let trace = witness();
-                let score = &score;
+                let scores = &scores;
                 let coordinates = |i| (i / stride, i % stride);
                 let cell = move |i| {
                     let (row, col) = coordinates(i);
@@ -346,12 +348,12 @@ impl<'a> Soft<'a> {
                 };
                 vec![
                     Column::source(len, move |i| {
-                        let (row, col) = coordinates(i);
-                        if cell(i).is_some() {
-                            F::from_i32(score(row, col))
-                        } else {
-                            F::zero()
-                        }
+                        cell(i).map_or_else(F::zero, |(block, index)| {
+                            self.blocks[block]
+                                .tile
+                                .shape
+                                .at(&scores(block).values, index)
+                        })
                     }),
                     Column::source(len, move |i| {
                         F::from_u64(cell(i).map_or(0, |(b, j)| trace.addresses[b].at(j)) as u64)
@@ -385,8 +387,31 @@ impl<'a> Soft<'a> {
                     Column::axis(len, vars - rb, rw.clone()),
                 ]
             },
-            [0, 1, 2, 3, 4, 5, 6, 7],
+            &[0, 1, 2, 3, 4, 5, 6, 7],
             formula,
+            || {
+                #[cfg(all(feature = "metal", target_os = "macos"))]
+                if self.mask == SoftmaxMask::Causal && self.shape.rows > 64 {
+                    let trace = witness();
+                    return crate::protocol::metal::softmax(
+                        self.shape.rows,
+                        &trace.stats,
+                        &trace.addresses,
+                        self.blocks.iter().map(|block| block.tile.shape.width),
+                        |tile| &scores(tile).values,
+                        &trace.overflows,
+                        self.tables.probabilities,
+                        self.tables.sums,
+                        self.tables.limit,
+                        self.radix,
+                        &claim.point,
+                        p,
+                        &rw,
+                        mix,
+                    );
+                }
+                None
+            },
         )?;
         let (rpoint, cpoint) = end.challenges.split_at(rb);
         let mut prefix = vec![F::zero()];
@@ -441,9 +466,12 @@ impl<'a> Soft<'a> {
                             if let Some(overflow) = &trace.overflows[i] {
                                 result[3] += w * F::from_i64(overflow[row * shape.width + col]);
                             }
-                            for (dst, val) in qk_values.iter_mut().zip(qk(i, j)) {
-                                *dst += w * val;
-                            }
+                            let rounded = scores(i);
+                            qk_values[0] += w * shape.at(&rounded.values, j);
+                            qk_values[1] += w * match &rounded.remainder {
+                                Remainder::Narrow(values) => shape.at(values, j),
+                                Remainder::Wide(values) => shape.at(values, j),
+                            };
                         }
                     }
                 }

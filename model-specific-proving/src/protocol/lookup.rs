@@ -281,7 +281,7 @@ impl<'a> Lookups<'a> {
         let endpoints: Vec<_> = (0..reads.len() * (digits + 1))
             .filter(|i| i % (digits + 1) != digits)
             .collect();
-        let (link, values) = io.fold_many(
+        let (link, values) = io.fold_accelerated(
             partial,
             cells,
             digits + 1,
@@ -305,6 +305,30 @@ impl<'a> Lookups<'a> {
                     row.chunks_exact(digits + 1)
                         .map(|part| part.iter().copied().product()),
                 )
+            },
+            || {
+                #[cfg(all(feature = "metal", target_os = "macos"))]
+                {
+                    let sources = reads.iter().zip(mix).map(|(read, &weight)| {
+                        (
+                            read.witness.as_deref().expect("lookup trace"),
+                            read.point.as_slice(),
+                            weight,
+                        )
+                    });
+                    crate::protocol::metal::lookup(
+                        cells,
+                        sources,
+                        reads[0]
+                            .plan
+                            .digits
+                            .iter()
+                            .map(|&(_, shift, width)| (shift, width)),
+                        selectors,
+                    )
+                }
+                #[cfg(not(all(feature = "metal", target_os = "macos")))]
+                None
             },
         )?;
 

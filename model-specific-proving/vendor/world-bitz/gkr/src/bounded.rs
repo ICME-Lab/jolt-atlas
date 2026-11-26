@@ -314,7 +314,36 @@ fn prove_relation(
         }
     };
 
+    #[cfg(feature = "gkr-backend")]
+    let mut backend = DENSE_BACKEND.get().and_then(|run| run(left, right));
+    #[cfg(feature = "gkr-backend")]
+    let mut previous = None;
     for i in (0..remaining).rev() {
+        #[cfg(feature = "gkr-backend")]
+        if let Some(gpu) = &mut backend {
+            let (low, high) = point[..i].split_at(i.min(TILE.ilog2() as usize));
+            if let Some([value, infinity]) = gpu.step(previous, sends_one(point[i]),
+                &poly::eq_table(low), &poly::eq_table(high))
+            {
+                let sums = (Wide256::mul(value, Field::ONE), Wide256::mul(infinity, Field::ONE));
+                let r = send_round(ps, &mut eq_bound, sums, point[i], security);
+                challenges[i] = r;
+                previous = Some(r);
+                continue;
+            }
+            if let Some(r) = previous {
+                // The last successful GPU step holds the state before this bind.
+                let mid = 2 << i;
+                left = &mut left[..2 * mid];
+                right = &mut right[..2 * mid];
+                gpu.snapshot(left, right);
+                let (l0,l1) = left.split_at_mut(mid);
+                let (r0,r1) = right.split_at_mut(mid);
+                bind(r,l0,l1,r0,r1);
+                (left,right) = (l0,r0);
+            }
+            backend = None;
+        }
         let half = 1 << i;
         let (l0, l1) = left.split_at_mut(half);
         let (r0, r1) = right.split_at_mut(half);

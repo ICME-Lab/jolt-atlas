@@ -16,6 +16,11 @@ use super::{
     Result,
 };
 
+#[cfg(all(feature = "metal", target_os = "macos"))]
+use super::metal::Round;
+#[cfg(not(all(feature = "metal", target_os = "macos")))]
+pub(crate) enum Round {}
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Messages {
     fields: Vec<F>,
@@ -144,6 +149,20 @@ impl Session<'_, '_> {
         endpoints: &[usize],
         formula: impl Fn(&[F]) -> F + Sync,
     ) -> Result<(SingleReduction<F>, Vec<F>)> {
+        self.fold_accelerated(input, rounds, degree, columns, endpoints, formula, || None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fold_accelerated<'w>(
+        &mut self,
+        input: F,
+        rounds: usize,
+        degree: usize,
+        columns: impl FnOnce() -> Vec<Column<'w>>,
+        endpoints: &[usize],
+        formula: impl Fn(&[F]) -> F + Sync,
+        prepare: impl FnOnce() -> Option<Round>,
+    ) -> Result<(SingleReduction<F>, Vec<F>)> {
         let statement = SingleInstance {
             input_claim: input,
             rounds,
@@ -153,7 +172,10 @@ impl Session<'_, '_> {
         let mut last = Vec::new();
         let result = match self {
             Self::Prover(transcript, proof) => {
+                let _acceleration = prepare();
                 let mut fold = Fold {
+                    #[cfg(all(feature = "metal", target_os = "macos"))]
+                    acceleration: _acceleration,
                     columns: columns(),
                     rounds,
                     degree,
@@ -504,10 +526,31 @@ impl<'a> Column<'a> {
 }
 
 struct Fold<'a, E> {
+    #[cfg(all(feature = "metal", target_os = "macos"))]
+    acceleration: Option<Round>,
     columns: Vec<Column<'a>>,
     rounds: usize,
     degree: usize,
     formula: E,
+}
+
+#[cfg(all(feature = "metal", target_os = "macos"))]
+impl<E> Fold<'_, E> {
+    fn restore_cpu(&mut self) {
+        let Some(round) = self.acceleration.take() else {
+            return;
+        };
+        let mut dense = round.snapshot().into_iter().peekable();
+        for (index, column) in self.columns.iter_mut().enumerate() {
+            if dense.peek().is_some_and(|(i, _)| *i == index) {
+                *column = Column::Dense(dense.next().unwrap().1);
+            } else {
+                for &r in &round.challenges {
+                    column.bind(r);
+                }
+            }
+        }
+    }
 }
 
 impl<E: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, E> {
@@ -521,6 +564,14 @@ impl<E: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, E> {
         _: usize,
         sum: F,
     ) -> std::result::Result<UnivariatePoly<F>, SumcheckError<F>> {
+        #[cfg(all(feature = "metal", target_os = "macos"))]
+        if let Some(round) = &mut self.acceleration {
+            if let Some(mut sums) = round.step(previous, self.degree) {
+                sums[1] = sum - sums[0];
+                return Ok(UnivariatePoly::from_evals(&sums));
+            }
+            self.restore_cpu();
+        }
         if let Some(r) = previous {
             for column in &mut self.columns {
                 column.bind(r);
@@ -568,6 +619,8 @@ impl<E: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, E> {
     }
 
     fn finish_rounds(&mut self, last: F) -> std::result::Result<(), SumcheckError<F>> {
+        #[cfg(all(feature = "metal", target_os = "macos"))]
+        self.restore_cpu();
         if self.rounds != 0 {
             for column in &mut self.columns {
                 column.bind(last);
@@ -580,6 +633,95 @@ impl<E: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "metal", target_os = "macos"))]
+    #[test]
+    fn metal_lookup_matches_cpu_through_the_handoff() {
+        use super::super::{metal, storage::Codes};
+
+        let rounds = 15;
+        let cells = 1 << rounds;
+        let points = [
+            (2..17).map(F::from_u64).collect::<Vec<_>>(),
+            (31..46).map(F::from_u64).collect::<Vec<_>>(),
+        ];
+        let scales = [F::from_u64(3), F::from_u64(7)];
+        let mut addresses = std::array::from_fn::<_, 2, _>(|_| Codes::new(cells, 4));
+        for (read, addresses) in addresses.iter_mut().enumerate() {
+            for i in 0..cells {
+                addresses.set(i, ((i >> 3) ^ i ^ (read * 3)) & 15);
+            }
+        }
+        let digits = [(2usize, 2usize), (0, 2)];
+        let selectors = [
+            weights(&[F::from_u64(47), F::from_u64(53)]),
+            weights(&[F::from_u64(59), F::from_u64(61)]),
+        ];
+        let reads = addresses
+            .iter()
+            .zip(&points)
+            .zip(scales)
+            .map(|((code, point), scale)| (code, point.as_slice(), scale));
+        let Some(round) = metal::lookup(rounds, reads, digits.into_iter(), &selectors) else {
+            return;
+        };
+        let columns = || {
+            let mut columns = Vec::new();
+            for (codes, point) in addresses.iter().zip(&points) {
+                for (&(shift, width), selector) in digits.iter().zip(&selectors) {
+                    columns.push(Column::lookup(cells, selector, move |i| {
+                        (codes.at(i) >> shift) & ((1 << width) - 1)
+                    }));
+                }
+                columns.push(Column::split_equality(point));
+            }
+            columns
+        };
+        let formula = |values: &[F]| {
+            inner(
+                scales,
+                values
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|part| part.iter().copied().product()),
+            )
+        };
+        let mut cpu = Fold {
+            acceleration: None,
+            columns: columns(),
+            rounds,
+            degree: 3,
+            formula,
+        };
+        let mut gpu = Fold {
+            acceleration: Some(round),
+            columns: columns(),
+            rounds,
+            degree: 3,
+            formula,
+        };
+        let mut previous = None;
+        for r in 0..rounds {
+            let sum = F::from_u64((r * r + 17) as u64);
+            let expected = cpu.prove_round(previous, r, sum).unwrap();
+            let actual = gpu.prove_round(previous, r, sum).unwrap();
+            assert_eq!(expected.coefficients(), actual.coefficients(), "round {r}");
+            if r == 0 {
+                assert!(
+                    gpu.acceleration.is_some(),
+                    "Metal did not submit the first round"
+                );
+            }
+            previous = Some(F::from_u64((r + 71) as u64));
+        }
+        cpu.finish_rounds(previous.unwrap()).unwrap();
+        gpu.finish_rounds(previous.unwrap()).unwrap();
+        assert!(gpu.acceleration.is_none());
+        for (left, right) in cpu.columns.iter().zip(&gpu.columns) {
+            assert_eq!(left.get(0), right.get(0));
+        }
+    }
 
     #[test]
     fn compact_masks_fold_like_dense_masks() {

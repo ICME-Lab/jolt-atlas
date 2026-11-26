@@ -86,6 +86,14 @@ cargo run --release --manifest-path model-specific-proving/Cargo.toml \
   models/gpt2-tiny 14 17 42
 ```
 
+On macOS with Apple Silicon and the Xcode Metal toolchain, add
+`--features metal,safetensors-weights` to enable Metal for eligible
+Softmax, MLP activation, and Lookup Sumchecks. Proofs use the same
+format and can be checked by the CPU verifier. Set `ATLAS_CPU_ONLY=1`
+to take the CPU route for comparison. Set `ATLAS_METAL_BITZ=tree`,
+`ATLAS_METAL_BITZ=dense`, or `ATLAS_METAL_BITZ=1` to measure the
+experimental BitZ upper product tree, dense GKR rounds, or both.
+
 For large Top-K proofs, `Model::prove_top_k_to` writes to an empty,
 seekable file and returns the selected candidates. Pass those candidates
 and the proof file to `Model::verify_top_k_from` with the same model,

@@ -25,7 +25,6 @@ impl Plan {
             .slots
             .iter()
             .copied()
-            .filter(|&slot| layout.active(slot))
             .map(|slot| Ok((slot.id, span(slot)?)))
             .collect::<Result<Vec<_>>>()?;
         let total = slots.iter().try_fold(0usize, |sum, &(_, size)| {

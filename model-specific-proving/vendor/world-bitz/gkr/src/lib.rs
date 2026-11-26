@@ -801,6 +801,7 @@ pub fn grand_product(row_images: &[Field], bittable: &BitTable) -> (Vec<Field>, 
     bounded::build(row_images, bittable, bounded::DENSE_NODES)
 }
 
+// An 8-bit table did not improve end-to-end proving time.
 const NIBBLE_BITS: usize = 4;
 const NIBBLES_IN_WORD: usize = u64::BITS as usize / NIBBLE_BITS;
 /// A lookup table has an entry per nibble value.

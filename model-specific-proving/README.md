@@ -67,32 +67,21 @@ remainders and one-hot vectors and opens them in a final batch.
 
 ## Implementation size
 
-The crate has about 6,300 lines of Rust source, including model execution,
-model definitions, and proof generation and verification. Including tests,
-it has about 6,600 lines. The existing Atlas codebase has about 84,000 lines of
+The crate has about 8,200 lines of Rust source, including model execution,
+model definitions, and proof generation and verification.
+The existing Atlas codebase has about 84,000 lines of
 Rust across its broader ONNX pipeline and supporting code. The direct approach
 concentrates Transformer proof maintenance in the shared components. Adding a
 model built from those components mainly requires defining how its layers fit
 together.
 
-## Akita CPU and Metal proving
-
-Akita uses Jolt's native one-hot path for all advice groups. On CPU this
-path reads the one-hot indices directly.
-
-Range checks are included in the grouped opening Sumcheck. On macOS,
-`akita-metal` uses Jolt's native Metal kernels for inner commitments and
-opening operations on supported K=16 groups with ring dimension 512.
-The grouped opening Sumcheck and verification run on the CPU.
+## Proving with BitZ
 
 The `safetensors-weights` feature reads `config.json` and a single
 `model.safetensors` file containing F32, F16, or BF16 weights.
 
 ```sh
 cargo run --release --manifest-path model-specific-proving/Cargo.toml \
-  --features akita-metal,safetensors-weights --bin prove-model -- \
-  --metal models/gpt2-tiny 14 17 42
+  --features bitz,safetensors-weights --bin prove-model -- \
+  models/gpt2-tiny 14 17 42
 ```
-
-Call `AkitaAdviceSetup::with_metal()` on the prover setup to select the backend
-from Rust. The verifier uses `AkitaAdviceSetup::new()`.

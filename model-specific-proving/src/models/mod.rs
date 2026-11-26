@@ -155,8 +155,6 @@ impl<F> Witness<F> {
     }
 }
 
-mod checkpoint;
-
 type ClipSpec = crate::layers::softmax::ClipSpec;
 type ClipPlans = Vec<Vec<Option<crate::layers::softmax::ClipPlan>>>;
 
@@ -194,7 +192,6 @@ impl<'a> Model<'a> {
         let mut layout = Layout::default();
         let mut plans = Vec::with_capacity(layers.len());
         for (i, p) in layers.into_iter().enumerate() {
-            layout.section = Some(i + 1);
             let input_bound = match &architecture {
                 Architecture::Decoder { .. } => p.attention_norm.output_bound(shape.width, bits),
                 Architecture::Encoder { .. } => None,
@@ -231,7 +228,6 @@ impl<'a> Model<'a> {
                 output,
             });
         }
-        layout.section = None;
         let head = match architecture {
             Architecture::Decoder {
                 final_norm,
@@ -444,18 +440,11 @@ impl<'a> Model<'a> {
         if specs.len() != self.layers.len() {
             return Err("invalid Softmax clip layer count");
         }
-        let plans = self
-            .layers
+        self.layers
             .iter()
             .zip(specs)
-            .enumerate()
-            .map(|(i, (layer, s))| {
-                layout.section = Some(i + 1);
-                layer.attention.clip_plan(layout, s)
-            })
-            .collect();
-        layout.section = None;
-        plans
+            .map(|(layer, s)| layer.attention.clip_plan(layout, s))
+            .collect()
     }
 
     fn prepare_clip<F>(
@@ -485,9 +474,7 @@ impl<'a> Model<'a> {
         setup: &C::AdviceProverSetup,
     ) -> Result<(Vec<i32>, Proof<C>)> {
         let input = self.input(tokens, segments)?;
-        if C::LAYER_OPENINGS {
-            return self.prove_checkpointed::<C>(tokens, segments, &input, setup);
-        }
+        // Per-layer BitZ checkpoints added replay work with negligible peak-memory savings.
         let mut w = self.forward::<C::Field>(&input, &self.layout, true)?;
         let mut layout = self.layout.clone();
         let (specs, clipping) = self.prepare_clip(&mut layout, &mut w)?;
@@ -525,11 +512,6 @@ impl<'a> Model<'a> {
         }
         let mut layout = self.layout.clone();
         let clipping = self.clip_plan(&mut layout, &proof.clipping)?;
-        if C::LAYER_OPENINGS {
-            return self.verify_checkpointed(
-                tokens, segments, &input, output, proof, &layout, &clipping, setup,
-            );
-        }
         proof.verify(
             &self.domain(),
             &layout,

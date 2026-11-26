@@ -1,6 +1,6 @@
 //! Model-specific fixed-point proofs built with the Jolt crates.
 //!
-//! Enable `akita` or `bitz` to select a commitment scheme.
+//! Enable `bitz` to prove and verify with World BitZ.
 
 pub mod layers;
 pub mod models;

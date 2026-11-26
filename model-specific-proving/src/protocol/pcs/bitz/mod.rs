@@ -47,12 +47,7 @@ impl ModelPcs for BitzScheme {
             .iter()
             .map(|(_, pcs)| F128::zeroed_vec(pcs.packed_len()))
             .collect();
-        for slot in layout
-            .slots
-            .iter()
-            .copied()
-            .filter(|&slot| layout.active(slot))
-        {
+        for &slot in &layout.slots {
             let cells = 1 << slot.cell_vars;
             let (group, offset) = plan.slots[slot.id];
             advice.fill_bits(slot, |i| {

@@ -503,55 +503,13 @@ impl Plan {
         public: impl FnOnce(&mut ProverState<Keccak>),
         check: impl FnOnce(&mut Session<'_, '_>) -> Result<Vec<Request>>,
     ) -> Result<Proof> {
-        let mut transcript = prover_transcript::<Keccak>(domain, b"");
-        public(&mut transcript);
-        bind_widths(&mut transcript, &packed.widths);
-        let mut roots = Vec::new();
-        let mut commitments = Vec::new();
-        let mut by_group = vec![Vec::new(); self.groups.len()];
-        for (placement, block) in self.slots.iter().zip(packed.blocks) {
-            if placement.planes != 0 {
-                by_group[placement.group].push((placement.offset, block));
-            }
-        }
-        for ((_, pcs), chunks) in self.groups.iter().zip(by_group) {
-            let mut block = F128::zeroed_vec(pcs.packed_len());
-            for (offset, words) in chunks {
-                block[offset..offset + words.len()].copy_from_slice(&words);
-            }
-            let mut channel = build_prover(DOMAIN, b"" as &[u8]);
-            let (root, data) = pcs
-                .commit(&block, &mut channel)
-                .map_err(|_| "could not commit witness")?;
-            transcript.append_bytes(&root.0);
-            roots.push(root.0);
-            commitments.push((data, block, channel));
-        }
-        let mut messages = Messages::default();
-        let requests = check(&mut Session::Prover(&mut transcript, &mut messages))?;
-        let mut openings = Messages::default();
-        let mut io = Session::Prover(&mut transcript, &mut openings);
         let mut bit_proofs = Vec::new();
-        for (((params, pcs), (data, block, mut channel)), queries) in self
-            .groups
-            .iter()
-            .zip(commitments)
-            .zip(self.requests(requests)?)
-        {
-            let claim = self.reduce(&queries, params, Some(&block), &mut io)?;
-            world_prover::BitZProver::new(*params, 8)
-                .prove(&claim, pcs, &data, block, &mut channel)
-                .map_err(|_| "could not prove witness evaluation")?;
-            bit_proofs.push(channel.finish());
-        }
+        let metadata = self.prove_groups(domain, packed, public, check, |proof| {
+            bit_proofs.push(proof);
+            Ok(())
+        })?;
         Ok(Proof {
-            metadata: ProofMetadata {
-                roots,
-                widths: packed.widths,
-                messages,
-                openings,
-                transcript: transcript.narg_string().to_vec(),
-            },
+            metadata,
             bit_proofs,
         })
     }
@@ -564,14 +522,6 @@ impl Plan {
         check: impl FnOnce(&mut Session<'_, '_>) -> Result<Vec<Request>>,
         mut writer: impl Write + Seek,
     ) -> Result<()> {
-        let mut spool = packed.spool.ok_or("missing witness file")?;
-        let mut slots = vec![Vec::new(); self.groups.len()];
-        for (slot, &placement) in self.slots.iter().enumerate() {
-            if placement.planes != 0 {
-                slots[placement.group].push((slot, placement));
-            }
-        }
-
         if writer
             .seek(SeekFrom::End(0))
             .map_err(|_| "could not locate proof destination")?
@@ -583,56 +533,15 @@ impl Plan {
         writer
             .write_all(&[0; 16])
             .map_err(|_| "could not write proof header")?;
-        let mut transcript = prover_transcript::<Keccak>(domain, b"");
-        public(&mut transcript);
-        bind_widths(&mut transcript, &packed.widths);
-        let mut roots = Vec::new();
-        for ((_, pcs), slots) in self.groups.iter().zip(&slots) {
-            let block = spool.group(slots, pcs.packed_len())?;
-            let mut channel = build_prover(DOMAIN, b"" as &[u8]);
-            let (root, _) = pcs
-                .commit(&block, &mut channel)
-                .map_err(|_| "could not commit witness")?;
-            transcript.append_bytes(&root.0);
-            roots.push(root.0);
-        }
-
-        let mut messages = Messages::default();
-        let requests =
-            self.requests(check(&mut Session::Prover(&mut transcript, &mut messages))?)?;
-        let mut openings = Messages::default();
-        let mut io = Session::Prover(&mut transcript, &mut openings);
-        for ((((params, pcs), slots), queries), expected) in
-            self.groups.iter().zip(slots).zip(requests).zip(&roots)
-        {
-            let block = spool.group(&slots, pcs.packed_len())?;
-            let mut channel = build_prover(DOMAIN, b"" as &[u8]);
-            let (root, data) = pcs
-                .commit(&block, &mut channel)
-                .map_err(|_| "could not recommit witness")?;
-            if &root.0 != expected {
-                return Err("regenerated witness root differs");
-            }
-            let claim = self.reduce(&queries, params, Some(&block), &mut io)?;
-            world_prover::BitZProver::new(*params, 8)
-                .prove(&claim, pcs, &data, block, &mut channel)
-                .map_err(|_| "could not prove witness evaluation")?;
-            let proof = channel.finish();
+        let proof = self.prove_groups(domain, packed, public, check, |proof| {
             for bytes in [&proof.narg_string, &proof.hints] {
                 writer
                     .write_all(&(bytes.len() as u64).to_le_bytes())
                     .and_then(|_| writer.write_all(bytes))
                     .map_err(|_| "could not write witness proof")?;
             }
-        }
-        drop(spool);
-        let proof = ProofMetadata {
-            roots,
-            widths: packed.widths,
-            messages,
-            openings,
-            transcript: transcript.narg_string().to_vec(),
-        };
+            Ok(())
+        })?;
         let metadata = writer
             .stream_position()
             .map_err(|_| "could not locate proof metadata")?;
@@ -645,6 +554,91 @@ impl Plan {
             .and_then(|_| writer.write_all(&metadata.to_le_bytes()))
             .and_then(|_| writer.flush())
             .map_err(|_| "could not finalize proof")
+    }
+
+    fn prove_groups(
+        &self,
+        domain: &[u8; 32],
+        packed: Packed<'_>,
+        public: impl FnOnce(&mut ProverState<Keccak>),
+        check: impl FnOnce(&mut Session<'_, '_>) -> Result<Vec<Request>>,
+        mut emit: impl FnMut(BitProof) -> Result<()>,
+    ) -> Result<ProofMetadata> {
+        let Packed {
+            widths,
+            mut blocks,
+            mut spool,
+            ..
+        } = packed;
+        let streamed = spool.is_some();
+        let mut groups = vec![Vec::new(); self.groups.len()];
+        for (slot, &placement) in self.slots.iter().enumerate() {
+            if placement.planes != 0 {
+                groups[placement.group].push((slot, placement));
+            }
+        }
+        let mut group = |slots: &[(usize, Placement)], pcs: &Pcs| {
+            let block = if let Some(spool) = &mut spool {
+                spool.group(slots, pcs.packed_len())?
+            } else {
+                let mut block = F128::zeroed_vec(pcs.packed_len());
+                for &(slot, placement) in slots {
+                    let words = std::mem::take(&mut blocks[slot]);
+                    block[placement.offset..][..words.len()].copy_from_slice(&words);
+                }
+                block
+            };
+            let mut channel = build_prover(DOMAIN, b"" as &[u8]);
+            let (root, data) = pcs
+                .commit(&block, &mut channel)
+                .map_err(|_| "could not commit witness")?;
+            Ok((root, (data, block, channel)))
+        };
+
+        let mut transcript = prover_transcript::<Keccak>(domain, b"");
+        public(&mut transcript);
+        bind_widths(&mut transcript, &widths);
+        let mut roots = Vec::new();
+        let mut commitments = Vec::new();
+        for ((_, pcs), slots) in self.groups.iter().zip(&groups) {
+            let (root, data) = group(slots, pcs)?;
+            transcript.append_bytes(&root.0);
+            roots.push(root.0);
+            if !streamed {
+                commitments.push(data);
+            }
+        }
+        let mut commitments = commitments.into_iter();
+        let mut messages = Messages::default();
+        let requests =
+            self.requests(check(&mut Session::Prover(&mut transcript, &mut messages))?)?;
+        let mut openings = Messages::default();
+        let mut io = Session::Prover(&mut transcript, &mut openings);
+        for ((((params, pcs), slots), queries), expected) in
+            self.groups.iter().zip(groups).zip(requests).zip(&roots)
+        {
+            let (data, block, mut channel) = if let Some(data) = commitments.next() {
+                data
+            } else {
+                let (root, data) = group(&slots, pcs)?;
+                if &root.0 != expected {
+                    return Err("regenerated witness root differs");
+                }
+                data
+            };
+            let claim = self.reduce(&queries, params, Some(&block), &mut io)?;
+            world_prover::BitZProver::new(*params, 8)
+                .prove(&claim, pcs, &data, block, &mut channel)
+                .map_err(|_| "could not prove witness evaluation")?;
+            emit(channel.finish())?;
+        }
+        Ok(ProofMetadata {
+            roots,
+            widths,
+            messages,
+            openings,
+            transcript: transcript.narg_string().to_vec(),
+        })
     }
 
     pub(crate) fn verify(

@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
+    ops::Range,
     sync::{Arc, OnceLock},
 };
 
@@ -18,9 +19,10 @@ use world_transcript::{build_prover, build_verifier, Proof as BitProof};
 
 use super::{
     field::{Scalar, F},
+    lookup::Addresses,
     storage::Codes,
     sumcheck::{Column, Messages, Session},
-    tensor::{equality, inner, weights, Claim},
+    tensor::{equality, inner, weights, Claim, Shape as TensorShape},
     Result,
 };
 
@@ -116,7 +118,7 @@ impl Layout {
         let mut packed = self.packed();
         packed.spool = Some(Spool {
             file: tempfile::tempfile().map_err(|_| "could not create witness file")?,
-            slots: (0..self.0.len()).map(|_| Vec::new()).collect(),
+            slots: (0..self.0.len()).map(|_| SlotSource::default()).collect(),
         });
         Ok(packed)
     }
@@ -196,20 +198,52 @@ pub(crate) struct Packed<'a> {
     spool: Option<Spool>,
 }
 
-// Each range column or lookup address array has one file record. Lookup digits
-// share that record even when their slots land in different BitZ groups.
 struct Spool {
     file: File,
-    slots: Vec<Vec<Record>>,
+    slots: Vec<SlotSource>,
+}
+
+#[derive(Default)]
+struct SlotSource {
+    ranges: Vec<RangeRecord>,
+    digit: Option<Digit>,
 }
 
 #[derive(Clone, Copy)]
-struct Record {
+struct RangeRecord {
     offset: u64,
     plane: usize,
     width: usize,
-    shift: Option<usize>,
+    shape: TensorShape,
+    base: u128,
+    padding: u128,
 }
+
+impl RangeRecord {
+    fn code(self, codes: &Codes, i: usize) -> u128 {
+        let stride = self.shape.width.next_power_of_two();
+        let (row, col) = (i / stride, i % stride);
+        if row < self.shape.rows && col < self.shape.width {
+            self.base + codes.get(row * self.shape.width + col)
+        } else {
+            self.padding
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Digit {
+    addresses: Arc<Addresses>,
+    shift: usize,
+    width: usize,
+}
+
+enum Source {
+    Ranges(Vec<(RangeRecord, Codes)>),
+    Lookup(Digit),
+}
+
+type Sources = HashMap<usize, Source>;
 
 impl Spool {
     fn save(&mut self, codes: &Codes) -> Result<u64> {
@@ -221,42 +255,108 @@ impl Spool {
         Ok(offset)
     }
 
-    fn group(&mut self, slots: &[(usize, Placement)], len: usize) -> Result<Vec<F128>> {
+    fn group(
+        &mut self,
+        slots: &[(usize, Placement)],
+        len: usize,
+        retain: bool,
+    ) -> Result<(Vec<F128>, Sources)> {
         let mut group = F128::zeroed_vec(len);
+        let mut sources = Sources::new();
+        let mut lookups: HashMap<_, Vec<_>> = HashMap::new();
         for &(slot, placement) in slots {
+            let src = &mut self.slots[slot];
+            if let Some(digit) = if retain {
+                src.digit.take()
+            } else {
+                src.digit.clone()
+            } {
+                lookups
+                    .entry(Arc::as_ptr(&digit.addresses))
+                    .or_default()
+                    .push((placement, digit.clone()));
+                if retain {
+                    sources.insert(slot, Source::Lookup(digit));
+                }
+                continue;
+            }
             let stride = placement.region.words_per_plane();
             let base = placement.offset * WORDS_PER_COLUMN;
-            for &record in &self.slots[slot] {
+            let mut records = Vec::new();
+            for &record in &src.ranges {
                 self.file
                     .seek(SeekFrom::Start(record.offset))
                     .map_err(|_| "could not locate witness")?;
                 let codes: Codes = bincode::deserialize_from(&mut self.file)
                     .map_err(|_| "could not read witness")?;
-                let mut rows = [0u128; 128];
-                for word in 0..stride {
-                    rows[..record.width].fill(0);
-                    let start = word * WORD_BITS;
-                    for i in start..(start + WORD_BITS).min(codes.len()) {
-                        let value = codes.get(i);
-                        if let Some(shift) = record.shift {
-                            let digit = (value >> shift) as usize & (record.width - 1);
-                            rows[digit] |= 1 << (i - start);
-                        } else {
-                            let mut bits = value;
-                            while bits != 0 {
-                                rows[bits.trailing_zeros() as usize] |= 1 << (i - start);
-                                bits &= bits - 1;
-                            }
-                        }
+                pack_range(
+                    &mut group[base..],
+                    stride,
+                    record.plane,
+                    record.width,
+                    1 << record.shape.bits(),
+                    |i| record.code(&codes, i),
+                )?;
+                if retain {
+                    records.push((record, codes));
+                }
+            }
+            if retain {
+                sources.insert(slot, Source::Ranges(records));
+            }
+        }
+        for digits in lookups.into_values() {
+            let addresses = &digits[0].1.addresses;
+            let mut rows = vec![[0u128; 16]; digits.len()];
+            for word in 0..addresses.len().div_ceil(WORD_BITS) {
+                rows.fill([0; 16]);
+                let start = word * WORD_BITS;
+                for i in start..(start + WORD_BITS).min(addresses.len()) {
+                    let value = addresses.get(i);
+                    for (bits, (_, digit)) in rows.iter_mut().zip(&digits) {
+                        bits[(value >> digit.shift) & (digit.width - 1)] |= 1 << (i - start);
                     }
-                    for (bit, &row) in rows[..record.width].iter().enumerate() {
-                        group[base + (record.plane + bit) * stride + word] = F128::from(row);
+                }
+                for (bits, (placement, digit)) in rows.iter().zip(&digits) {
+                    let base = placement.offset * WORDS_PER_COLUMN;
+                    let stride = placement.region.words_per_plane();
+                    for (plane, &bits) in bits[..digit.width].iter().enumerate() {
+                        group[base + plane * stride + word] = F128::from(bits);
                     }
                 }
             }
         }
-        Ok(group)
+        Ok((group, sources))
     }
+}
+
+fn pack_range(
+    words: &mut [F128],
+    stride: usize,
+    plane: usize,
+    width: usize,
+    len: usize,
+    code: impl Fn(usize) -> u128,
+) -> Result<()> {
+    let mut rows = [0u128; 128];
+    for word in 0..len.div_ceil(WORD_BITS) {
+        rows[..width].fill(0);
+        let start = word * WORD_BITS;
+        for i in start..(start + WORD_BITS).min(len) {
+            let mut bits = code(i);
+            if bits >> width != 0 {
+                return Err("integer outside the witness range");
+            }
+            while bits != 0 {
+                rows[bits.trailing_zeros() as usize] |= 1 << (i - start);
+                bits &= bits - 1;
+            }
+        }
+        for (bit, &row) in rows[..width].iter().enumerate() {
+            words[(plane + bit) * stride + word] = F128::from(row);
+        }
+    }
+    Ok(())
 }
 
 impl Packed<'_> {
@@ -272,7 +372,7 @@ impl Packed<'_> {
             || self
                 .spool
                 .as_ref()
-                .is_some_and(|spool| !spool.slots[slot.0].is_empty())
+                .is_some_and(|spool| !spool.slots[slot.0].ranges.is_empty())
         {
             return Err("invalid witness width");
         }
@@ -283,28 +383,19 @@ impl Packed<'_> {
     pub(crate) fn one_hot(
         &mut self,
         digits: &[(Slot, usize, usize)],
-        len: usize,
-        address: impl Fn(usize) -> usize,
+        addresses: &Arc<Addresses>,
     ) -> Result<()> {
         if let Some(spool) = &mut self.spool {
-            let bits = digits
-                .iter()
-                .map(|&(_, shift, width)| shift + width)
-                .max()
-                .unwrap_or(0);
-            let codes = Codes::pack(len, bits, (0..len).map(|i| address(i) as u128))
-                .ok_or("invalid lookup witness")?;
-            let offset = spool.save(&codes)?;
             for &(slot, shift, width) in digits {
-                spool.slots[slot.0].push(Record {
-                    offset,
-                    plane: 0,
+                spool.slots[slot.0].digit = Some(Digit {
+                    addresses: Arc::clone(addresses),
+                    shift,
                     width: 1 << width,
-                    shift: Some(shift),
                 });
             }
             return Ok(());
         }
+        let len = addresses.len();
         let stride = len.max(ROWS).div_ceil(WORD_BITS);
         for &(slot, _, width) in digits {
             self.blocks[slot.0] = F128::zeroed_vec(stride << width);
@@ -315,7 +406,7 @@ impl Packed<'_> {
             rows.fill([0; 16]);
             let start = word * WORD_BITS;
             for i in start..(start + WORD_BITS).min(len) {
-                let code = address(i);
+                let code = addresses.get(i);
                 for (bits, &(_, shift, width)) in rows.iter_mut().zip(digits) {
                     let digit = (code >> shift) & ((1 << width) - 1);
                     bits[digit] |= 1 << (i - start);
@@ -331,30 +422,52 @@ impl Packed<'_> {
         Ok(())
     }
 
-    pub(crate) fn write(
+    pub(crate) fn write<T: Copy + Into<i128>>(
         &mut self,
         slot: Slot,
-        plane: usize,
-        width: usize,
-        code: impl Fn(usize) -> u128,
+        planes: Range<usize>,
+        shape: TensorShape,
+        offset: i128,
+        values: &[T],
     ) -> Result<()> {
         let region = self.layout.0[slot.0];
-        if plane + width > self.widths[slot.0] || width >= 128 {
+        let width = planes.len();
+        if planes.end > self.widths[slot.0] || width >= 128 {
             return Err("invalid witness plane");
         }
         if width == 0 {
             return Ok(());
         }
+        if values.len() != shape.len() {
+            return Err("invalid range witness dimensions");
+        }
+        let encoded = |x: T| (x.into() + offset) as u128;
         if let Some(spool) = &mut self.spool {
-            let len = 1 << region.bits;
-            let codes = Codes::pack(len, width, (0..len).map(code))
-                .ok_or("integer outside the witness range")?;
-            let offset = spool.save(&codes)?;
-            spool.slots[slot.0].push(Record {
-                offset,
-                plane,
+            let (min, max) = values
+                .iter()
+                .copied()
+                .map(encoded)
+                .fold((u128::MAX, 0), |(min, max), value| {
+                    (min.min(value), max.max(value))
+                });
+            if max >> width != 0 || (offset as u128) >> width != 0 {
+                return Err("integer outside the witness range");
+            }
+            let bits = (128 - (max - min).leading_zeros()) as usize;
+            let codes = Codes::pack(
+                values.len(),
+                bits,
+                values.iter().copied().map(|x| encoded(x) - min),
+            )
+            .ok_or("integer outside the witness range")?;
+            let start = spool.save(&codes)?;
+            spool.slots[slot.0].ranges.push(RangeRecord {
+                offset: start,
+                plane: planes.start,
                 width,
-                shift: None,
+                shape,
+                base: min,
+                padding: offset as u128,
             });
             return Ok(());
         }
@@ -363,26 +476,163 @@ impl Packed<'_> {
         if words.is_empty() {
             *words = F128::zeroed_vec(self.widths[slot.0] * stride);
         }
-        let mut rows = [0u128; 128];
-        for word in 0..stride {
-            rows[..width].fill(0);
-            let start = word * WORD_BITS;
-            for i in start..(start + WORD_BITS).min(1 << region.bits) {
-                let mut bits = code(i);
-                if bits >> width != 0 {
-                    return Err("integer outside the witness range");
-                }
-                while bits != 0 {
-                    rows[bits.trailing_zeros() as usize] |= 1 << (i % WORD_BITS);
-                    bits &= bits - 1;
-                }
+        let cols = shape.width.next_power_of_two();
+        pack_range(words, stride, planes.start, width, 1 << shape.bits(), |i| {
+            let (row, col) = (i / cols, i % cols);
+            if row < shape.rows && col < shape.width {
+                encoded(values[row * shape.width + col])
+            } else {
+                offset as u128
             }
-            for (bit, &row) in rows[..width].iter().enumerate() {
-                words[(plane + bit) * stride + word] = F128::from(row);
+        })
+    }
+}
+
+struct Query<'a> {
+    slot: usize,
+    offset: usize,
+    cols: Arc<[F]>,
+    row: Vec<F>,
+    planes: &'a [F],
+    mix: F,
+    lanes: Option<usize>,
+}
+
+enum Coefficients<'a> {
+    Empty,
+    Powers { start: usize, scale: F },
+    Arbitrary(&'a [F]),
+}
+
+impl<'a> Coefficients<'a> {
+    fn new(planes: &'a [F]) -> Self {
+        let Some(start) = planes.iter().position(|p| !p.is_zero()) else {
+            return Self::Empty;
+        };
+        let scale = planes[start];
+        let mut expected = scale;
+        for &coefficient in &planes[start..] {
+            if coefficient != expected {
+                return Self::Arbitrary(planes);
+            }
+            expected += expected;
+        }
+        Self::Powers { start, scale }
+    }
+
+    fn evaluate(&self, mut code: u128) -> F {
+        match self {
+            Self::Empty => F::zero(),
+            Self::Powers { start, scale } => *scale * F::from_u128(code >> start),
+            Self::Arbitrary(weights) => {
+                let mut sum = F::zero();
+                while code != 0 {
+                    sum += weights[code.trailing_zeros() as usize];
+                    code &= code - 1;
+                }
+                sum
             }
         }
-        Ok(())
     }
+}
+
+fn project(queries: &[Query<'_>], packed: &[F128], sources: &Sources) -> Vec<Column<'static>> {
+    let mut by_row = HashMap::<&[F], usize>::new();
+    let mut points = Vec::new();
+    let mut projections = Vec::new();
+    let mut by_slot = HashMap::<usize, Vec<(&Query<'_>, usize)>>::new();
+    for query in queries {
+        let row = *by_row.entry(&query.row).or_insert_with(|| {
+            let i = projections.len();
+            projections.push(vec![F::zero(); ROWS]);
+            points.push(query.row.as_slice());
+            i
+        });
+        if let Some(lanes) = query.lanes {
+            // The honest witness has exactly one set bit per cell.
+            for value in &mut projections[row][..lanes] {
+                *value += query.mix;
+            }
+        } else {
+            by_slot.entry(query.slot).or_default().push((query, row));
+        }
+    }
+    for (slot, requests) in by_slot {
+        let query = requests[0].0;
+        let mut factors = vec![F::zero(); requests.len()];
+        match sources.get(&slot) {
+            Some(Source::Ranges(ranges)) => {
+                for (record, codes) in ranges {
+                    let coefficients: Vec<_> = requests
+                        .iter()
+                        .map(|(q, _)| {
+                            Coefficients::new(&q.planes[record.plane..record.plane + record.width])
+                        })
+                        .collect();
+                    let len = 1 << record.shape.bits();
+                    for col in 0..query.cols.len() {
+                        for (factor, (q, _)) in factors.iter_mut().zip(&requests) {
+                            *factor = q.mix * q.cols[col];
+                        }
+                        let start = col * ROWS;
+                        for i in start..(start + ROWS).min(len) {
+                            let code = record.code(codes, i);
+                            if code != 0 {
+                                for (((_, row), coefficient), &factor) in
+                                    requests.iter().zip(&coefficients).zip(&factors)
+                                {
+                                    projections[*row][i - start] +=
+                                        coefficient.evaluate(code) * factor;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Some(Source::Lookup(digit)) => {
+                for col in 0..query.cols.len() {
+                    for (factor, (q, _)) in factors.iter_mut().zip(&requests) {
+                        *factor = q.mix * q.cols[col];
+                    }
+                    let start = col * ROWS;
+                    for i in start..(start + ROWS).min(digit.addresses.len()) {
+                        let lane = (digit.addresses.get(i) >> digit.shift) & (digit.width - 1);
+                        for ((q, row), &factor) in requests.iter().zip(&factors) {
+                            projections[*row][i - start] += q.planes[lane] * factor;
+                        }
+                    }
+                }
+            }
+            None => {
+                let start = query.offset * WORDS_PER_COLUMN;
+                let cols = query.cols.len();
+                for (i, words) in packed[start..]
+                    .chunks_exact(WORDS_PER_COLUMN)
+                    .take(query.planes.len() * cols)
+                    .enumerate()
+                {
+                    for (factor, (q, _)) in factors.iter_mut().zip(&requests) {
+                        *factor = q.planes[i / cols] * q.mix * q.cols[i % cols];
+                    }
+                    for (word, &value) in words.iter().enumerate() {
+                        let mut bits = value.to_u128();
+                        while bits != 0 {
+                            let lane = word * WORD_BITS + bits.trailing_zeros() as usize;
+                            for ((_, row), &factor) in requests.iter().zip(&factors) {
+                                projections[*row][lane] += factor;
+                            }
+                            bits &= bits - 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    projections
+        .into_iter()
+        .zip(points)
+        .flat_map(|(values, point)| [Column::Dense(values), Column::Dense(weights(point))])
+        .collect()
 }
 
 impl Plan {
@@ -423,7 +673,7 @@ impl Plan {
         &self,
         requests: &[Request],
         params: &BitZParams<Scalar>,
-        packed: Option<&[F128]>,
+        witness: Option<(&[F128], &Sources)>,
         io: &mut Session<'_, '_>,
     ) -> Result<LinearClaim<Scalar>> {
         let mix = io.random(requests.len(), requests.len())?;
@@ -444,14 +694,15 @@ impl Plan {
                     .entry(column)
                     .or_insert_with(|| weights(column).into())
                     .clone();
-                (
+                Query {
+                    slot: r.slot.0,
                     offset,
-                    weights,
-                    row_point,
-                    r.planes.as_slice(),
+                    cols: weights,
+                    row: row_point,
+                    planes: &r.planes,
                     mix,
-                    r.one_hot_sum.then_some(1 << row.len()),
-                )
+                    lanes: r.one_hot_sum.then_some(1 << row.len()),
+                }
             })
             .collect();
         let (end, _) = io.fold(
@@ -459,50 +710,21 @@ impl Plan {
             ROW_BITS,
             2,
             || {
-                let packed = packed.expect("prover witness");
-                queries
-                    .iter()
-                    .flat_map(|(offset, cols, row, planes, mix, one_hot_lanes)| {
-                        let mut projection = vec![F::zero(); ROWS];
-                        if let Some(lanes) = one_hot_lanes {
-                            // The honest witness has exactly one set bit per cell.
-                            projection[..*lanes].fill(*mix);
-                            return [Column::Dense(projection), Column::Dense(weights(row))];
-                        }
-                        let coeffs = planes.iter().flat_map(|&p| {
-                            let scale = p * *mix;
-                            cols.iter().map(move |&c| scale * c)
-                        });
-                        for (words, weight) in packed[*offset * WORDS_PER_COLUMN..]
-                            .chunks_exact(WORDS_PER_COLUMN)
-                            .zip(coeffs)
-                        {
-                            for (&word, rows) in
-                                words.iter().zip(projection.chunks_exact_mut(WORD_BITS))
-                            {
-                                let mut bits = word.to_u128();
-                                while bits != 0 {
-                                    rows[bits.trailing_zeros() as usize] += weight;
-                                    bits &= bits - 1;
-                                }
-                            }
-                        }
-                        [Column::Dense(projection), Column::Dense(weights(row))]
-                    })
-                    .collect()
+                let (packed, sources) = witness.expect("prover witness");
+                project(&queries, packed, sources)
             },
             [],
             |row| row.chunks_exact(2).map(|pair| pair[0] * pair[1]).sum(),
         )?;
 
         let mut columns = vec![Scalar::from(0u64); params.shape().columns()];
-        for (offset, cols, row, planes, mix, _) in queries {
-            let scale = mix * equality(&row, &end.challenges);
-            let factors = planes.iter().flat_map(|&p| {
+        for q in queries {
+            let scale = q.mix * equality(&q.row, &end.challenges);
+            let factors = q.planes.iter().flat_map(|&p| {
                 let scale = p * scale;
-                cols.iter().map(move |&c| scale * c)
+                q.cols.iter().map(move |&c| scale * c)
             });
-            for (dst, weight) in columns[offset..].iter_mut().zip(factors) {
+            for (dst, weight) in columns[q.offset..].iter_mut().zip(factors) {
                 *dst += weight.0;
             }
         }
@@ -592,9 +814,9 @@ impl Plan {
                 groups[placement.group].push((slot, placement));
             }
         }
-        let mut group = |slots: &[(usize, Placement)], pcs: &Pcs| {
-            let block = if let Some(spool) = &mut spool {
-                spool.group(slots, pcs.packed_len())?
+        let mut group = |slots: &[(usize, Placement)], pcs: &Pcs, retain: bool| {
+            let (block, sources) = if let Some(spool) = &mut spool {
+                spool.group(slots, pcs.packed_len(), retain)?
             } else {
                 let mut block = F128::zeroed_vec(pcs.packed_len());
                 for &(slot, placement) in slots {
@@ -602,13 +824,13 @@ impl Plan {
                     block[placement.offset * WORDS_PER_COLUMN..][..words.len()]
                         .copy_from_slice(&words);
                 }
-                block
+                (block, Sources::new())
             };
             let mut channel = build_prover(DOMAIN, b"" as &[u8]);
             let (root, data) = pcs
                 .commit(&block, &mut channel)
                 .map_err(|_| "could not commit witness")?;
-            Ok((root, (data, block, channel)))
+            Ok((root, (data, block, channel, sources)))
         };
 
         let mut transcript = prover_transcript::<Keccak>(domain, b"");
@@ -617,7 +839,7 @@ impl Plan {
         let mut roots = Vec::new();
         let mut commitments = Vec::new();
         for ((_, pcs), slots) in self.groups.iter().zip(&groups) {
-            let (root, data) = group(slots, pcs)?;
+            let (root, data) = group(slots, pcs, false)?;
             transcript.append_bytes(&root.0);
             roots.push(root.0);
             if !streamed {
@@ -633,16 +855,17 @@ impl Plan {
         for ((((params, pcs), slots), queries), expected) in
             self.groups.iter().zip(groups).zip(requests).zip(&roots)
         {
-            let (data, block, mut channel) = if let Some(data) = commitments.next() {
+            let (data, block, mut channel, sources) = if let Some(data) = commitments.next() {
                 data
             } else {
-                let (root, data) = group(&slots, pcs)?;
+                let (root, data) = group(&slots, pcs, true)?;
                 if &root.0 != expected {
                     return Err("regenerated witness root differs");
                 }
                 data
             };
-            let claim = self.reduce(&queries, params, Some(&block), &mut io)?;
+            let claim = self.reduce(&queries, params, Some((&block, &sources)), &mut io)?;
+            drop(sources);
             world_prover::BitZProver::new(*params, 8)
                 .prove(&claim, pcs, &data, block, &mut channel)
                 .map_err(|_| "could not prove witness evaluation")?;

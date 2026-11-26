@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{cell::OnceCell, sync::Arc};
 
 use jolt_field::{One, Ring, Zero};
 
@@ -12,7 +12,7 @@ use crate::protocol::{
     opening::{Layout, Packed, Request},
     range::{Ranges, Width},
     sumcheck::{Column, Session},
-    tensor::{equality, inner, weights, Claim, Shape},
+    tensor::{bind_rows, equality, inner, weights, Claim, Shape},
     Result,
 };
 
@@ -30,6 +30,7 @@ struct Activate<'a> {
 struct ActivationTrace {
     #[serde(with = "crate::protocol::storage::i32s")]
     output: Vec<i32>,
+    #[serde(skip)]
     addresses: Arc<Addresses>,
 }
 
@@ -123,11 +124,9 @@ impl<'a> Activate<'a> {
         let [sign, absolute, low, excess] = &columns;
         self.constraints.record(packed, [sign, absolute, low])?;
         self.excess.record_adaptive(packed, excess)?;
+        let addresses = Arc::new(addresses);
         self.lookup.record(packed, &addresses)?;
-        Ok(ActivationTrace {
-            output,
-            addresses: Arc::new(addresses),
-        })
+        Ok(ActivationTrace { output, addresses })
     }
 
     fn reverse<'w>(
@@ -136,8 +135,9 @@ impl<'a> Activate<'a> {
         requests: &mut Vec<Request>,
         lookups: &mut Lookups<'a>,
         claim: Claim,
-        witness: impl Fn() -> (&'w ActivationTrace, &'w [i32]),
-    ) -> Result<Claim> {
+        gated: bool,
+        witness: impl Fn() -> (&'w ActivationTrace, &'w [i32], Option<&'w [i32]>),
+    ) -> Result<(Claim, Option<Claim>)> {
         let shape = self.shape;
         let vars = shape.bits();
         let stride = shape.width.next_power_of_two();
@@ -148,7 +148,7 @@ impl<'a> Activate<'a> {
         let lower = F::from_i32(self.lower);
         let formula = |v: &[F]| {
             let [x, index, correction, sign, absolute, low, high, active, q, p] =
-                v.try_into().expect("activation columns");
+                v[..10].try_into().expect("activation columns");
             let magnitude = if self.symmetric {
                 index + high
             } else {
@@ -167,15 +167,17 @@ impl<'a> Activate<'a> {
                     ],
                 )
             };
-            active * (q * (sign * magnitude + correction) + p * (coefficients[0] * signed + clamp))
+            let output = sign * magnitude + correction;
+            let output = if gated { output * v[10] } else { output };
+            active * (q * output + p * (coefficients[0] * signed + clamp))
         };
         let active = |i| i / stride < shape.rows && i % stride < shape.width;
-        let (end, v) = io.fold(
+        let (end, v) = io.fold_many(
             claim.value,
             vars,
-            4,
+            if gated { 5 } else { 4 },
             || {
-                let (trace, x) = witness();
+                let (trace, x, up) = witness();
                 let mut columns = vec![
                     Column::source(len, move |i| shape.at(x, i)),
                     Column::source(len, move |i| F::from_u64(trace.addresses.get(i) as u64)),
@@ -201,21 +203,31 @@ impl<'a> Activate<'a> {
                     Column::split_equality(&claim.point),
                     Column::split_equality(p),
                 ]);
+                if let Some(up) = up {
+                    columns.push(Column::source(len, move |i| shape.at(up, i)));
+                }
                 columns
             },
-            [0, 1, 2, 3, 4, 5, 6],
+            if gated {
+                &[0, 1, 2, 3, 4, 5, 6, 10]
+            } else {
+                &[0, 1, 2, 3, 4, 5, 6]
+            },
             formula,
         )?;
         io.expect(&end, || {
             let (r, c) = end.challenges.split_at(shape.row_bits());
             let rows: F = weights(r).into_iter().take(shape.rows).sum();
             let cols: F = weights(c).into_iter().take(shape.width).sum();
-            let mut values = v.to_vec();
+            let mut values = v[..7].to_vec();
             values.extend([
                 rows * cols,
                 equality(&claim.point, &end.challenges),
                 equality(p, &end.challenges),
             ]);
+            if gated {
+                values.push(v[7]);
+            }
             formula(&values)
         })?;
         self.constraints
@@ -229,7 +241,8 @@ impl<'a> Activate<'a> {
             vec![v[2]],
             io.proving().then(|| witness().0.addresses.clone()),
         );
-        Ok(Claim::new(end.challenges, v[0]))
+        let up = gated.then(|| Claim::new(end.challenges.clone(), v[7]));
+        Ok((Claim::new(end.challenges, v[0]), up))
     }
 }
 
@@ -250,6 +263,14 @@ pub(crate) struct FeedTrace {
 }
 
 impl FeedTrace {
+    pub(crate) fn take_addresses(&mut self) -> Arc<Addresses> {
+        std::mem::take(&mut self.activation.addresses)
+    }
+
+    pub(crate) fn restore_addresses(&mut self, addresses: Arc<Addresses>) {
+        self.activation.addresses = addresses;
+    }
+
     pub(crate) fn discard_derived(&mut self) {
         self.activation.output = Vec::new();
     }
@@ -316,6 +337,9 @@ impl<'a> FeedForward<'a> {
     }
 
     pub(crate) fn restore(&self, trace: &mut FeedTrace) -> Result<()> {
+        if self.up.is_some() {
+            return Ok(());
+        }
         let width = self.activation.shape.width;
         let stride = width.next_power_of_two();
         trace.activation.output = trace
@@ -350,37 +374,55 @@ impl<'a> FeedForward<'a> {
                     .map_or(w.activation.output.as_slice(), |(_, y)| &y.values),
             )
         })?;
-        let (claim, up) = if let Some((up, mul)) = &self.up {
-            let [gate, branch] = mul.reverse(io, requests, claim, || {
-                let (w, _) = witness();
-                let (up, product) = w.up.as_ref().expect("gated trace");
-                (product, &w.activation.output, &up.values)
+        let gated = self.up.is_some();
+        let claim = if let Some((_, mul)) = &self.up {
+            let raw = mul.recover(io, requests, &claim, || {
+                &witness().0.up.as_ref().expect("gated trace").1.remainder
             })?;
-            (
-                gate,
-                Some(up.reverse(io, requests, branch, || {
-                    let (w, x) = witness();
-                    (&w.up.as_ref().expect("up trace").0, x)
-                })?),
-            )
+            Claim::new(claim.point, raw)
         } else {
-            (claim, None)
+            claim
         };
-        let claim = self.activation.reverse(io, requests, lookups, claim, || {
-            let (w, _) = witness();
-            (&w.activation, &w.gate.values)
-        })?;
-        let gate = self.gate.reverse(io, requests, claim, || {
-            let (w, x) = witness();
-            (&w.gate, x)
-        })?;
-        if let Some(up) = up {
-            io.combine(&[gate, up], || {
-                let x = witness().1;
-                (0..1 << self.input.bits())
-                    .map(|i| self.input.at(x, i))
-                    .collect()
-            })
+        let (gate, up) = self
+            .activation
+            .reverse(io, requests, lookups, claim, gated, || {
+                let trace = witness().0;
+                (
+                    &trace.activation,
+                    &trace.gate.values,
+                    trace.up.as_ref().map(|(up, _)| up.values.as_slice()),
+                )
+            })?;
+        let bound = OnceCell::new();
+        let bind = |row: &[F]| {
+            bound
+                .get_or_init(|| bind_rows(self.input.width, witness().1, row))
+                .clone()
+        };
+        let gate =
+            self.gate
+                .reverse_bound(io, requests, gate, || &witness().0.gate.remainder, bind)?;
+        if let Some((up_layer, _)) = &self.up {
+            let up = up_layer.reverse_bound(
+                io,
+                requests,
+                up.expect("gated claim"),
+                || &witness().0.up.as_ref().expect("gated trace").0.remainder,
+                bind,
+            )?;
+            let (row, gate_col) = gate.point.split_at(self.input.row_bits());
+            let (up_row, up_col) = up.point.split_at(self.input.row_bits());
+            if row != up_row {
+                return Err("inconsistent MLP row evaluation point");
+            }
+            let combined = io.combine(
+                &[
+                    Claim::new(gate_col.to_vec(), gate.value),
+                    Claim::new(up_col.to_vec(), up.value),
+                ],
+                || bound.into_inner().expect("bound MLP input"),
+            )?;
+            Ok(Claim::new([row, &combined.point].concat(), combined.value))
         } else {
             Ok(gate)
         }

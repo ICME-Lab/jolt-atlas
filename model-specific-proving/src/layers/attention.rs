@@ -1,14 +1,16 @@
+use std::{cell::OnceCell, sync::Arc};
+
 use jolt_field::{Ring, Zero};
 
 use super::{
-    linear::{narrow_dot, wide_dot, Linear, Rotation, Rounded, Rounding},
+    linear::{narrow_dot, wide_dot, Linear, Remainder, Rotation, Rounded, Rounding},
     norm::{Norm, NormTrace},
     softmax::{tiles, Soft, SoftTrace, Tile},
     Attention, NormalizationParameters, Projection, Rotary, SoftmaxMask,
 };
 use crate::protocol::{
     field::F,
-    lookup::Lookups,
+    lookup::{Addresses, Lookups},
     opening::{Layout, Packed, Request},
     sumcheck::{Column, Session},
     tensor::{bind_rows, equality, inner, weights, Claim, Shape},
@@ -147,12 +149,23 @@ pub(crate) struct AttentionTrace {
     queries: Vec<ProjectTrace>,
     groups: Vec<(ProjectTrace, Rounded)>,
     heads: Vec<HeadTrace>,
-    #[serde(with = "crate::protocol::storage::i32s")]
-    concatenated: Vec<i32>,
     output: Rounded,
 }
 
 impl AttentionTrace {
+    pub(crate) fn take_addresses(&mut self) -> Vec<Vec<Arc<Addresses>>> {
+        self.heads
+            .iter_mut()
+            .map(|head| std::mem::take(&mut head.soft.addresses))
+            .collect()
+    }
+
+    pub(crate) fn restore_addresses(&mut self, addresses: Vec<Vec<Arc<Addresses>>>) {
+        for (head, addresses) in self.heads.iter_mut().zip(addresses) {
+            head.soft.addresses = addresses;
+        }
+    }
+
     pub(crate) fn discard_derived(&mut self) {
         for project in self
             .queries
@@ -168,7 +181,6 @@ impl AttentionTrace {
                 scores.values = Vec::new();
             }
         }
-        self.concatenated = Vec::new();
     }
 
     pub(crate) fn values(&self) -> &[i32] {
@@ -362,7 +374,6 @@ impl<'a> AttentionPlan<'a> {
             queries,
             groups,
             heads,
-            concatenated,
             output,
         })
     }
@@ -393,7 +404,6 @@ impl<'a> AttentionPlan<'a> {
                 rounded.values = head.soft.restore_scores(&witness.soft, block)?;
             }
         }
-        trace.concatenated = self.concatenate(&trace.heads, self.groups[0].1.shape().width);
         Ok(())
     }
 
@@ -424,16 +434,13 @@ impl<'a> AttentionPlan<'a> {
             || {
                 let (query, key) = witness();
                 let mut prefix = Vec::with_capacity((1 << shape.row_bits()) * width);
-                let mut current = vec![F::zero(); width];
-                let mut accumulate = |row: &[i32], weight| {
-                    for (sum, &v) in current.iter_mut().zip(row) {
-                        *sum += F::from_i32(v) * weight;
-                    }
-                    current.clone()
-                };
                 if self.causal {
+                    let mut current = vec![F::zero(); width];
                     for (key, &w) in key.chunks_exact(shape.width).zip(&key_weights) {
-                        prefix.extend(accumulate(key, w));
+                        for (sum, &v) in current.iter_mut().zip(key) {
+                            *sum += F::from_i32(v) * w;
+                        }
+                        prefix.extend_from_slice(&current);
                     }
                 } else {
                     let bound = bind_rows(shape.width, key, kr);
@@ -445,7 +452,7 @@ impl<'a> AttentionPlan<'a> {
                 vec![
                     Column::source(1 << shape.bits(), move |i| shape.at(query, i)),
                     Column::Dense(prefix),
-                    Column::source(1 << shape.bits(), |i| row_weights[i / width]),
+                    Column::axis(1 << shape.bits(), width.ilog2() as usize, row_weights),
                 ]
             },
             [0, 1],
@@ -489,11 +496,30 @@ impl<'a> AttentionPlan<'a> {
         claim: Claim,
         witness: impl Fn() -> (&'w AttentionTrace, &'w [i32]) + Sync,
     ) -> Result<Claim> {
-        let joined = self.output.reverse(io, requests, claim, || {
-            let w = witness().0;
-            (&w.output, &w.concatenated)
-        })?;
         let shape = self.groups[0].1.shape();
+        let bound_heads = OnceCell::new();
+        let joined = self.output.reverse_bound(
+            io,
+            requests,
+            claim,
+            || &witness().0.output.remainder,
+            |rows| {
+                let heads = bound_heads.get_or_init(|| {
+                    witness()
+                        .0
+                        .heads
+                        .iter()
+                        .map(|head| bind_rows(shape.width, &head.value.values, rows))
+                        .collect::<Vec<_>>()
+                });
+                let mut joined = Vec::with_capacity(self.joined.width.next_power_of_two());
+                for head in heads {
+                    joined.extend_from_slice(&head[..shape.width]);
+                }
+                joined.resize(self.joined.width.next_power_of_two(), F::zero());
+                joined
+            },
+        )?;
         let (rows, c) = joined.point.split_at(shape.row_bits());
         let (head_bits, channels) = c.split_at(c.len() - (shape.bits() - shape.row_bits()));
         let point = [rows, channels].concat();
@@ -503,10 +529,35 @@ impl<'a> AttentionPlan<'a> {
         for (g, (key, value)) in self.groups.iter().enumerate() {
             let mut key_claims = Vec::new();
             let mut value_claims = Vec::new();
+            let bound_v = OnceCell::new();
+            let bind_v = || {
+                bound_v
+                    .get_or_init(|| {
+                        let cols = weights(channels);
+                        let mut projected: Vec<_> = witness().0.groups[g]
+                            .1
+                            .values
+                            .chunks_exact(shape.width)
+                            .map(|row| {
+                                inner(cols.iter().copied(), row.iter().copied().map(F::from_i32))
+                            })
+                            .collect();
+                        projected.resize(shape.rows.next_power_of_two(), F::zero());
+                        projected
+                    })
+                    .clone()
+            };
             for i in g * per_group..(g + 1) * per_group {
                 let head = &self.heads[i];
                 let trace = || &witness().0.heads[i];
-                let [v] = io.values(|| [shape.evaluate(&trace().value.values, &point)])?;
+                let [v] = io.values(|| {
+                    [inner(
+                        weights(channels),
+                        bound_heads.get().expect("bound head outputs")[i]
+                            .iter()
+                            .copied(),
+                    )]
+                })?;
                 values.push(v);
                 let value_output = Claim::new(point.clone(), v);
                 let raw = head
@@ -519,9 +570,7 @@ impl<'a> AttentionPlan<'a> {
                     2,
                     || {
                         let weights_r = weights(rows);
-                        let weights_c = weights(channels);
                         let mut a = vec![F::zero(); size];
-                        let mut b = vec![F::zero(); size];
                         for (r, &w) in weights_r.iter().take(shape.rows).enumerate() {
                             for (c, p) in a
                                 .iter_mut()
@@ -530,43 +579,41 @@ impl<'a> AttentionPlan<'a> {
                             {
                                 *p += w * F::from_i32(head.soft.probability(&trace().soft, r, c));
                             }
-                            let v =
-                                &witness().0.groups[g].1.values[r * shape.width..][..shape.width];
-                            b[r] = inner(
-                                weights_c.iter().copied(),
-                                v.iter().copied().map(F::from_i32),
-                            );
                         }
-                        vec![Column::Dense(a), Column::Dense(b)]
+                        vec![Column::Dense(a), Column::Dense(bind_v())]
                     },
                     [0, 1],
                     |v| v[0] * v[1],
                 )?;
                 io.expect(&end, || probability * value_input)?;
-                let score = head.soft.reverse(
+                let (score, tiles) = head.soft.reverse(
                     io,
                     requests,
                     reads,
                     Claim::new([rows, &end.challenges].concat(), probability),
                     || &trace().soft,
                     |r, c| self.score(i, &trace().scores, r, c),
+                    |j, index| {
+                        let shape = self.tiles[j].shape;
+                        let score = &trace().scores[j];
+                        [
+                            shape.at(&score.values, index),
+                            match &score.remainder {
+                                Remainder::Narrow(values) => shape.at(values, index),
+                                Remainder::Wide(values) => shape.at(values, index),
+                            },
+                        ]
+                    },
                 )?;
-                value_claims.push(Claim::new(
-                    [end.challenges.as_slice(), channels].concat(),
-                    value_input,
-                ));
-                let (row, col) = score.point.split_at(shape.row_bits());
+                value_claims.push(Claim::new(end.challenges, value_input));
                 let mut raw = F::zero();
                 let mut whole_score = F::zero();
-                for (j, tile) in self.tiles.iter().enumerate() {
-                    let (weight, point) = tile.restrict(row, col);
-                    let [value] =
-                        io.values(|| [tile.shape.evaluate(&trace().scores[j].values, &point)])?;
-                    whole_score += weight * value;
-                    let claim = Claim::new(point, value);
-                    raw += weight
-                        * head.scores[j]
-                            .recover(io, requests, &claim, || &trace().scores[j].remainder)?;
+                for (rounding, tile) in head.scores.iter().zip(tiles) {
+                    let [value] = io.values(|| [tile.qk[0]])?;
+                    whole_score += tile.factor * value;
+                    let claim = Claim::new(tile.point, value);
+                    raw +=
+                        tile.factor * rounding.recover_at(io, requests, &claim, || tile.qk[1])?;
                 }
                 if !io.proving() && whole_score != score.value {
                     return Err("inconsistent QK tiles");
@@ -593,9 +640,8 @@ impl<'a> AttentionPlan<'a> {
             let k = combine(io, key.linear.shape(), &key_claims, &|| {
                 witness().0.groups[g].0.values()
             })?;
-            let v = combine(io, shape, &value_claims, &|| {
-                &witness().0.groups[g].1.values
-            })?;
+            let v = io.combine(&value_claims, bind_v)?;
+            let v = Claim::new([v.point.as_slice(), channels].concat(), v.value);
             input.push(key.reverse(io, requests, k, || {
                 let (w, x) = witness();
                 (&w.groups[g].0, x)

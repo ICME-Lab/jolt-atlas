@@ -6,8 +6,8 @@ use crate::protocol::{
     field::F,
     opening::{Layout, Packed, Request},
     range::{Ranges, Width},
-    sumcheck::{Column, Session},
-    tensor::{bind_rows, equality, inner, weights, Claim, Shape},
+    sumcheck::Session,
+    tensor::{bind_rows, inner, weights, Claim, Shape},
     Result,
 };
 
@@ -102,12 +102,20 @@ impl Rounding {
         claim: &Claim,
         trace: impl FnOnce() -> &'w Remainder,
     ) -> Result<F> {
-        let [remainder] = io.values(|| {
-            [match trace() {
-                Remainder::Narrow(values) => self.shape.evaluate(values, &claim.point),
-                Remainder::Wide(values) => self.shape.evaluate(values, &claim.point),
-            }]
-        })?;
+        self.recover_at(io, requests, claim, || match trace() {
+            Remainder::Narrow(values) => self.shape.evaluate(values, &claim.point),
+            Remainder::Wide(values) => self.shape.evaluate(values, &claim.point),
+        })
+    }
+
+    pub(crate) fn recover_at(
+        &self,
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        claim: &Claim,
+        evaluate: impl FnOnce() -> F,
+    ) -> Result<F> {
+        let [remainder] = io.values(|| [evaluate()])?;
         self.output
             .open(io, requests, &claim.point, [claim.value])?;
         self.remainder
@@ -198,9 +206,24 @@ impl<'a> Linear<'a> {
         claim: Claim,
         witness: impl Fn() -> (&'w Rounded, &'w [i32]),
     ) -> Result<Claim> {
-        let raw = self
-            .rounding
-            .recover(io, requests, &claim, || &witness().0.remainder)?;
+        self.reverse_bound(
+            io,
+            requests,
+            claim,
+            || &witness().0.remainder,
+            |row| bind_rows(self.input.width, witness().1, row),
+        )
+    }
+
+    pub(crate) fn reverse_bound<'w>(
+        &self,
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        claim: Claim,
+        remainder: impl FnOnce() -> &'w Remainder,
+        bound: impl FnOnce(&[F]) -> Vec<F>,
+    ) -> Result<Claim> {
+        let raw = self.rounding.recover(io, requests, &claim, remainder)?;
         let (row, col) = claim.point.split_at(self.input.row_bits());
         let active: F = weights(row).into_iter().take(self.input.rows).sum();
         let bias = inner(
@@ -209,9 +232,7 @@ impl<'a> Linear<'a> {
         );
         let public = bind_rows(self.input.width, self.projection.weights, col);
         let raw = raw - F::from_u64(1 << self.rounding.bits) * active * bias;
-        let end = io.dot(raw, &public, || {
-            bind_rows(self.input.width, witness().1, row)
-        })?;
+        let end = io.dot(raw, &public, || bound(row))?;
         Ok(Claim::new([row, &end.point].concat(), end.value))
     }
 }
@@ -239,40 +260,14 @@ impl Hadamard {
         })
     }
 
-    pub(crate) fn reverse<'w>(
+    pub(crate) fn recover<'w>(
         &self,
         io: &mut Session<'_, '_>,
         requests: &mut Vec<Request>,
-        claim: Claim,
-        witness: impl Fn() -> (&'w Rounded, &'w [i32], &'w [i32]),
-    ) -> Result<[Claim; 2]> {
-        let raw = self
-            .0
-            .recover(io, requests, &claim, || &witness().0.remainder)?;
-        let shape = self.0.shape;
-        let len = 1 << shape.bits();
-        let (end, [left, right]) = io.fold(
-            raw,
-            shape.bits(),
-            3,
-            || {
-                let (_, a, b) = witness();
-                vec![
-                    Column::source(len, move |i| shape.at(a, i)),
-                    Column::source(len, move |i| shape.at(b, i)),
-                    Column::Dense(weights(&claim.point)),
-                ]
-            },
-            [0, 1],
-            |v| v[0] * v[1] * v[2],
-        )?;
-        io.expect(&end, || {
-            left * right * equality(&claim.point, &end.challenges)
-        })?;
-        Ok([
-            Claim::new(end.challenges.clone(), left),
-            Claim::new(end.challenges, right),
-        ])
+        claim: &Claim,
+        remainder: impl FnOnce() -> &'w Remainder,
+    ) -> Result<F> {
+        self.0.recover(io, requests, claim, remainder)
     }
 }
 

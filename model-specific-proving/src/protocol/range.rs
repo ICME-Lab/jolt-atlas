@@ -51,7 +51,6 @@ impl<const N: usize> Ranges<N> {
         columns: [&[T]; N],
     ) -> Result<()> {
         let shape = self.shape;
-        let stride = shape.width.next_power_of_two();
         let mut plane = 0;
         for (width, values) in self.widths.into_iter().zip(columns) {
             if width.bits == 0 && values.is_empty() {
@@ -60,15 +59,13 @@ impl<const N: usize> Ranges<N> {
             if values.len() != shape.len() {
                 return Err("invalid range witness dimensions");
             }
-            packed.write(self.slot, plane, width.bits, |i| {
-                let (row, col) = (i / stride, i % stride);
-                let value = if row < shape.rows && col < shape.width {
-                    values[row * shape.width + col].into()
-                } else {
-                    0
-                };
-                (value + width.offset) as u128
-            })?;
+            packed.write(
+                self.slot,
+                plane..plane + width.bits,
+                shape,
+                width.offset,
+                values,
+            )?;
             plane += width.bits;
         }
         Ok(())
@@ -173,15 +170,6 @@ impl Ranges<1> {
             return Err("invalid range witness dimensions");
         }
         packed.shrink(self.slot, bits)?;
-        let stride = shape.width.next_power_of_two();
-        packed.write(self.slot, 0, bits, |i| {
-            let (row, col) = (i / stride, i % stride);
-            let value = if row < shape.rows && col < shape.width {
-                values[row * shape.width + col].into()
-            } else {
-                0
-            };
-            (value + offset) as u128
-        })
+        packed.write(self.slot, 0..bits, shape, offset, values)
     }
 }

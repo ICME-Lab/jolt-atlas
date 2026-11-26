@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use jolt_field::{One, Ring, Zero};
+use jolt_field::{CanonicalEncoding, One, Ring, Zero};
 
 use super::{SoftmaxMask, SoftmaxTables};
 use crate::protocol::{
@@ -85,10 +85,17 @@ pub(crate) struct Soft<'a> {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct SoftTrace {
-    addresses: Vec<Arc<Addresses>>,
+    #[serde(skip)]
+    pub(crate) addresses: Vec<Arc<Addresses>>,
     #[serde(with = "crate::protocol::storage::optional_i64")]
     overflows: Vec<Option<Vec<i64>>>,
     stats: Vec<[i64; 3]>,
+}
+
+pub(crate) struct TileEvaluation {
+    pub factor: F,
+    pub point: Vec<F>,
+    pub qk: [F; 2],
 }
 
 impl<'a> Soft<'a> {
@@ -112,7 +119,7 @@ impl<'a> Soft<'a> {
         }
         let maximum = n as u128 * (tables.sums[0].max(tables.limit.saturating_add(1)) as u128);
         let slack = maximum.next_power_of_two().ilog2() as usize + 1;
-        if 2 * slack + 3 >= 121 {
+        if 2 * slack + 3 >= F::MODULUS_BITS as usize {
             return Err("Softmax range exceeds the proof field");
         }
         let radix = (maximum + (1u128 << slack) + tables.limit as u128).next_power_of_two();
@@ -246,6 +253,7 @@ impl<'a> Soft<'a> {
             std::array::from_fn(|i| stats.iter().map(|row| row[i]).collect());
         self.rows
             .record(packed, column.each_ref().map(Vec::as_slice))?;
+        let addresses: Vec<_> = addresses.into_iter().map(Arc::new).collect();
         for ((block, addresses), overflow) in self.blocks.iter().zip(&addresses).zip(&overflows) {
             block.read.record(packed, addresses)?;
             block
@@ -253,7 +261,7 @@ impl<'a> Soft<'a> {
                 .record_adaptive(packed, overflow.as_deref().unwrap_or_default())?;
         }
         Ok(SoftTrace {
-            addresses: addresses.into_iter().map(Arc::new).collect(),
+            addresses,
             overflows,
             stats,
         })
@@ -294,7 +302,8 @@ impl<'a> Soft<'a> {
         claim: Claim,
         witness: impl Fn() -> &'w SoftTrace,
         score: impl Fn(usize, usize) -> i32 + Sync,
-    ) -> Result<Claim> {
+        qk: impl Fn(usize, usize) -> [F; 2],
+    ) -> Result<(Claim, Vec<TileEvaluation>)> {
         let (vars, rb) = (self.shape.bits(), self.shape.row_bits());
         let stride = self.shape.width.next_power_of_two();
         let len = 1 << vars;
@@ -406,24 +415,37 @@ impl<'a> Soft<'a> {
 
         let defaults = [F::zero(), tables[0].value(0), tables[1].value(0), F::zero()];
         let mut full = defaults;
+        let mut evaluations = Vec::with_capacity(self.blocks.len());
         for (i, block) in self.blocks.iter().enumerate() {
             let (factor, point) = block.tile.restrict(rpoint, cpoint);
+            let mut qk_values = [F::zero(); 2];
             let [a, b, c, d] = io.values(|| {
                 let shape = block.tile.shape;
                 let trace = witness();
+                let (row, col) = point.split_at(shape.row_bits());
+                let columns = weights(col);
                 let mut result = [F::zero(); 4];
-                for (j, w) in weights(&point).into_iter().enumerate() {
-                    let address = trace.addresses[i].get(j);
-                    for (dst, val) in result.iter_mut().zip([
-                        F::from_u64(address as u64),
-                        tables[0].value(address),
-                        tables[1].value(address),
-                    ]) {
-                        *dst += w * val;
+                for (row, rw) in weights(row).into_iter().enumerate() {
+                    for (col, &cw) in columns.iter().enumerate() {
+                        let j = row * columns.len() + col;
+                        let w = rw * cw;
+                        let address = trace.addresses[i].get(j);
+                        for (dst, val) in result[..3].iter_mut().zip([
+                            F::from_u64(address as u64),
+                            tables[0].value(address),
+                            tables[1].value(address),
+                        ]) {
+                            *dst += w * val;
+                        }
+                        if row < shape.rows && col < shape.width {
+                            if let Some(overflow) = &trace.overflows[i] {
+                                result[3] += w * F::from_i64(overflow[row * shape.width + col]);
+                            }
+                            for (dst, val) in qk_values.iter_mut().zip(qk(i, j)) {
+                                *dst += w * val;
+                            }
+                        }
                     }
-                }
-                if let Some(overflow) = &trace.overflows[i] {
-                    result[3] = shape.evaluate(overflow, &point);
                 }
                 result
             })?;
@@ -434,15 +456,20 @@ impl<'a> Soft<'a> {
             lookups.read(
                 &block.read,
                 &tables,
-                point,
+                point.clone(),
                 a,
                 vec![b, c],
                 io.proving().then(|| witness().addresses[i].clone()),
             );
+            evaluations.push(TileEvaluation {
+                factor,
+                point,
+                qk: qk_values,
+            });
         }
         if !io.proving() && full != v[1..5] {
             return Err("inconsistent Softmax tiles");
         }
-        Ok(Claim::new(end.challenges, v[0]))
+        Ok((Claim::new(end.challenges, v[0]), evaluations))
     }
 }

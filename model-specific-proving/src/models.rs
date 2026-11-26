@@ -1,6 +1,6 @@
 use std::{
     io::{Read, Seek, Write},
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
 };
 
 use jolt_transcript::{protocol_tag, prover_transcript, Keccak, Transcript};
@@ -14,7 +14,7 @@ use crate::{
         Attention, Mlp, NormalizationParameters, Projection,
     },
     protocol::{
-        lookup::Lookups,
+        lookup::{Addresses, Lookups},
         opening::{read_proof, Layout, Packed, Request},
         output::Ranking,
         range::{Ranges, I32},
@@ -279,7 +279,12 @@ pub struct Model<'a> {
 
 enum LayerTrace {
     Expanded(Box<Trace>),
-    Compact { bytes: Vec<u8>, output: Vec<i32> },
+    Compact {
+        bytes: Vec<u8>,
+        output: Vec<i32>,
+        attention: Vec<Vec<Arc<Addresses>>>,
+        mlp: Arc<Addresses>,
+    },
 }
 
 impl LayerTrace {
@@ -298,11 +303,18 @@ impl LayerTrace {
         for norm in &mut trace.norms {
             norm.values = Vec::new();
         }
+        let attention = trace.attention.take_addresses();
+        let mlp = trace.mlp.take_addresses();
         let mut bytes = Vec::new();
         bincode::serialize_into(&mut bytes, &trace)
             .map_err(|_| "could not compress layer trace")?;
         bytes.shrink_to_fit();
-        Ok(Self::Compact { bytes, output })
+        Ok(Self::Compact {
+            bytes,
+            output,
+            attention,
+            mlp,
+        })
     }
 
     fn output(&self, pre: bool) -> &[i32] {
@@ -315,7 +327,12 @@ impl LayerTrace {
     fn expand(self, pre: bool, block: &Block<'_>, input: &[i32]) -> Result<Trace> {
         match self {
             Self::Expanded(trace) => Ok(*trace),
-            Self::Compact { bytes, output } => {
+            Self::Compact {
+                bytes,
+                output,
+                attention,
+                mlp,
+            } => {
                 let mut trace: Trace =
                     bincode::deserialize(&bytes).map_err(|_| "could not expand layer trace")?;
                 if pre {
@@ -323,6 +340,8 @@ impl LayerTrace {
                 } else {
                     trace.norms[1].values = output;
                 }
+                trace.attention.restore_addresses(attention);
+                trace.mlp.restore_addresses(mlp);
                 block.attention.restore(&mut trace.attention)?;
                 block.mlp.restore(&mut trace.mlp)?;
                 for (norm, stored) in block.norms.iter().zip(&mut trace.norms) {

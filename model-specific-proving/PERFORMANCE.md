@@ -638,6 +638,23 @@ Anthropicの公開コード（`9e2bdd8ff5bf9c62f18263d7dac189b0400b260c`）と�
 - Maverickは総400Bだが1トークンで有効なパラメータは約17B。FlashProveのMoE実装は選択された専門家でトークンをまとめ、量子化された整数の積和を使う。一方、重みのコミットやopeningには重みテーブルの全体走査があるため、17Bだけを処理するわけではない。小整数を使うLookupの前半やGPU内でラウンドを進めるSumcheckも、コード上はGPUの並列処理に合わせた要因。 [Metaのモデル仕様](https://ai.meta.com/blog/llama-4-multimodal-intelligence) · [MoEの実装](https://github.com/anthropics/FlashProve/blob/main/prover/prover/forward_moe.cuh) · [重みのopening](https://github.com/anthropics/FlashProve/blob/main/prover/prover/fold_walk.cuh)
 - 検査対象を次の1トークンとした公表値にも1,024位置全体の計算を含む。別のclipped-gap実験では同じリクエストと設定で、返信の検査を有効にした値は108.67、無効では108.73 prefillトークン/秒。これは同じ厳密なgreedy条件で全返信を証明したベンチではないが、検査位置の数だけで公表速度を説明する根拠にもならない。一回約39分の重みコミットと各応答の検証はオンラインproverの表に含まれない。 [性能資料](https://github.com/anthropics/FlashProve/blob/main/guide/performance.md)
 
+## Qwen3の単一リクエストを大幅に速くする設計案
+
+比較対象は同じQwen3-0.6Bの整数モデル、全28層、1,024トークン、最後の4位置のTop-8。全11コアの計測668.30秒は、BitZの初回パックから証明出力までの合計367.88秒、逆順のモデル証明とLookup 234.49秒、順伝播・Top-K・その他65.93秒。BitZ側を仮に0秒にしても約300秒が残る。以下は同時に三つの区間を削る設計で、単一リクエストの生成時間を比較する。 [全層計測](#再パックと行方向の評価を統合した後の全28層の計測)
+
+1. **丸めから証明するデータを減らす。** 現行の切り捨てでは積和 A と商 Q で余り R = A − 2^k Q が決まる。この式の全セルを固定の範囲表に結び付ける証明に変更し、余り専用のコミットを省く。丸めの意味と 0 ≤ R < 2^k は維持し、既存の積和・商の評価に結び付けて法またぎを排除する。Qwen3のgate・up・要素積・downの余りだけでも、14ビット、小数部の幅と現行の形状で、BitZのグループを詰める前に全28層で637 MiB（有効なセルだけで490 MiB）。新しいLookupの多重度と集約、それが読む既存の証人、新たに必要になったコミットを加えた差を使う。MLPだけの削減で桁が変わる規模ではない。Attention、Norm、活性化で、既存の式から導ける証人や複数回現れる範囲条件も同じ考えで調べる。 [現行の丸め](src/layers/linear.rs#L111) · [FlashProveの丸め](https://github.com/anthropics/FlashProve/blob/9e2bdd8ff5bf9c62f18263d7dac189b0400b260c/docs/format/11-2-feed-forward-segment.md#L531-L546)
+2. **証明の順を、同じ評価を使い回せるように変える。** 区間内で、丸め・clamp・活性化のLookupを表ID付きでまとめ、トークン軸の評価点を共有する。その点で入力を一度縮約し、同じ入力を持つgate/upやQ/K/Vの積和を束ねたSumcheckで証明する。Attentionは同じ形のヘッドと因果タイルに複数の仕事を割り当てる。同じ区間内の層間Sumcheck chainは保つ。区間を独立に進める場合は境界の残差を一度コミットし、前後の両方の評価をそこへ結ぶ。4層区切りなら内部境界6箇所、1,024位置×幅1,024×32ビットで境界データは生の表として24 MiB。符号化、評価証明や追加の中間コミットは別。区間の並列性は、追加費用を含む単一GPUの実行時間で判断する。 [FlashProveの評価点の共有](https://github.com/anthropics/FlashProve/blob/9e2bdd8ff5bf9c62f18263d7dac189b0400b260c/docs/format/11-1-machinery.md#L149-L164) · [Atlasの層間の接続](src/models.rs#L508)
+3. **GPU上で小整数から証明の終端まで処理し、符号語を保存しない経路を比較する。** 順伝播、最初のSumcheckラウンド、整数の証人生成は、値が小さいうちに整数積和を使い、正確な整数として復元できる範囲で分割して計算する。乱数で折り畳んだ後の演算はフィールドを使う。GPUでは大きな折り畳みと次の部分和を一体化し、小さくなったラウンドはトランスクリプトを含めてデバイス内で進める。残る証人は区間単位でコミットし、符号化の出力を直接ハッシュして、openingは必要な符号位置だけ再生成できるPCSを比較する。BitZを使い続ける場合の再パック・再コミット・列折り畳みの費用と、PCSを差し替える場合の符号化・評価帰着・検証を同じデータで数える。体を変える場合も、元の整数出力、上限、健全性の目標を維持する。 [小さい値のSumcheck](https://eprint.iacr.org/2024/1046) · [FlashProveのGPU上の折り畳み](https://github.com/anthropics/FlashProve/blob/9e2bdd8ff5bf9c62f18263d7dac189b0400b260c/prover/hiding/token_sumcheck.cuh#L148-L209) · [符号化とopening](https://github.com/anthropics/FlashProve/blob/9e2bdd8ff5bf9c62f18263d7dac189b0400b260c/prover/engine/engine_gpu.cuh#L915-L981)
+
+| 現行の区間 | 実測 | 5倍を達成する時間予算 | 10倍を達成する時間予算 |
+|---|---:|---:|---:|
+| コミット・評価・証明出力 | 367.88秒 | 55秒 | 24秒 |
+| モデル証明・Lookup | 234.49秒 | 55秒 | 30秒 |
+| 順伝播・Top-K・その他 | 65.93秒 | 23秒 | 12秒 |
+| 合計 | 668.30秒 | 133秒 | 66秒 |
+
+予算は各目標を満たすための配分例で、実装後の予測値ではない。同じMacで達成できるという見積もりもない。検証の時間とメモリ、証明サイズ、生成のRAM・VRAMは別に比較する。比較する単位は、Top-8まで含む1リクエストの証明。複数リクエストを束ねた処理量は別の性能指標。
+
 ## 計測の元データ
 
 比較の再集計に必要な値をここに記録する。秒数は各試行の区間計測。ピークは計測対象プロセスの物理メモリ使用量で、ビット配列の容量はパディング後のPCS入力。1 MiBは2²⁰バイト。

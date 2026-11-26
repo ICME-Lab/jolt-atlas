@@ -8,7 +8,7 @@ pub(crate) enum Column<'a, F> {
     Table {
         values: Vec<F>,
         len: usize,
-        repeat: usize,
+        shift: u32,
     },
 }
 
@@ -21,7 +21,7 @@ impl<'a, F: Field> Column<'a, F> {
         Self::Table {
             values,
             len,
-            repeat,
+            shift: repeat.ilog2(),
         }
     }
 
@@ -34,24 +34,19 @@ impl<'a, F: Field> Column<'a, F> {
     fn at(&self, index: usize) -> F {
         match self {
             Self::Source(_, read) => read(index),
-            Self::Table { values, repeat, .. } => values[index / repeat % values.len()],
+            Self::Table { values, shift, .. } => values[(index >> shift) & (values.len() - 1)],
         }
     }
 
     fn bind(&mut self, point: F) {
         let half = self.len() / 2;
-        if let Self::Table {
-            values,
-            len,
-            repeat,
-        } = self
-        {
+        if let Self::Table { values, len, shift } = self {
             *len = half;
-            if half >= values.len() * *repeat {
+            if half >= values.len() << *shift {
                 return;
             }
             if values.len() == 1 {
-                *repeat = half;
+                *shift = half.ilog2();
                 return;
             }
             let split = values.len() / 2;
@@ -83,19 +78,19 @@ impl<'a, F: Field> Column<'a, F> {
     }
 }
 
-pub(crate) struct Fold<'a, F, G, const N: usize> {
-    pub(crate) columns: [Column<'a, F>; N],
+pub(crate) struct Fold<'a, F, G> {
+    pub(crate) columns: Vec<Column<'a, F>>,
     pub(crate) degree: usize,
     pub(crate) relation: G,
 }
 
-impl<F: Field, G, const N: usize> Fold<'_, F, G, N> {
-    pub(crate) fn terminal(&self) -> [F; N] {
-        self.columns.each_ref().map(|column| column.at(0))
+impl<F: Field, G> Fold<'_, F, G> {
+    pub(crate) fn terminal(&self) -> Vec<F> {
+        self.columns.iter().map(|column| column.at(0)).collect()
     }
 }
 
-impl<F: Field, G: Fn(&[F; N]) -> F + Sync, const N: usize> ProveRounds<F> for Fold<'_, F, G, N> {
+impl<F: Field, G: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, F, G> {
     fn num_rounds(&self) -> usize {
         self.columns[0].len().ilog2() as usize
     }
@@ -112,10 +107,14 @@ impl<F: Field, G: Fn(&[F; N]) -> F + Sync, const N: usize> ProveRounds<F> for Fo
         let half = self.columns[0].len() / 2;
         let scan = |start: usize, end: usize| {
             let mut sums = vec![F::zero(); self.degree + 1];
+            let mut values = vec![F::zero(); self.columns.len()];
+            let mut delta = values.clone();
             for i in start..end {
-                let mut values = self.columns.each_ref().map(|column| column.at(i));
-                let delta: [F; N] =
-                    std::array::from_fn(|j| self.columns[j].at(i + half) - values[j]);
+                for (j, column) in self.columns.iter().enumerate() {
+                    let lo = column.at(i);
+                    values[j] = lo;
+                    delta[j] = column.at(i + half) - lo;
+                }
                 sums[0] += (self.relation)(&values);
                 for (a, &d) in values.iter_mut().zip(&delta) {
                     *a += d;

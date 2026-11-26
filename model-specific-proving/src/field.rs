@@ -3,8 +3,8 @@
 use crypto_primitives::LiftElement;
 use jolt_field::{CanonicalBytes, CanonicalEncoding, Field, Ring};
 use jolt_transcript::{
-    ChallengeSetSize, Encoding, FieldTranscript, Keccak, ProverState, VerificationError,
-    VerifierState, MAX_CHALLENGE_BYTES,
+    ChallengeSetSize, Encoding, FieldTranscript, Keccak, ProverState, ProverTranscript,
+    VerificationError, VerifierState, VerifierTranscript, MAX_CHALLENGE_BYTES,
 };
 use num_traits::{ConstOne, ConstZero, Zero};
 
@@ -32,11 +32,16 @@ impl std::fmt::Display for F {
 
 impl Ring for F {
     fn from_u64(value: u64) -> Self {
-        Self::from_u128(u128::from(value))
+        Self(Scalar::from(value))
     }
 
     fn from_i64(value: i64) -> Self {
-        Self::from_i128(i128::from(value))
+        let x = Self::from_u64(value.unsigned_abs());
+        if value < 0 {
+            -x
+        } else {
+            x
+        }
     }
 
     fn from_u128(value: u128) -> Self {
@@ -53,22 +58,28 @@ impl Ring for F {
     }
 }
 
+impl F {
+    pub(crate) fn mul_integer(self, integer: i128) -> Self {
+        let magnitude = integer.unsigned_abs();
+        let Ok(word) = u64::try_from(magnitude) else {
+            return self * Self::from_i128(integer);
+        };
+        let x = self.0.lift();
+        let lower = u128::from(x as u64) * u128::from(word);
+        let upper = (x >> 64) * u128::from(word) + (lower >> 64);
+        let low_bits = (upper as u64 & ((1 << 55) - 1)) as u128;
+        let y = Self::from_u128(((low_bits << 64) | u128::from(lower as u64)) + (upper >> 55) * 69);
+        if integer < 0 {
+            -y
+        } else {
+            y
+        }
+    }
+}
+
 impl Field for F {
     fn inverse(&self) -> Option<Self> {
-        if self.is_zero() {
-            return None;
-        }
-        let mut power = *self;
-        let mut inverse = Self(Scalar::ONE);
-        let mut exponent = MODULUS - 2;
-        while exponent != 0 {
-            if exponent & 1 != 0 {
-                inverse *= power;
-            }
-            power *= power;
-            exponent >>= 1;
-        }
-        Some(inverse)
+        (!self.is_zero()).then(|| Self::from_u128(Scalar::META.pow(self.0.lift(), MODULUS - 2)))
     }
 
     fn random<R: rand_core::RngCore>(rng: &mut R) -> Self {
@@ -178,5 +189,29 @@ impl FieldTranscript<F> for VerifierState<'_, Keccak> {
         }
         let len = sample_len(count)?;
         self.verifier_message_as(len, |bytes| sample(bytes, count))
+    }
+}
+
+pub(crate) trait Mixing<E: Field>: FieldTranscript<E> + Sized {
+    fn grind_mix(&mut self, bits: u32) -> Result<(), VerificationError>;
+
+    fn mix(&mut self, count: usize, loss: usize) -> Result<Vec<E>, &'static str> {
+        let bits =
+            jolt_sumcheck::round_pow_bits::<E, Self>(loss).map_err(|_| "invalid challenge size")?;
+        self.grind_mix(bits).map_err(|_| "invalid proof of work")?;
+        self.challenge_vector(count)
+            .map_err(|_| "invalid transcript challenge")
+    }
+}
+
+impl Mixing<F> for ProverState<Keccak> {
+    fn grind_mix(&mut self, bits: u32) -> Result<(), VerificationError> {
+        self.grind(bits)
+    }
+}
+
+impl Mixing<F> for VerifierState<'_, Keccak> {
+    fn grind_mix(&mut self, bits: u32) -> Result<(), VerificationError> {
+        self.check_grind(bits)
     }
 }

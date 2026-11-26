@@ -1,5 +1,6 @@
 //! Joint reduction for fixed-point matrix projections with the same input tensor.
 
+use crate::field::Mixing;
 use crate::fold::{basis, InnerProducts};
 use crate::norm::Claim;
 use jolt_field::Field;
@@ -32,6 +33,7 @@ pub struct Query<'a, F> {
     pub remainder: F,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Proof<F> {
     rounds: SingleSumcheckProof<F>,
     values: Vec<F>,
@@ -75,22 +77,33 @@ impl Input {
         }
         let mut values = vec![0; self.rows * output];
         let mut remainders = vec![0; values.len()];
+        let weight_bound: Vec<_> = projection
+            .weights
+            .chunks_exact(self.width)
+            .map(|r| r.iter().map(|v| u128::from(v.unsigned_abs())).sum::<u128>())
+            .collect();
         values
             .par_chunks_mut(output)
             .zip(remainders.par_chunks_mut(output))
             .zip(input.par_chunks(self.width))
             .try_for_each(|((values, remainders), row)| {
-                for (((value, rem), weight), &bias) in values
+                let bound = row
+                    .iter()
+                    .map(|x| u128::from(x.unsigned_abs()))
+                    .max()
+                    .unwrap_or(0);
+                for (j, (((value, rem), weight), &bias)) in values
                     .iter_mut()
                     .zip(remainders)
                     .zip(projection.weights.chunks_exact(self.width))
                     .zip(projection.bias)
+                    .enumerate()
                 {
-                    let adapt: i128 = row
-                        .iter()
-                        .zip(weight)
-                        .map(|(&x, &y)| i128::from(x) * i128::from(y))
-                        .sum();
+                    let adapt = crate::tensor::dot(
+                        row,
+                        weight,
+                        bound * weight_bound[j] <= i64::MAX as u128,
+                    );
                     let raw = adapt + (i128::from(bias) << self.bits);
                     *value = i32::try_from(raw >> self.bits)
                         .map_err(|_| "projection output exceeds i32")?;
@@ -104,7 +117,7 @@ impl Input {
     fn batch<F: Field + Encoding>(
         self,
         queries: &[Query<'_, F>],
-        channel: &mut impl FieldTranscript<F>,
+        channel: &mut impl Mixing<F>,
     ) -> Result<Batch<F>> {
         let (row_bits, width) = self.dimensions()?;
         if queries.is_empty()
@@ -121,9 +134,7 @@ impl Input {
             channel.append_values(&q.output.point);
             channel.append_values(&[q.output.value, q.remainder]);
         }
-        let mix = channel
-            .challenge_vector(queries.len())
-            .map_err(|_| "projection challenge rejected")?;
+        let mix = channel.mix(queries.len(), queries.len())?;
         let mut groups: Vec<Group<F>> = Vec::new();
         let mut claim = F::zero();
         let scale = F::from_u64(1 << self.bits);
@@ -168,11 +179,11 @@ impl Input {
         })
     }
 
-    pub fn prove<F: Field + Encoding>(
+    pub(crate) fn prove<F: Field + Encoding>(
         self,
         input: &[i32],
         queries: &[Query<'_, F>],
-        channel: &mut (impl FieldTranscript<F> + ProverTranscript),
+        channel: &mut (impl Mixing<F> + ProverTranscript),
     ) -> Result<(Proof<F>, Vec<Claim<F>>)> {
         let (_, width) = self.dimensions()?;
         if input.len() != self.rows * self.width {
@@ -204,11 +215,11 @@ impl Input {
         Ok((proof, claims))
     }
 
-    pub fn verify<F: Field + Encoding>(
+    pub(crate) fn verify<F: Field + Encoding>(
         self,
         queries: &[Query<'_, F>],
         proof: &Proof<F>,
-        channel: &mut impl FieldTranscript<F>,
+        channel: &mut impl Mixing<F>,
     ) -> Result<Vec<Claim<F>>> {
         let batch = self.batch(queries, channel)?;
         let end = verify_single(&batch.instance, &proof.rounds, channel)

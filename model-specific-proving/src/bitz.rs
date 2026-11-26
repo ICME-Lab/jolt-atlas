@@ -1,6 +1,6 @@
 //! Commit integer columns and authenticate their multilinear evaluations with BitZ.
 
-use crate::field::{Scalar, F};
+use crate::field::{Mixing, Scalar, F};
 use crate::fold::{agreement, basis, InnerProducts};
 use crate::norm::{Claim, Width};
 use jolt_field::{Ring, Zero};
@@ -57,11 +57,48 @@ pub struct Group {
 pub struct Query {
     pub slot: usize,
     pub claim: Claim<F>,
+    pub planes: Option<Vec<F>>,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Proof {
     rows: SingleSumcheckProof<F>,
+    #[serde(with = "BitProof")]
     bits: world_transcript::Proof,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(remote = "world_transcript::Proof")]
+struct BitProof {
+    #[serde(with = "bytes")]
+    narg_string: Vec<u8>,
+    #[serde(with = "bytes")]
+    hints: Vec<u8>,
+}
+
+pub(crate) mod bytes {
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(data)
+    }
+
+    pub fn deserialize<'d, D: Deserializer<'d>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        struct Bytes;
+        impl<'d> serde::de::Visitor<'d> for Bytes {
+            type Value = Vec<u8>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("bytes")
+            }
+            fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<Vec<u8>, E> {
+                Ok(bytes.to_vec())
+            }
+            fn visit_byte_buf<E: serde::de::Error>(self, bytes: Vec<u8>) -> Result<Vec<u8>, E> {
+                Ok(bytes)
+            }
+        }
+        deserializer.deserialize_byte_buf(Bytes)
+    }
 }
 
 type RootBytes = [u8; 32];
@@ -115,6 +152,15 @@ impl Group {
         source: impl Fn(usize, usize) -> i128,
         outer: &mut ProverState<Keccak>,
     ) -> Result<Committed> {
+        let result = self.commit_detached(source)?;
+        outer.append_bytes(&result.root);
+        Ok(result)
+    }
+
+    pub(crate) fn commit_detached(
+        &self,
+        source: impl Fn(usize, usize) -> i128,
+    ) -> Result<Committed> {
         let mut packed = vec![F128::from(0u128); self.pcs.packed_len()];
         for (slot, placement) in self.placements.iter().enumerate() {
             let bit_count = placement.range.bits();
@@ -150,7 +196,6 @@ impl Group {
             .pcs
             .commit(&packed, &mut channel)
             .map_err(|_| "BitZ commitment failed")?;
-        outer.append_bytes(&root.0);
         Ok(Committed {
             root: root.0,
             packed,
@@ -166,7 +211,7 @@ impl Group {
     fn prepare(
         &self,
         queries: &[Query],
-        outer: &mut impl FieldTranscript<F>,
+        outer: &mut impl Mixing<F>,
     ) -> Result<(SingleInstance<F>, Vec<WeightedQuery<'_>>)> {
         if queries.is_empty() {
             return Err("missing BitZ evaluation");
@@ -177,13 +222,17 @@ impl Group {
             if q.claim.point.len() != placement.range.vars {
                 return Err("invalid BitZ point");
             }
+            if let Some(planes) = &q.planes {
+                if planes.len() != placement.range.bits() || placement.range.offset() != 0 {
+                    return Err("invalid BitZ plane weights");
+                }
+                outer.append_values(planes);
+            }
             outer.append(&(q.slot as u64));
             outer.append_values(&q.claim.point);
             outer.append_values(&[q.claim.value]);
         }
-        let mix = outer
-            .challenge_vector(queries.len())
-            .map_err(|_| "invalid BitZ challenges")?;
+        let mix = outer.mix(queries.len(), queries.len())?;
         let mut total = F::zero();
         let queries = queries
             .iter()
@@ -197,9 +246,16 @@ impl Group {
                 total += scale * (q.claim.value + F::from_i128(placement.range.offset()));
                 WeightedQuery {
                     placement,
+                    slot: q.slot,
+                    binary: q.planes.is_some(),
                     column,
                     row,
                     scale,
+                    planes: q.planes.clone().unwrap_or_else(|| {
+                        (0..placement.range.bits())
+                            .map(|i| F::from_u128(1 << i))
+                            .collect()
+                    }),
                 }
             })
             .collect();
@@ -218,21 +274,53 @@ impl Group {
         queries: &[Query],
         outer: &mut ProverState<Keccak>,
     ) -> Result<Proof> {
+        self.reduce(committed, queries, outer, None::<fn(usize, usize) -> i128>)?
+            .open(&mut std::collections::HashMap::new())
+    }
+
+    pub(crate) fn reduce(
+        &self,
+        committed: Committed,
+        queries: &[Query],
+        outer: &mut ProverState<Keccak>,
+        source: Option<impl Fn(usize, usize) -> i128 + Sync>,
+    ) -> Result<Pending<'_>> {
+        use rayon::prelude::*;
         let (instance, queries) = self.prepare(queries, outer)?;
         let pairs = queries
-            .iter()
+            .par_iter()
             .map(|q| {
                 let mut values = vec![F::zero(); ROWS];
-                for (bit, columns) in q.columns().enumerate() {
-                    let scale = q.scale * F::from_u128(1 << bit);
-                    for (col, &weight) in columns.zip(&q.column) {
-                        for (word, output) in values.chunks_exact_mut(128).enumerate() {
-                            let mut mask = u128::from_le_bytes(
-                                committed.packed[col * WORDS + word].to_bytes(),
-                            );
-                            while mask != 0 {
-                                output[mask.trailing_zeros() as usize] += scale * weight;
-                                mask &= mask - 1;
+                if let Some(source) = &source {
+                    let layout = q.placement.range;
+                    let count = (1 << layout.vars).min(ROWS);
+                    for (col, &weight) in q.column.iter().enumerate() {
+                        let w = weight * q.scale;
+                        for (row, v) in values[..count].iter_mut().enumerate() {
+                            let x = (source(q.slot, col * ROWS + row) + layout.offset()) as u128;
+                            if q.binary {
+                                let mut bits = x;
+                                while bits != 0 {
+                                    *v += w * q.planes[bits.trailing_zeros() as usize];
+                                    bits &= bits - 1;
+                                }
+                            } else {
+                                *v += w.mul_integer(x as i128);
+                            }
+                        }
+                    }
+                } else {
+                    for (bit, columns) in q.columns().enumerate() {
+                        let scale = q.scale * q.planes[bit];
+                        for (col, &weight) in columns.zip(&q.column) {
+                            for (word, output) in values.chunks_exact_mut(128).enumerate() {
+                                let mut mask = u128::from_le_bytes(
+                                    committed.packed[col * WORDS + word].to_bytes(),
+                                );
+                                while mask != 0 {
+                                    output[mask.trailing_zeros() as usize] += scale * weight;
+                                    mask &= mask - 1;
+                                }
                             }
                         }
                     }
@@ -247,18 +335,11 @@ impl Group {
         let (rows, end) =
             prove_single(&mut witness, &instance, outer).map_err(|_| "BitZ row Sumcheck failed")?;
         let linear = self.linear_claim(&queries, end)?;
-        let Committed {
-            data,
-            packed,
-            mut channel,
-            ..
-        } = committed;
-        world_prover::BitZProver::new(self.parameters, 8)
-            .prove(&linear, &self.pcs, &data, packed, &mut channel)
-            .map_err(|_| "BitZ evaluation proof failed")?;
-        Ok(Proof {
+        Ok(Pending {
+            setup: self,
+            committed,
             rows,
-            bits: channel.finish(),
+            linear,
         })
     }
 
@@ -293,7 +374,7 @@ impl Group {
         for q in queries {
             let scale = q.scale * agreement(&q.row, &end.challenges);
             for (bit, columns) in q.columns().enumerate() {
-                let scale = scale * F::from_u128(1 << bit);
+                let scale = scale * q.planes[bit];
                 for (col, &weight) in columns.zip(&q.column) {
                     column_weights[col] += weight * scale;
                 }
@@ -309,11 +390,44 @@ impl Group {
     }
 }
 
+pub(crate) struct Pending<'a> {
+    setup: &'a Group,
+    committed: Committed,
+    rows: SingleSumcheckProof<F>,
+    linear: LinearClaim<Scalar>,
+}
+
+impl Pending<'_> {
+    pub(crate) fn open(
+        self,
+        cache: &mut std::collections::HashMap<usize, world_prover::BitZProver<Scalar>>,
+    ) -> Result<Proof> {
+        let Committed {
+            data,
+            packed,
+            mut channel,
+            ..
+        } = self.committed;
+        cache
+            .entry(self.setup.parameters.shape().columns())
+            .or_insert_with(|| world_prover::BitZProver::new(self.setup.parameters, 8))
+            .prove(&self.linear, &self.setup.pcs, &data, packed, &mut channel)
+            .map_err(|_| "BitZ evaluation proof failed")?;
+        Ok(Proof {
+            rows: self.rows,
+            bits: channel.finish(),
+        })
+    }
+}
+
 struct WeightedQuery<'a> {
     placement: &'a Placement,
+    slot: usize,
+    binary: bool,
     column: Vec<F>,
     row: Vec<F>,
     scale: F,
+    planes: Vec<F>,
 }
 
 impl WeightedQuery<'_> {
@@ -356,6 +470,7 @@ mod tests {
                     .sum();
                 Query {
                     slot,
+                    planes: None,
                     claim: Claim {
                         point: point.to_vec(),
                         value,

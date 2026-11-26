@@ -7,8 +7,11 @@ edition = "2021"
 resolver = "2"
 
 [features]
-metal = ["world-prover/gkr-backend"]
 safetensors-weights = ["dep:safetensors", "dep:half", "dep:atlas-trace", "dep:libm", "dep:serde_json"]
+
+[[bin]]
+name = "prove-model"
+required-features = ["safetensors-weights"]
 
 [dependencies]
 bincode = "1.3"

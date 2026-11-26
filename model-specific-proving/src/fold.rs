@@ -191,10 +191,19 @@ impl<F: Field, G: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, F, G> {
             }
             sums
         };
-        let mut values = if half >= 4096 {
-            (0..half.div_ceil(1024))
+        // A short round can still have substantial work when it batches many columns.
+        let adaptive = half >= 128
+            && half.saturating_mul(self.columns.len()) >= 32_768
+            && rayon::current_num_threads() > 1;
+        let grain = if adaptive {
+            (16_384 / self.columns.len()).clamp(128, 1024)
+        } else {
+            1024
+        };
+        let mut values = if half >= 4096 || adaptive {
+            (0..half.div_ceil(grain))
                 .into_par_iter()
-                .map(|block| scan(block * 1024, ((block + 1) * 1024).min(half)))
+                .map(|block| scan(block * grain, ((block + 1) * grain).min(half)))
                 .reduce_with(|mut a, b| {
                     for (a, b) in a.iter_mut().zip(b) {
                         *a += b;

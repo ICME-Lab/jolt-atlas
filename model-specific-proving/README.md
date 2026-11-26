@@ -45,7 +45,7 @@ This crate implements proofs for the following model components:
 
 Each supported model specifies in Rust how these components are connected and
 repeated. Public tensor shapes follow from the model configuration and input
-sizes. Model weights can still be read from an ONNX export.
+sizes. The crate reads model weights from safetensors.
 
 Those components share three kinds of checks:
 
@@ -67,7 +67,7 @@ remainders and one-hot vectors and opens them in a final batch.
 
 ## Implementation size
 
-The crate has about 8,100 lines of Rust source, including model execution,
+The crate has about 5,250 lines of Rust source, including model execution,
 model definitions, and proof generation and verification.
 The existing Atlas codebase has about 84,000 lines of
 Rust across its broader ONNX pipeline and supporting code. The direct approach

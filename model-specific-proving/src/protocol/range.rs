@@ -1,256 +1,143 @@
-//! Integer range constraints written as evaluations of shared bit planes.
+use jolt_field::{One, Ring, Zero};
 
 use super::{
-    pcs::{Advice, Kind, Layout, Opening, Part, Slot},
-    session::{Claim, ProofField, Session},
-    tensor::Shape,
+    field::F,
+    opening::{Layout, Packed, Request, Slot},
+    sumcheck::Session,
+    tensor::{Claim, Shape},
     Result,
 };
 
 #[derive(Clone, Copy)]
-pub(crate) struct Range {
+pub(crate) struct Width {
     bits: usize,
     offset: i128,
 }
 
-impl Range {
-    pub(crate) const fn unsigned(bits: usize) -> Self {
-        Self { bits, offset: 0 }
-    }
+impl Width {
     pub(crate) const fn signed(bits: usize) -> Self {
         Self {
             bits,
             offset: 1 << (bits - 1),
         }
     }
-}
 
-pub(crate) const I32: Range = Range::signed(32);
-
-pub(crate) struct Ranges {
-    pub(crate) slot: Slot,
-    ranges: Box<[Range]>,
-    pub(crate) shape: Shape,
-}
-
-impl Ranges {
-    pub(crate) fn new(
-        layout: &mut Layout,
-        shape: Shape,
-        ranges: impl AsRef<[Range]>,
-    ) -> Result<Self> {
-        let ranges = ranges.as_ref();
-        let planes = ranges.iter().map(|r| r.bits).sum();
-        for range in ranges {
-            layout.integer_bits = layout.integer_bits.max(range.bits as u32 + 2);
-        }
-        Ok(Self {
-            slot: layout.add(shape.vars(), Kind::Bits { planes })?,
-            ranges: ranges.into(),
-            shape,
-        })
+    pub(crate) const fn unsigned(bits: usize) -> Self {
+        Self { bits, offset: 0 }
     }
+}
 
-    pub(crate) fn suffix(&self, first: usize) -> Self {
-        let mut slot = self.slot;
-        let ranges = self.ranges[first..].to_vec().into_boxed_slice();
-        slot.kind = Kind::Bits {
-            planes: ranges.iter().map(|r| r.bits).sum(),
-        };
+pub(crate) const I32: Width = Width::signed(32);
+
+pub(crate) struct Ranges<const N: usize> {
+    pub shape: Shape,
+    slot: Slot,
+    widths: [Width; N],
+}
+
+impl<const N: usize> Ranges<N> {
+    pub(crate) fn new(layout: &mut Layout, shape: Shape, widths: [Width; N]) -> Self {
+        let slot = layout.reserve(shape.bits(), widths.iter().map(|width| width.bits).sum());
         Self {
+            shape,
             slot,
-            ranges,
-            shape: self.shape,
+            widths,
         }
     }
 
     pub(crate) fn record<T: Copy + Into<i128>>(
         &self,
-        advice: &mut Advice,
-        values: &[&[T]],
+        packed: &mut Packed<'_>,
+        columns: [&[T]; N],
     ) -> Result<()> {
-        self.record_columns(advice, values, self.shape.width, 0)
-    }
-
-    pub(crate) fn record_columns<T: Copy + Into<i128>>(
-        &self,
-        advice: &mut Advice,
-        values: &[&[T]],
-        width: usize,
-        offset: usize,
-    ) -> Result<()> {
-        if values.len() != self.ranges.len() {
-            return Err("invalid range witness count");
-        }
-        let cells = 1 << self.shape.vars();
-        let stride = self.shape.width.next_power_of_two();
-        let lanes = 1 << self.slot.digit_vars();
-        let Kind::Bits { planes } = self.slot.kind else {
-            unreachable!("range slot is a bit slot");
-        };
-        let mut digits = vec![0; self.slot.digit_count(planes) * cells];
+        let shape = self.shape;
+        let stride = shape.width.next_power_of_two();
         let mut plane = 0;
-        for (range, &values) in self.ranges.iter().zip(values) {
-            if range.bits == 0 && values.is_empty() {
+        for (width, values) in self.widths.into_iter().zip(columns) {
+            if width.bits == 0 && values.is_empty() {
                 continue;
             }
-            if values.len() != self.shape.rows * width || offset + self.shape.width > width {
-                return Err("invalid range witness shape");
+            if values.len() != shape.len() {
+                return Err("invalid range witness dimensions");
             }
-            let rows = || {
-                values
-                    .chunks_exact(width)
-                    .map(|row| &row[offset..][..self.shape.width])
-            };
-            let codes = rows().flatten().map(|&v| v.into() + range.offset);
-            if codes.clone().any(|v| v < 0 || v >= 1i128 << range.bits) {
-                return Err("integer exceeds declared range");
-            }
-            let mut bit = 0;
-            while bit < range.bits {
-                let shift = plane % lanes;
-                let count = (lanes - shift).min(range.bits - bit);
-                let mask = (1 << count) - 1;
-                let encode = |value: i128| (((value >> bit) as u8) & mask) << shift;
-                let dst = &mut digits[plane / lanes * cells..][..cells];
-                let pad = encode(range.offset);
-                for (row, values) in dst.chunks_exact_mut(stride).zip(rows()) {
-                    let (used, padding) = row.split_at_mut(self.shape.width);
-                    for (digit, &value) in used.iter_mut().zip(values) {
-                        *digit |= encode(value.into() + range.offset);
-                    }
-                    for digit in padding {
-                        *digit |= pad;
-                    }
-                }
-                for digit in &mut dst[self.shape.rows * stride..] {
-                    *digit |= pad;
-                }
-                bit += count;
-                plane += count;
-            }
+            packed.write(self.slot, plane, width.bits, |i| {
+                let (row, col) = (i / stride, i % stride);
+                let value = if row < shape.rows && col < shape.width {
+                    values[row * shape.width + col].into()
+                } else {
+                    0
+                };
+                (value + width.offset) as u128
+            })?;
+            plane += width.bits;
         }
-        advice.put(self.slot, Part::Digits(digits.into()))
+        Ok(())
     }
 
-    pub(crate) fn record_packed<T: Copy + Into<i128>>(
-        &self,
-        advice: &mut Advice,
-        values: &[&[T]],
-    ) -> Result<()> {
-        if values.len() != self.ranges.len() {
-            return Err("invalid range witness count");
-        }
-        let Kind::Bits { planes } = self.slot.kind else {
-            unreachable!("range slot is a bit slot");
-        };
-        let words = (1usize << self.shape.vars()).div_ceil(128);
-        let stride = self.shape.width.next_power_of_two();
-        let mut packed = vec![0u128; words * planes];
-        let mut plane = 0;
-        for (range, &values) in self.ranges.iter().zip(values) {
-            if range.bits == 0 && values.is_empty() {
-                continue;
-            }
-            self.shape.check(values)?;
-            for word in 0..words {
-                let mut bits = [0u128; 128];
-                for index in word * 128..((word + 1) * 128).min(1 << self.shape.vars()) {
-                    let (row, col) = (index / stride, index % stride);
-                    let value = if row < self.shape.rows && col < self.shape.width {
-                        values[row * self.shape.width + col].into()
-                    } else {
-                        0
-                    };
-                    let code = value + range.offset;
-                    if code < 0 || code >= 1i128 << range.bits {
-                        return Err("integer exceeds declared range");
-                    }
-                    let mut code = code as u128;
-                    while code != 0 {
-                        bits[code.trailing_zeros() as usize] |= 1 << (index % 128);
-                        code &= code - 1;
-                    }
-                }
-                for (bit, &value) in bits[..range.bits].iter().enumerate() {
-                    packed[(plane + bit) * words + word] = value;
-                }
-            }
-            plane += range.bits;
-        }
-        advice.put(self.slot, Part::Packed(packed))
-    }
-
-    pub(crate) fn check_last_bits<F: ProofField>(
-        &self,
-        point: Vec<F>,
-        keep: usize,
-        io: &mut Session<'_, '_, F>,
-    ) {
-        let last = self.ranges.last().expect("range");
-        if keep >= last.bits {
+    pub(crate) fn high_bits_zero(&self, requests: &mut Vec<Request>, point: Vec<F>, low: usize) {
+        let width = self.widths[N - 1].bits;
+        if width <= low {
             return;
         }
-        let first: usize = self.ranges[..self.ranges.len() - 1]
-            .iter()
-            .map(|r| r.bits)
-            .sum();
-        let mut planes = vec![F::zero(); 1 << (self.slot.vars() - self.slot.cell_vars)];
-        for i in keep..last.bits {
-            planes[first + i] = F::from_u128(1 << (i - keep));
+        let prefix = self.widths[..N - 1].iter().map(|w| w.bits).sum::<usize>();
+        let mut planes = vec![F::zero(); prefix + width];
+        for (i, coefficient) in planes[prefix + low..].iter_mut().enumerate() {
+            *coefficient = F::from_u128(1 << i);
         }
-        io.openings.push(Opening {
-            slot: self.slot.id,
-            claim: Claim {
-                point,
-                value: F::zero(),
-            },
-            planes: Some(planes),
+        requests.push(Request {
+            slot: self.slot,
+            claim: Claim::new(point, F::zero()),
+            planes,
         });
     }
 
-    pub(crate) fn check<F: ProofField, V: AsRef<[F]>>(
+    pub(crate) fn open(
         &self,
-        claims: &[(&[F], V)],
-        io: &mut Session<'_, '_, F>,
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        point: &[F],
+        values: [F; N],
     ) -> Result<()> {
-        let n = self.ranges.len();
-        if claims.is_empty()
-            || claims
-                .iter()
-                .any(|(p, v)| p.len() != self.shape.vars() || v.as_ref().len() != n)
-        {
-            return Err("invalid range claims");
-        }
-        let mut mix = if n > 1 {
-            io.point(n * claims.len())?
+        let mix = if N == 1 {
+            vec![F::one()]
         } else {
-            Vec::new()
+            io.random(N, N)?
+        };
+        let mut value = F::zero();
+        let mut planes = Vec::new();
+        for ((width, input), weight) in self.widths.into_iter().zip(values).zip(mix) {
+            value += weight * (input + F::from_i128(width.offset));
+            planes.extend((0..width.bits).map(|i| weight * F::from_u128(1 << i)));
         }
-        .into_iter();
-        let planes = 1 << (self.slot.vars() - self.slot.cell_vars);
-        for (point, values) in claims {
-            let mut value = F::zero();
-            let mut coefficients = Vec::with_capacity(planes);
-            for (range, &v) in self.ranges.iter().zip(values.as_ref()) {
-                let scale = if n == 1 {
-                    F::one()
-                } else {
-                    mix.next().expect("one coefficient per integer")
-                };
-                value += scale * (v + F::from_i128(range.offset));
-                coefficients.extend((0..range.bits).map(|b| scale * F::from_u128(1 << b)));
-            }
-            coefficients.resize(planes, F::zero());
-            io.openings.push(Opening {
-                slot: self.slot.id,
-                claim: Claim {
-                    point: point.to_vec(),
-                    value,
-                },
-                planes: Some(coefficients),
-            });
-        }
+        requests.push(Request {
+            slot: self.slot,
+            claim: Claim::new(point.to_vec(), value),
+            planes,
+        });
         Ok(())
+    }
+}
+
+impl Ranges<1> {
+    pub(crate) fn adaptive(layout: &mut Layout, shape: Shape, capacity: usize) -> Self {
+        let range = Self::new(layout, shape, [Width::unsigned(capacity)]);
+        layout.variable(range.slot);
+        range
+    }
+
+    pub(crate) fn record_adaptive(&self, packed: &mut Packed<'_>, values: &[i64]) -> Result<()> {
+        let value = values.iter().copied().max().unwrap_or(0) as u64;
+        let bits = (64 - value.leading_zeros()) as usize;
+        packed.shrink(self.slot, bits)?;
+        let shape = self.shape;
+        let stride = shape.width.next_power_of_two();
+        packed.write(self.slot, 0, bits, |i| {
+            let (row, col) = (i / stride, i % stride);
+            if row < shape.rows && col < shape.width {
+                values[row * shape.width + col] as u128
+            } else {
+                0
+            }
+        })
     }
 }

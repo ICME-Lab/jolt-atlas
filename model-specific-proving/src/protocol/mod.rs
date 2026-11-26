@@ -1,15 +1,27 @@
-//! Common proof relations, transcript handling, and polynomial openings.
+use std::ops::Range;
 
+pub(crate) mod field;
 pub(crate) mod lookup;
-pub(crate) mod pcs;
+pub(crate) mod opening;
+pub(crate) mod output;
 pub(crate) mod range;
-pub(crate) mod session;
+pub(crate) mod sumcheck;
 pub(crate) mod tensor;
-pub(crate) mod top_k;
 
-pub use pcs::Proof;
-pub use session::ProofField;
+pub use opening::Proof;
 pub use tensor::Shape;
-pub use top_k::{Candidate, TopKConfig};
 
 pub type Result<T> = std::result::Result<T, &'static str>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Candidate {
+    pub id: usize,
+    pub logit: i32,
+}
+
+pub struct TopKConfig {
+    pub positions: Range<usize>,
+    pub k: usize,
+    pub rows_per_block: usize,
+    pub vocab_per_block: usize,
+}

@@ -1,6 +1,4 @@
-//! Model-specific fixed-point proofs built with the Jolt crates.
-//!
-//! Proofs use World BitZ for polynomial commitments.
+//! Fixed-point transformer proofs over public model parameters.
 
 pub mod layers;
 pub mod models;

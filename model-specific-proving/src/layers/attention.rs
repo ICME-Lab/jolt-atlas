@@ -1,68 +1,43 @@
-//! Witnesses and reverse proofs for attention layers.
-
-use jolt_transcript::Transcript;
-
-use crate::protocol::{
-    lookup::Batches,
-    pcs::{Advice, Layout},
-    session::{Claim, ProofField, Session},
-    tensor::{dot, weights, Shape},
-    Result,
-};
+use jolt_field::{Ring, Zero};
 
 use super::{
-    linear::{Linear, Product, ProductKind, Projection, Rotary, Rotate, Rounded, ValueColumns},
-    nonlinear::{Norm, NormTrace, NormalizationParameters},
-    softmax::{ClipPlan, ClipSpec, Softmax, SoftmaxMask, SoftmaxTables, SoftmaxTrace},
+    linear::{narrow_dot, wide_dot, Linear, Rotation, Rounded, Rounding},
+    norm::{Norm, NormTrace},
+    softmax::{tiles, Soft, SoftTrace, Tile},
+    Attention, NormalizationParameters, Projection, Rotary, SoftmaxMask,
 };
-
-mod causal;
-use causal::{Causal, Remainders};
-
-pub struct Attention<'a> {
-    pub queries: Vec<Projection<'a>>,
-    pub groups: Vec<[Projection<'a>; 2]>,
-    pub output: Projection<'a>,
-    pub rotary: Option<Rotary<'a>>,
-    pub factor: i32,
-    pub mask: SoftmaxMask,
-    pub tables: SoftmaxTables<'a>,
-}
-
-pub(crate) struct AttentionPlan<'a> {
-    queries: Vec<Project<'a>>,
-    groups: Vec<(Project<'a>, Project<'a>)>,
-    heads: Vec<Head<'a>>,
-    output: Linear<'a>,
-    joined: Shape,
-    key: Shape,
-    value: Shape,
-    group_size: usize,
-    factor: i32,
-}
+use crate::protocol::{
+    field::F,
+    lookup::Lookups,
+    opening::{Layout, Packed, Request},
+    sumcheck::{Column, Session},
+    tensor::{bind_rows, equality, inner, weights, Claim, Shape},
+    Result,
+};
 
 struct Project<'a> {
     linear: Linear<'a>,
     norm: Option<Norm<'a>>,
-    rotary: Option<Rotate<'a>>,
+    rotation: Option<Rotation<'a>>,
 }
+
 struct ProjectTrace {
     linear: Rounded,
     norm: Option<NormTrace>,
-    rotary: Option<Rounded>,
+    rotation: Option<Rounded>,
 }
 
 impl ProjectTrace {
-    fn output(&self) -> &[i32] {
-        self.rotary
-            .as_ref()
-            .map_or_else(|| self.before_rope(), |t| &t.output)
-    }
-
-    fn before_rope(&self) -> &[i32] {
+    fn normalized(&self) -> &[i32] {
         self.norm
             .as_ref()
-            .map_or(&self.linear.output, |t| &t.output)
+            .map_or(self.linear.values.as_slice(), |norm| &norm.values)
+    }
+
+    fn values(&self) -> &[i32] {
+        self.rotation
+            .as_ref()
+            .map_or_else(|| self.normalized(), |rot| &rot.values)
     }
 }
 
@@ -71,112 +46,111 @@ impl<'a> Project<'a> {
         layout: &mut Layout,
         input: Shape,
         bits: usize,
-        w: Projection<'a>,
+        weights: Projection<'a>,
         norm: Option<NormalizationParameters<'a>>,
-        rotary: Option<Rotary<'a>>,
+        rope: Option<Rotary<'a>>,
     ) -> Result<Self> {
-        let linear = Linear::new(layout, input, w, bits, false)?;
+        let linear = Linear::new(layout, input, weights, bits)?;
+        let shape = linear.shape();
         let norm = norm
-            .map(|p| Norm::new(layout, linear.shape(), bits, p))
+            .map(|params| Norm::new(layout, shape, bits, params))
             .transpose()?;
-        let rotary = rotary
-            .map(|r| Rotate::new(layout, linear.shape(), bits, r))
+        let rotation = rope
+            .map(|table| Rotation::new(layout, shape, bits, table))
             .transpose()?;
         Ok(Self {
             linear,
             norm,
-            rotary,
+            rotation,
         })
     }
 
-    fn bind(&self, t: &mut impl Transcript) {
-        self.linear.bind(t);
-        t.append(&u64::from(self.norm.is_some()));
-        if let Some(norm) = &self.norm {
-            norm.bind(t);
-        }
-        t.append(&u64::from(self.rotary.is_some()));
-        if let Some(r) = &self.rotary {
-            r.bind(t);
-        }
-    }
-
-    fn execute(&self, x: &[i32], a: &mut Advice) -> Result<ProjectTrace> {
-        let linear = self.linear.execute(x, a)?;
+    fn execute(&self, input: &[i32], packed: &mut Packed<'_>) -> Result<ProjectTrace> {
+        let linear = self.linear.execute(input, packed)?;
         let norm = self
             .norm
             .as_ref()
-            .map(|n| n.execute(&linear.output, a))
+            .map(|norm| norm.execute(&linear.values, packed))
             .transpose()?;
-        let rotary = self
-            .rotary
+        let y = norm
             .as_ref()
-            .map(|r| r.execute(norm.as_ref().map_or(&linear.output, |n| &n.output), a))
+            .map_or(linear.values.as_slice(), |norm| &norm.values);
+        let rotation = self
+            .rotation
+            .as_ref()
+            .map(|rot| rot.execute(y, packed))
             .transpose()?;
         Ok(ProjectTrace {
             linear,
             norm,
-            rotary,
+            rotation,
         })
     }
 
-    fn reverse<'w, F: ProofField>(
+    fn reverse<'w>(
         &self,
-        mut q: Claim<F>,
-        trace: impl Fn() -> (&'w [i32], &'w ProjectTrace),
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<Claim<F>> {
-        if let Some(r) = &self.rotary {
-            q = r.reverse(
-                q,
-                || {
-                    let (_, w) = trace();
-                    (w.before_rope(), w.rotary.as_ref().expect("RoPE trace"))
-                },
-                io,
-            )?;
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        mut claim: Claim,
+        witness: impl Fn() -> (&'w ProjectTrace, &'w [i32]),
+    ) -> Result<Claim> {
+        if let Some(rot) = &self.rotation {
+            claim = rot.reverse(io, requests, claim, || {
+                let w = witness().0;
+                (w.rotation.as_ref().expect("rotary trace"), w.normalized())
+            })?;
         }
         if let Some(norm) = &self.norm {
-            q = norm.reverse(
-                &[q],
-                || {
-                    let (_, w) = trace();
-                    (
-                        w.linear.output.as_slice(),
-                        w.norm.as_ref().expect("QK norm trace"),
-                    )
-                },
-                io,
-            )?;
+            claim = norm.reverse(io, requests, &[claim], || {
+                let w = witness().0;
+                (
+                    w.norm.as_ref().expect("Q/K normalization trace"),
+                    &w.linear.values,
+                )
+            })?;
         }
-        self.linear
-            .reverse(q, || (trace().0, &trace().1.linear), io)
+        self.linear.reverse(io, requests, claim, || {
+            let (w, x) = witness();
+            (&w.linear, x)
+        })
     }
 }
 
 struct Head<'a> {
-    score: Option<Product>,
-    causal: Option<Causal>,
-    softmax: Softmax<'a>,
-    value: Product,
+    scores: Vec<Rounding>,
+    soft: Soft<'a>,
+    value: Rounding,
 }
-struct HeadTrace<F> {
-    score: Option<Rounded>,
-    remainders: Remainders,
-    softmax: SoftmaxTrace<F>,
+
+struct HeadTrace {
+    scores: Vec<Rounded>,
+    soft: SoftTrace,
     value: Rounded,
 }
-pub(crate) struct AttentionTrace<F> {
+
+pub(crate) struct AttentionPlan<'a> {
+    input: Shape,
+    query: Vec<Project<'a>>,
+    groups: Vec<(Project<'a>, Linear<'a>)>,
+    heads: Vec<Head<'a>>,
+    tiles: Vec<Tile>,
+    rotary_factor: i32,
+    causal: bool,
+    joined: Shape,
+    output: Linear<'a>,
+}
+
+pub(crate) struct AttentionTrace {
     queries: Vec<ProjectTrace>,
-    groups: Vec<(ProjectTrace, ProjectTrace)>,
-    heads: Vec<HeadTrace<F>>,
-    joined: Vec<i32>,
+    groups: Vec<(ProjectTrace, Rounded)>,
+    heads: Vec<HeadTrace>,
+    concatenated: Vec<i32>,
     output: Rounded,
 }
 
-impl<F> AttentionTrace<F> {
-    pub(crate) fn output(&self) -> &[i32] {
-        &self.output.output
+impl AttentionTrace {
+    pub(crate) fn values(&self) -> &[i32] {
+        &self.output.values
     }
 }
 
@@ -186,398 +160,413 @@ impl<'a> AttentionPlan<'a> {
         input: Shape,
         bits: usize,
         p: Attention<'a>,
-        input_bound: Option<u128>,
-        qk_norm: Option<[NormalizationParameters<'a>; 2]>,
+        head_norm: Option<[NormalizationParameters<'a>; 2]>,
     ) -> Result<Self> {
         if p.groups.is_empty()
             || p.queries.is_empty()
             || !p.queries.len().is_multiple_of(p.groups.len())
             || p.factor <= 0
-            || bits > 15
         {
-            return Err("invalid attention configuration");
+            return Err("invalid attention parameters");
         }
-        let score_bound = input_bound
-            .filter(|_| qk_norm.is_none() && matches!(p.mask, SoftmaxMask::Causal))
-            .and_then(|bound| {
-                let scale = 1u128 << bits;
-                let rotary = p.rotary.map_or(scale, |r| {
-                    r.cos
-                        .iter()
-                        .zip(r.sin)
-                        .map(|(&c, &s)| u128::from(c.unsigned_abs()) + u128::from(s.unsigned_abs()))
-                        .max()
-                        .unwrap_or(scale)
-                });
-                let project_bound = |proj: Projection<'_>| {
-                    (proj.output_bound(input.width, bound, scale) * rotary)
-                        .div_ceil(scale)
-                        .min(1 << 31)
-                };
-                let q = p
-                    .queries
-                    .iter()
-                    .copied()
-                    .map(project_bound)
-                    .max()
-                    .expect("queries");
-                let k = p
-                    .groups
-                    .iter()
-                    .map(|pair| project_bound(pair[0]))
-                    .max()
-                    .expect("keys");
-                (q * k * p.queries[0].bias.len() as u128)
-                    .checked_mul(p.factor as u128)
-                    .map(|product| product.div_ceil(scale * scale))
-            });
-        let group_size = p.queries.len() / p.groups.len();
-        let queries = p
+        let query = p
             .queries
             .into_iter()
-            .map(|q| Project::new(layout, input, bits, q, qk_norm.map(|n| n[0]), p.rotary))
+            .map(|w| Project::new(layout, input, bits, w, head_norm.map(|n| n[0]), p.rotary))
             .collect::<Result<Vec<_>>>()?;
         let groups = p
             .groups
             .into_iter()
             .map(|[k, v]| {
                 Ok((
-                    Project::new(layout, input, bits, k, qk_norm.map(|n| n[1]), p.rotary)?,
-                    Project::new(layout, input, bits, v, None, None)?,
+                    Project::new(layout, input, bits, k, head_norm.map(|n| n[1]), p.rotary)?,
+                    Linear::new(layout, input, v, bits)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        let key = queries[0].linear.shape();
-        let value = groups[0].1.linear.shape();
-        if key.width > 1 << 30
-            || queries.iter().any(|q| q.linear.shape() != key)
+        let value = groups[0].1.shape();
+        let key = groups[0].0.linear.shape();
+        if query.iter().any(|q| q.linear.shape() != key)
             || groups
                 .iter()
-                .any(|(k, v)| k.linear.shape() != key || v.linear.shape() != value)
-            || (queries.len() > 1 && !value.width.is_power_of_two())
+                .any(|(k, v)| k.linear.shape() != key || v.shape() != value)
+            || (query.len() > 1 && !value.width.is_power_of_two())
         {
-            return Err("inconsistent head dimensions");
+            return Err("inconsistent attention head dimensions");
         }
-        let square = Shape::new(input.rows, input.rows)?;
-        let heads = (0..queries.len())
-            .map(|_| {
-                let compact = matches!(p.mask, SoftmaxMask::Causal) && input.rows.is_power_of_two();
-                let softmax = Softmax::new(layout, square, p.mask, p.tables, score_bound, compact)?;
-                let causal = compact
-                    .then(|| Causal::new(layout, key, bits * 2, p.factor, &softmax))
-                    .transpose()?;
-                Ok(Head {
-                    // Without clipping, Softmax binds the integer score to its
-                    // bounded row shift and table index at every used position.
-                    score: causal
-                        .is_none()
-                        .then(|| {
-                            Product::with_output_range(
-                                layout,
-                                square,
-                                bits * 2,
-                                ProductKind::Matrix {
-                                    inner: key.width,
-                                    transpose: true,
-                                    factor: p.factor,
-                                },
-                                softmax.has_excess(),
-                            )
-                        })
-                        .transpose()?,
-                    causal,
-                    softmax,
-                    value: Product::new(
-                        layout,
-                        value,
-                        bits,
-                        ProductKind::Matrix {
-                            inner: input.rows,
-                            transpose: false,
-                            factor: 1,
-                        },
-                    )?,
-                })
-            })
-            .collect::<Result<_>>()?;
-        let width = queries
-            .len()
-            .checked_mul(value.width)
-            .ok_or("attention width overflow")?;
-        let joined = Shape::new(input.rows, width)?;
-        let output = Linear::new(layout, joined, p.output, bits, false)?;
+        let cancel = (p.factor.trailing_zeros() as usize).min(2 * bits);
+        let rotary_factor = p.factor >> cancel;
+        let tiles = tiles(input.rows, p.mask)?;
+        let causal = p.mask == SoftmaxMask::Causal;
+        let mut heads = Vec::new();
+        for _ in &query {
+            let scores = tiles
+                .iter()
+                .map(|tile| Rounding::new(layout, tile.shape, 2 * bits - cancel))
+                .collect();
+            let soft = Soft::new(layout, input.rows, p.mask, p.tables, &tiles)?;
+            heads.push(Head {
+                scores,
+                soft,
+                value: Rounding::new(layout, value, bits),
+            });
+        }
+        let joined = Shape::new(input.rows, heads.len() * value.width)?;
+        let output = Linear::new(layout, joined, p.output, bits)?;
         if output.shape() != input {
-            return Err("invalid attention output shape");
+            return Err("wrong attention output shape");
         }
         Ok(Self {
-            queries,
+            input,
+            query,
             groups,
             heads,
-            output,
+            tiles,
+            rotary_factor,
+            causal,
             joined,
-            key,
-            value,
-            group_size,
-            factor: p.factor,
+            output,
         })
     }
 
-    pub(crate) fn bind(&self, t: &mut impl Transcript) {
-        t.append(&[
-            self.queries.len() as u64,
-            self.groups.len() as u64,
-            self.factor as u64,
-        ]);
-        for q in &self.queries {
-            q.bind(t);
-        }
-        for (k, v) in &self.groups {
-            k.bind(t);
-            v.bind(t);
-        }
-        self.heads[0].softmax.bind(t);
-        self.output.bind(t);
-    }
-
-    pub(crate) fn execute<F: ProofField>(
-        &self,
-        x: &[i32],
-        a: &mut Advice,
-    ) -> Result<AttentionTrace<F>> {
+    pub(crate) fn execute(&self, input: &[i32], packed: &mut Packed<'_>) -> Result<AttentionTrace> {
         let queries = self
-            .queries
+            .query
             .iter()
-            .map(|p| p.execute(x, a))
+            .map(|q| q.execute(input, packed))
             .collect::<Result<Vec<_>>>()?;
         let groups = self
             .groups
             .iter()
-            .map(|(k, v)| Ok((k.execute(x, a)?, v.execute(x, a)?)))
+            .map(|(k, v)| Ok((k.execute(input, packed)?, v.execute(input, packed)?)))
             .collect::<Result<Vec<_>>>()?;
-        let mut heads = Vec::with_capacity(self.heads.len());
-        for (group, (k, v)) in groups.iter().enumerate() {
-            let columns = ValueColumns::new(v.output(), self.value);
-            let start = group * self.group_size;
-            for (offset, h) in self.heads[start..][..self.group_size].iter().enumerate() {
-                let i = start + offset;
-                let (score, remainders, softmax) = if let Some(causal) = &h.causal {
-                    let (scores, mut remainders) =
-                        causal.execute(queries[i].output(), k.output(), a)?;
-                    let softmax = h
-                        .softmax
-                        .execute_causal(|r| &scores[r * (r + 1) / 2..][..r + 1], a)?;
-                    if h.softmax.narrow_score(&softmax) {
-                        causal.narrow(a, &mut remainders);
+        let per_group = queries.len() / groups.len();
+        let key_width = self.query[0].linear.shape().width;
+        let value_width = self.groups[0].1.shape().width;
+        let n = self.input.rows;
+        let mut heads = Vec::with_capacity(queries.len());
+        for (group, (key, value)) in groups.iter().enumerate() {
+            let values = &value.values;
+            let columns: Vec<Vec<i32>> = (0..value_width)
+                .map(|c| {
+                    values
+                        .iter()
+                        .skip(c)
+                        .step_by(value_width)
+                        .copied()
+                        .collect()
+                })
+                .collect();
+            let max_v = values
+                .iter()
+                .map(|x| u128::from(x.unsigned_abs()))
+                .max()
+                .unwrap_or(0);
+            let key = key.values();
+            let max_k = key
+                .iter()
+                .map(|x| u128::from(x.unsigned_abs()))
+                .max()
+                .unwrap_or(0);
+            for i in group * per_group..(group + 1) * per_group {
+                let head = &self.heads[i];
+                let query = queries[i].values();
+                let narrow: Vec<_> = query
+                    .chunks_exact(key_width)
+                    .map(|q| {
+                        q.iter().map(|x| u128::from(x.unsigned_abs())).sum::<u128>() * max_k
+                            <= i64::MAX as u128
+                    })
+                    .collect();
+                let scores: Vec<_> = self
+                    .tiles
+                    .iter()
+                    .zip(&head.scores)
+                    .map(|(tile, proof)| {
+                        proof.execute(packed, |r, c| {
+                            let (row, col) = (tile.row + r, tile.col + c);
+                            if self.causal && col > row {
+                                return 0;
+                            }
+                            let q = &query[row * key_width..][..key_width];
+                            let k = &key[col * key_width..][..key_width];
+                            i128::from(self.rotary_factor)
+                                * if narrow[row] {
+                                    narrow_dot(q, k)
+                                } else {
+                                    wide_dot(q, k)
+                                }
+                        })
+                    })
+                    .collect::<Result<_>>()?;
+                let score = |r, c| self.score(i, &scores, r, c);
+                let soft = head.soft.execute(score, packed)?;
+                let probabilities: Vec<Vec<i32>> = (0..n)
+                    .map(|r| {
+                        (0..if self.causal { r + 1 } else { n })
+                            .map(|c| head.soft.probability(&soft, r, c))
+                            .collect()
+                    })
+                    .collect();
+                let narrow: Vec<_> = probabilities
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|x| u128::from(x.unsigned_abs()))
+                            .sum::<u128>()
+                            * max_v
+                            <= i64::MAX as u128
+                    })
+                    .collect();
+                let value = head.value.execute(packed, |r, c| {
+                    let row = &probabilities[r];
+                    let v = &columns[c][..row.len()];
+                    if narrow[r] {
+                        narrow_dot(row, v)
+                    } else {
+                        wide_dot(row, v)
                     }
-                    (None, remainders, softmax)
-                } else {
-                    let score = h.score.as_ref().expect("full QK").execute(
-                        queries[i].output(),
-                        k.output(),
-                        a,
-                    )?;
-                    let softmax = h.softmax.execute(&score.output, a)?;
-                    (Some(score), Vec::new(), softmax)
-                };
-                let value =
-                    h.value
-                        .execute_values(h.softmax.probabilities(&softmax), &columns, a)?;
+                })?;
                 heads.push(HeadTrace {
-                    score,
-                    remainders,
-                    softmax,
+                    scores,
+                    soft,
                     value,
                 });
             }
         }
-        let mut joined = Vec::with_capacity(self.joined.rows * self.joined.width);
-        for row in 0..self.joined.rows {
-            for h in &heads {
-                joined.extend_from_slice(
-                    &h.value.output[row * self.value.width..][..self.value.width],
-                );
+        let mut concatenated = Vec::with_capacity(self.joined.len());
+        for row in 0..n {
+            for head in &heads {
+                concatenated
+                    .extend_from_slice(&head.value.values[row * value_width..][..value_width]);
             }
         }
-        let output = self.output.execute(&joined, a)?;
+        let output = self.output.execute(&concatenated, packed)?;
         Ok(AttentionTrace {
             queries,
             groups,
             heads,
-            joined,
+            concatenated,
             output,
         })
     }
 
-    pub(crate) fn clip_specs<F>(&self, trace: &AttentionTrace<F>) -> Vec<ClipSpec> {
-        self.heads
-            .iter()
-            .zip(&trace.heads)
-            .map(|(h, t)| h.softmax.clip_spec(&t.softmax))
-            .collect()
+    fn score(&self, head: usize, scores: &[Rounded], row: usize, col: usize) -> i32 {
+        let (tile, index) = self.heads[head].soft.find(row, col);
+        let width = self.tiles[tile].shape.width;
+        let stride = width.next_power_of_two();
+        scores[tile].values[index / stride * width + index % stride]
     }
 
-    pub(crate) fn clip_plan(
+    fn qk<'w>(
         &self,
-        layout: &mut Layout,
-        specs: &[ClipSpec],
-    ) -> Result<Vec<Option<ClipPlan>>> {
-        if self.heads.len() != specs.len() {
-            return Err("invalid Softmax clip head count");
-        }
-        self.heads
-            .iter()
-            .zip(specs)
-            .map(|(h, s)| {
-                let plan = h.softmax.clip_plan(layout, s)?;
-                if s.narrow_score {
-                    h.causal
-                        .as_ref()
-                        .ok_or("invalid causal score plan")?
-                        .narrow_layout(layout);
+        io: &mut Session<'_, '_>,
+        claim: Claim,
+        witness: impl Fn() -> (&'w [i32], &'w [i32]),
+    ) -> Result<[Claim; 2]> {
+        let shape = self.query[0].linear.shape();
+        let width = shape.width.next_power_of_two();
+        let (qr, kr) = claim.point.split_at(shape.row_bits());
+        let n = shape.rows;
+        let row_weights = weights(qr);
+        let key_weights = weights(kr);
+        let factor = F::from_i32(self.rotary_factor);
+        let (end, [q, k]) = io.fold(
+            claim.value,
+            shape.bits(),
+            3,
+            || {
+                let (query, key) = witness();
+                let mut prefix = Vec::with_capacity((1 << shape.row_bits()) * width);
+                let mut current = vec![F::zero(); width];
+                let mut accumulate = |row: &[i32], weight| {
+                    for (sum, &v) in current.iter_mut().zip(row) {
+                        *sum += F::from_i32(v) * weight;
+                    }
+                    current.clone()
+                };
+                if self.causal {
+                    for (key, &w) in key.chunks_exact(shape.width).zip(&key_weights) {
+                        prefix.extend(accumulate(key, w));
+                    }
+                } else {
+                    let bound = bind_rows(shape.width, key, kr);
+                    for _ in 0..n {
+                        prefix.extend_from_slice(&bound);
+                    }
                 }
-                Ok(plan)
-            })
-            .collect()
-    }
-
-    pub(crate) fn record_clip<F>(
-        &self,
-        plans: &[Option<ClipPlan>],
-        trace: &AttentionTrace<F>,
-        advice: &mut Advice,
-    ) -> Result<()> {
-        for ((head, plan), w) in self.heads.iter().zip(plans).zip(&trace.heads) {
-            if let Some(plan) = plan {
-                head.softmax.record_clip(plan, &w.softmax, advice)?;
+                prefix.resize(1 << shape.bits(), F::zero());
+                vec![
+                    Column::source(1 << shape.bits(), move |i| shape.at(query, i)),
+                    Column::Dense(prefix),
+                    Column::source(1 << shape.bits(), |i| row_weights[i / width]),
+                ]
+            },
+            [0, 1],
+            |c| factor * c[0] * c[1] * c[2],
+        )?;
+        let (rp, cols) = end.challenges.split_at(shape.row_bits());
+        io.expect(&end, || factor * q * k * equality(qr, rp))?;
+        let mut suffix = weights(rp);
+        suffix[n..].fill(F::zero());
+        if self.causal {
+            for i in (0..n - 1).rev() {
+                let next = suffix[i + 1];
+                suffix[i] += next;
             }
+        } else {
+            let sum = suffix.iter().copied().sum();
+            suffix[..n].fill(sum);
         }
-        Ok(())
+        for (w, coefficient) in suffix.iter_mut().zip(key_weights) {
+            *w *= coefficient;
+        }
+        let k = io.dot(k, &suffix, || {
+            let cols = weights(cols);
+            let mut values: Vec<_> = witness()
+                .1
+                .chunks_exact(shape.width)
+                .map(|row| inner(cols.iter().copied(), row.iter().copied().map(F::from_i32)))
+                .collect();
+            values.resize(suffix.len(), F::zero());
+            values
+        })?;
+        let key = Claim::new([k.point.as_slice(), cols].concat(), k.value);
+        Ok([Claim::new(end.challenges, q), key])
     }
 
-    pub(crate) fn reverse<'s, 'w, F: ProofField>(
-        &'s self,
-        q: Claim<F>,
-        clips: &[Option<ClipPlan>],
-        trace: impl Fn() -> (&'w [i32], &'w AttentionTrace<F>) + Sync,
-        io: &mut Session<'_, '_, F>,
-
-        lookups: &mut Batches<'s, F>,
-    ) -> Result<Vec<Claim<F>>> {
-        let t = || trace().1;
-        let claim = self
-            .output
-            .reverse(q, || (&t().joined[..], &t().output), io)?;
-        let (row, col) = claim.point.split_at(self.joined.row_vars());
-        let (head, channel) =
-            col.split_at(col.len() - self.value.width.next_power_of_two().ilog2() as usize);
-        let point = [row, channel].concat();
-        let mut values = Vec::with_capacity(self.heads.len());
-        for i in 0..self.heads.len() {
-            let [v] = io.values(|| [self.value.eval(&t().heads[i].value.output, &point)])?;
-            values.push(v);
+    pub(crate) fn reverse<'w>(
+        &self,
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        reads: &mut Lookups<'a>,
+        claim: Claim,
+        witness: impl Fn() -> (&'w AttentionTrace, &'w [i32]) + Sync,
+    ) -> Result<Claim> {
+        let joined = self.output.reverse(io, requests, claim, || {
+            let w = witness().0;
+            (&w.output, &w.concatenated)
+        })?;
+        let shape = self.groups[0].1.shape();
+        let (rows, c) = joined.point.split_at(shape.row_bits());
+        let (head_bits, channels) = c.split_at(c.len() - (shape.bits() - shape.row_bits()));
+        let point = [rows, channels].concat();
+        let per_group = self.heads.len() / self.groups.len();
+        let mut input = Vec::new();
+        let mut values = Vec::new();
+        for (g, (key, value)) in self.groups.iter().enumerate() {
+            let mut key_claims = Vec::new();
+            let mut value_claims = Vec::new();
+            for i in g * per_group..(g + 1) * per_group {
+                let head = &self.heads[i];
+                let trace = || &witness().0.heads[i];
+                let [v] = io.values(|| [shape.evaluate(&trace().value.values, &point)])?;
+                values.push(v);
+                let value_output = Claim::new(point.clone(), v);
+                let raw = head
+                    .value
+                    .recover(io, requests, &value_output, || &trace().value.remainder)?;
+                let size = shape.rows.next_power_of_two();
+                let (end, [probability, value_input]) = io.fold(
+                    raw,
+                    shape.row_bits(),
+                    2,
+                    || {
+                        let weights_r = weights(rows);
+                        let weights_c = weights(channels);
+                        let mut a = vec![F::zero(); size];
+                        let mut b = vec![F::zero(); size];
+                        for (r, &w) in weights_r.iter().take(shape.rows).enumerate() {
+                            for (c, p) in a
+                                .iter_mut()
+                                .take(if self.causal { r + 1 } else { shape.rows })
+                                .enumerate()
+                            {
+                                *p += w * F::from_i32(head.soft.probability(&trace().soft, r, c));
+                            }
+                            let v =
+                                &witness().0.groups[g].1.values[r * shape.width..][..shape.width];
+                            b[r] = inner(
+                                weights_c.iter().copied(),
+                                v.iter().copied().map(F::from_i32),
+                            );
+                        }
+                        vec![Column::Dense(a), Column::Dense(b)]
+                    },
+                    [0, 1],
+                    |v| v[0] * v[1],
+                )?;
+                io.expect(&end, || probability * value_input)?;
+                let score = head.soft.reverse(
+                    io,
+                    requests,
+                    reads,
+                    Claim::new([rows, &end.challenges].concat(), probability),
+                    || &trace().soft,
+                    |r, c| self.score(i, &trace().scores, r, c),
+                )?;
+                value_claims.push(Claim::new(
+                    [end.challenges.as_slice(), channels].concat(),
+                    value_input,
+                ));
+                let (row, col) = score.point.split_at(shape.row_bits());
+                let mut raw = F::zero();
+                let mut whole_score = F::zero();
+                for (j, tile) in self.tiles.iter().enumerate() {
+                    let (weight, point) = tile.restrict(row, col);
+                    let [value] =
+                        io.values(|| [tile.shape.evaluate(&trace().scores[j].values, &point)])?;
+                    whole_score += weight * value;
+                    let claim = Claim::new(point, value);
+                    raw += weight
+                        * head.scores[j]
+                            .recover(io, requests, &claim, || &trace().scores[j].remainder)?;
+                }
+                if !io.proving() && whole_score != score.value {
+                    return Err("inconsistent QK tiles");
+                }
+                let [q, k] = self.qk(io, Claim::new(score.point, raw), || {
+                    let w = witness().0;
+                    (w.queries[i].values(), w.groups[g].0.values())
+                })?;
+                input.push(self.query[i].reverse(io, requests, q, || {
+                    let (w, x) = witness();
+                    (&w.queries[i], x)
+                })?);
+                key_claims.push(k);
+            }
+            let combine = |io: &mut Session<'_, '_>,
+                           shape: Shape,
+                           claims: &[Claim],
+                           x: &dyn Fn() -> &'w [i32]| {
+                io.combine(claims, || {
+                    let x = x();
+                    (0..1 << shape.bits()).map(|i| shape.at(x, i)).collect()
+                })
+            };
+            let k = combine(io, key.linear.shape(), &key_claims, &|| {
+                witness().0.groups[g].0.values()
+            })?;
+            let v = combine(io, shape, &value_claims, &|| {
+                &witness().0.groups[g].1.values
+            })?;
+            input.push(key.reverse(io, requests, k, || {
+                let (w, x) = witness();
+                (&w.groups[g].0, x)
+            })?);
+            input.push(value.reverse(io, requests, v, || {
+                let (w, x) = witness();
+                (&w.groups[g].1, x)
+            })?);
         }
-        if !io.proving() && claim.value != dot(weights(head), values.iter().copied()) {
+        if !io.proving() && joined.value != inner(weights(head_bits), values) {
             return Err("invalid head concatenation");
         }
-        let mut keys: Vec<Vec<_>> = self.groups.iter().map(|_| Vec::new()).collect();
-        let mut vals = Vec::with_capacity(self.groups.len());
-        let mut inputs = Vec::new();
-        let mut probabilities = Vec::with_capacity(self.heads.len());
-        for (group, heads) in self.heads.chunks_exact(self.group_size).enumerate() {
-            let start = group * self.group_size;
-            let products: Vec<_> = heads.iter().map(|h| &h.value).collect();
-            let (claims, value) = Product::reverse_values(
-                &products,
-                &point,
-                &values[start..][..self.group_size],
-                |i| &t().heads[start + i].value,
-                || t().groups[group].1.output(),
-                |i, point| {
-                    heads[i]
-                        .softmax
-                        .bind_probabilities(&t().heads[start + i].softmax, point)
-                },
-                io,
-            )?;
-            probabilities.extend(claims);
-            vals.push(value);
-        }
-        let softmax = self.heads[0].softmax.reverse(
-            &probabilities,
-            clips,
-            |i| {
-                let head = &t().heads[i];
-                (
-                    &head.softmax,
-                    head.score.as_ref().map(|score| score.output.as_slice()),
-                )
-            },
-            io,
-        )?;
-        let mut reads = Vec::with_capacity(self.heads.len());
-        let mut scores = softmax.into_iter();
-        for group in 0..self.groups.len() {
-            let start = group * self.group_size;
-            let heads = &self.heads[start..][..self.group_size];
-            if let Some(causal) = &heads[0].causal {
-                let mut raw = Vec::with_capacity(heads.len());
-                for (index, h) in heads.iter().enumerate() {
-                    let i = start + index;
-                    let (score, read) = scores.next().expect("head score claim");
-                    raw.push(
-                        h.causal.as_ref().expect("causal head").reverse(
-                            score,
-                            clips
-                                .get(i)
-                                .and_then(Option::as_ref)
-                                .is_some_and(ClipPlan::narrows_score),
-                            || &t().heads[i].remainders,
-                            io,
-                        )?,
-                    );
-                    reads.push((&h.softmax, read));
-                }
-                let (queries, key) = causal.product(
-                    &raw,
-                    |i| t().queries[start + i].output(),
-                    || t().groups[group].0.output(),
-                    io,
-                )?;
-                keys[group].push(key);
-                for (index, q) in queries.into_iter().enumerate() {
-                    let i = start + index;
-                    inputs.push(self.queries[i].reverse(q, || (trace().0, &t().queries[i]), io)?);
-                }
-            } else {
-                for (index, h) in heads.iter().enumerate() {
-                    let i = start + index;
-                    let (score, read) = scores.next().expect("head score claim");
-                    let [q, k] = h.score.as_ref().expect("full QK").reverse(
-                        score,
-                        || {
-                            (
-                                t().queries[i].output(),
-                                t().groups[group].0.output(),
-                                t().heads[i].score.as_ref().expect("full QK trace"),
-                            )
-                        },
-                        io,
-                    )?;
-                    inputs.push(self.queries[i].reverse(q, || (trace().0, &t().queries[i]), io)?);
-                    keys[group].push(k);
-                    reads.push((&h.softmax, read));
-                }
-            }
-        }
-        for (i, ((k, v), vc)) in self.groups.iter().zip(vals).enumerate() {
-            let g = || &t().groups[i];
-            let kc = io.merge(&keys[i], || {
-                self.key.padded(g().0.output(), F::zero(), F::from_i32)
-            })?;
-            inputs.push(k.reverse(kc, || (trace().0, &g().0), io)?);
-            inputs.push(v.reverse(vc, || (trace().0, &g().1), io)?);
-        }
-        Softmax::defer(reads, clips, |i| &t().heads[i].softmax, io, lookups)?;
-        Ok(inputs)
+        io.combine(&input, || {
+            let x = witness().1;
+            (0..1 << self.input.bits())
+                .map(|i| self.input.at(x, i))
+                .collect()
+        })
     }
 }

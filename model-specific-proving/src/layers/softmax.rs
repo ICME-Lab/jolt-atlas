@@ -1,898 +1,412 @@
-use jolt_transcript::Transcript;
-use rayon::prelude::*;
 use std::sync::Arc;
 
+use jolt_field::{One, Ring, Zero};
+
+use super::{SoftmaxMask, SoftmaxTables};
 use crate::protocol::{
-    lookup::{Addresses, Batches, Lookup, Read, Table},
-    pcs::{bind_i32, Advice, Layout},
-    range::{Range, Ranges},
-    session::{instance, Claim, Column, ProofField, Session},
-    tensor::{dot, eq, weights, Shape},
+    field::F,
+    lookup::{Addresses, Lookup, Lookups, Table},
+    opening::{Layout, Packed, Request},
+    range::{Ranges, Width},
+    sumcheck::{Column, Session},
+    tensor::{equality, inner, weights, Claim, Shape},
     Result,
 };
 
 #[derive(Clone, Copy)]
-pub struct SoftmaxTables<'a> {
-    pub probabilities: &'a [i32],
-    pub sums: &'a [i32],
-    pub limit: i32,
-}
-
-#[derive(Clone, Copy)]
-pub enum SoftmaxMask {
-    Full,
-    Causal,
-}
-
-pub(crate) struct Softmax<'a> {
-    shape: Shape,
-    mask: SoftmaxMask,
-    tables: SoftmaxTables<'a>,
-    previous: Table<'a>,
-    combined: Table<'a>,
-    radix: u128,
-    rows: Ranges,
-    excess: Option<Ranges>,
-    compact: bool,
-    may_clip: bool,
-    tiles: Vec<Tile>,
-    levels: Vec<usize>,
-}
-
-const TILE: usize = 64;
-
-#[derive(Clone, Default)]
-pub(crate) struct ClipSpec {
-    /// None encodes every causal block, Some encodes a sorted list of occupied blocks.
-    blocks: Option<Vec<usize>>,
-    bits: usize,
-    width: usize,
-    pub(super) narrow_score: bool,
-}
-
-impl ClipSpec {
-    pub(crate) fn bind(&self, t: &mut impl Transcript) {
-        t.append(&(self.bits as u64));
-        t.append(&(self.width as u64));
-        t.append(&u64::from(self.narrow_score));
-        t.append(&u64::from(self.blocks.is_some()));
-        if let Some(blocks) = &self.blocks {
-            t.append(&(blocks.len() as u64));
-            for &block in blocks {
-                t.append(&(block as u64));
-            }
-        }
-    }
-}
-
-pub(crate) enum ClipPlan {
-    Overflow(OverflowPlan),
-    Narrow(Ranges),
-}
-
-impl ClipPlan {
-    pub(super) fn narrows_score(&self) -> bool {
-        matches!(self, Self::Narrow(_))
-    }
-}
-
-pub(crate) struct OverflowPlan {
-    ranges: Ranges,
-    blocks: Vec<usize>,
-    shape: Shape,
-    per_row: usize,
-}
-
-impl OverflowPlan {
-    fn values(
-        &self,
-        overflow: &std::collections::BTreeMap<(usize, usize), Box<[u32; TILE]>>,
-    ) -> Vec<u32> {
-        let mut values = Vec::with_capacity(self.blocks.len() * self.shape.width);
-        for &block in &self.blocks {
-            let row = block / self.per_row;
-            let start = block % self.per_row * self.shape.width;
-            for c in (0..self.shape.width).step_by(TILE) {
-                let source = overflow.get(&(row, (start + c) / TILE));
-                if let Some(source) = source {
-                    values.extend_from_slice(&source[..self.shape.width.min(TILE)]);
-                } else {
-                    values.resize(values.len() + self.shape.width.min(TILE), 0);
-                }
-            }
-        }
-        values
-    }
-
-    fn check<F: ProofField>(
-        &self,
-        q: &[F],
-        value: F,
-        witness: impl FnOnce() -> Vec<u32>,
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<()> {
-        let (row, col) = q.split_at(q.len() / 2);
-        let row = weights::<F>(row);
-        let col = weights::<F>(col);
-        let mut coefficients = Vec::with_capacity(1 << self.shape.vars());
-        for &block in &self.blocks {
-            let weight = row[block / self.per_row];
-            let start = (block % self.per_row) * self.shape.width;
-            coefficients.extend(col[start..][..self.shape.width].iter().map(|&c| weight * c));
-        }
-        coefficients.resize(1 << self.shape.vars(), F::zero());
-        let evaluation = io.public_dot(value, &coefficients, || {
-            self.shape
-                .padded(&witness(), F::zero(), |x| F::from_u64(u64::from(x)))
-        })?;
-        self.ranges
-            .check(&[(&evaluation.point, [evaluation.value])], io)
-    }
-}
-
-struct Tile {
-    row: usize,
-    col: usize,
-    shape: Shape,
-    lookup: Lookup,
+pub(crate) struct Tile {
+    pub row: usize,
+    pub col: usize,
+    pub shape: Shape,
 }
 
 impl Tile {
-    fn new(
-        layout: &mut Layout,
-        row: usize,
-        col: usize,
-        shape: Shape,
-        table: usize,
-    ) -> Result<Self> {
-        Ok(Self {
-            row,
-            col,
-            shape,
-            lookup: Lookup::new(layout, shape.vars(), table)?,
-        })
-    }
-
-    fn read<F: ProofField>(&self, row_point: &[F], col_point: &[F]) -> (F, Vec<F>) {
-        let split = |point: &[F], start: usize, vars: usize| {
-            let fixed = point.len() - vars;
-            point[..fixed]
+    pub(crate) fn restrict(self, row: &[F], col: &[F]) -> (F, Vec<F>) {
+        fn axis(point: &[F], start: usize, width: usize) -> (F, &[F]) {
+            let (fixed, free) = point.split_at(point.len() - width);
+            let weight = fixed
                 .iter()
                 .enumerate()
-                .fold(F::one(), |weight, (i, &r)| {
-                    weight
-                        * if start >> (point.len() - i - 1) & 1 == 0 {
-                            F::one() - r
-                        } else {
-                            r
-                        }
+                .map(|(i, &q)| {
+                    if start >> (point.len() - i - 1) & 1 != 0 {
+                        q
+                    } else {
+                        F::one() - q
+                    }
                 })
-        };
-        let rows = self.shape.row_vars();
-        let cols = self.shape.vars() - rows;
-        let scale = split(row_point, self.row, rows) * split(col_point, self.col, cols);
-        (
-            scale,
-            [
-                &row_point[row_point.len() - rows..],
-                &col_point[col_point.len() - cols..],
-            ]
-            .concat(),
-        )
+                .product();
+            (weight, free)
+        }
+        let (wr, row) = axis(row, self.row, self.shape.row_bits());
+        let (wc, col) = axis(col, self.col, self.shape.bits() - self.shape.row_bits());
+        (wr * wc, [row, col].concat())
     }
 }
 
-pub(crate) struct SoftmaxTrace<F> {
-    shifts: Vec<i64>,
-    rows: [Vec<F>; 3],
-    indices: Vec<Arc<Addresses>>,
-    overflow: std::collections::BTreeMap<(usize, usize), Box<[u32; 64]>>,
+pub(crate) fn tiles(n: usize, mask: SoftmaxMask) -> Result<Vec<Tile>> {
+    let make = |row, col, r, c| {
+        Ok(Tile {
+            row,
+            col,
+            shape: Shape::new(r, c)?,
+        })
+    };
+    if mask == SoftmaxMask::Full || n <= 64 || !n.is_power_of_two() {
+        return Ok(vec![make(0, 0, n, n)?]);
+    }
+    let mut tiles = Vec::new();
+    for row in (0..n).step_by(64) {
+        tiles.push(make(row, row, 64, 64)?);
+    }
+    let mut width = 64;
+    while width < n {
+        for row in (width..n).step_by(2 * width) {
+            tiles.push(make(row, row - width, width, width)?);
+        }
+        width *= 2;
+    }
+    Ok(tiles)
 }
 
-pub(crate) struct SoftmaxRead<F> {
-    cell: Vec<F>,
-    address: F,
-    values: [F; 2],
-    row_ranges: [F; 3],
-    excess: F,
+struct Block {
+    tile: Tile,
+    read: Lookup,
+    overflow: Ranges<1>,
 }
 
-impl<'a> Softmax<'a> {
+pub(crate) struct Soft<'a> {
+    shape: Shape,
+    blocks: Vec<Block>,
+    mask: SoftmaxMask,
+    tables: SoftmaxTables<'a>,
+    rows: Ranges<3>,
+    radix: u128,
+}
+
+pub(crate) struct SoftTrace {
+    addresses: Vec<Arc<Addresses>>,
+    overflows: Vec<Vec<i64>>,
+    stats: Vec<[i64; 3]>,
+}
+
+impl<'a> Soft<'a> {
     pub(crate) fn new(
         layout: &mut Layout,
-        shape: Shape,
+        n: usize,
         mask: SoftmaxMask,
         tables: SoftmaxTables<'a>,
-        score_bound: Option<u128>,
-        compact: bool,
+        tiles: &[Tile],
     ) -> Result<Self> {
-        let len = tables.sums.len();
-        if !(2..=1 << 31).contains(&len)
-            || len != tables.probabilities.len()
-            || !(1..i32::MAX).contains(&tables.limit)
-            || tables.sums[len - 2] != 0
-            || tables.probabilities[len - 1] != 0
-            || shape.width > 1 << 30
-            || tables
-                .sums
-                .iter()
-                .chain(tables.probabilities)
-                .any(|&x| x < 0)
+        if tables.limit == i32::MAX
+            || tables.sums.len() != tables.probabilities.len()
+            || tables.sums.len() < 2
+            || !tables.sums.len().is_power_of_two()
+            || tables.limit <= 0
+            || tables.sums.iter().any(|&x| x < 0)
             || tables.sums.windows(2).any(|w| w[0] < w[1])
-            || (matches!(mask, SoftmaxMask::Causal) && shape.rows != shape.width)
+            || i128::from(*tables.sums.last().unwrap()) * n as i128 > i128::from(tables.limit)
         {
-            return Err("invalid Softmax parameters");
+            return Err("invalid Softmax table");
         }
-        let previous = Table::Prepend(tables.limit + 1, &tables.sums[..len - 1]);
-        let active = shape.width;
-        let bound =
-            active as u64 * (tables.sums[0].max(tables.limit + 1) as u64) - tables.limit as u64 - 1;
-        let bits = |bound: u64| Range::unsigned((64 - bound.leading_zeros()).max(1) as usize);
+        let maximum = n as u128 * (tables.sums[0].max(tables.limit.saturating_add(1)) as u128);
+        let slack = maximum.next_power_of_two().ilog2() as usize + 1;
+        if 2 * slack + 3 >= 121 {
+            return Err("Softmax range exceeds the proof field");
+        }
+        let radix = (maximum + (1u128 << slack) + tables.limit as u128).next_power_of_two();
         let rows = Ranges::new(
             layout,
-            Shape::new(shape.rows, 1)?,
-            [Range::signed(34), bits(tables.limit as u64), bits(bound)],
-        )?;
-        // Bounds on the two integer row residuals, including the full ranges of the slacks.
-        let limit = tables.limit as u128;
-        let max_sum = shape.width as u128 * tables.sums[0] as u128;
-        let max_gap = limit.next_power_of_two() * 2 - 1;
-        let max_prev_sum = shape.width as u128 * tables.sums[0].max(tables.limit + 1) as u128;
-        let max_prev_gap = u128::from(bound).next_power_of_two() * 2 - 1;
-        let radix = max_sum + limit + max_gap + 1;
-        let packed_bound = (radix - 1) + radix * (max_prev_sum + limit + 1 + max_prev_gap);
-        layout.integer_bits = layout
-            .integer_bits
-            .max(u128::BITS - packed_bound.leading_zeros() + 1);
-        let combined = Table::SoftmaxSums {
-            sums: tables.sums,
-            first: tables.limit + 1,
-            radix,
-        };
-        // At row_max + step, every entry is at least step below the shift,
-        // and even the longest row has sum at most the public limit.
-        let step = tables
-            .sums
-            .partition_point(|&v| (v as u64) * active as u64 > tables.limit as u64);
-        let no_clip = score_bound.is_some_and(|bound| {
-            bound <= i32::MAX as u128 && 2 * bound + (step as u128) < len as u128
-        });
-        let excess = (!no_clip && !compact)
-            .then(|| Ranges::new(layout, shape, [Range::unsigned(34)]))
-            .transpose()?;
-        let mut tiles = Vec::new();
-        let mut levels = Vec::new();
-        if matches!(mask, SoftmaxMask::Causal) && shape.rows == shape.width && shape.width > TILE {
-            for start in (0..shape.rows).step_by(TILE) {
-                tiles.push(Tile::new(
-                    layout,
-                    start,
-                    start,
-                    Shape::new(TILE, TILE)?,
-                    len,
-                )?);
-            }
-            let mut side = TILE;
-            while side < shape.width {
-                levels.push(tiles.len());
-                for row in (side..shape.rows).step_by(2 * side) {
-                    tiles.push(Tile::new(
-                        layout,
-                        row,
-                        row - side,
-                        Shape::new(side, side)?,
-                        len,
-                    )?);
-                }
-                side *= 2;
-            }
-        } else {
-            tiles.push(Tile::new(layout, 0, 0, shape, len)?);
+            Shape::new(n, 1)?,
+            [
+                Width::signed(34),
+                Width::unsigned(slack),
+                Width::unsigned(slack),
+            ],
+        );
+        let mut blocks = Vec::new();
+        for &tile in tiles {
+            let read = Lookup::new(layout, tile.shape.bits(), tables.sums.len())?;
+            let overflow = Ranges::adaptive(layout, tile.shape, 34);
+            blocks.push(Block {
+                tile,
+                read,
+                overflow,
+            });
         }
         Ok(Self {
-            shape,
+            shape: Shape::new(n, n)?,
+            blocks,
             mask,
             tables,
-            previous,
-            combined,
-            radix,
             rows,
-            excess,
-            compact,
-            may_clip: !no_clip,
-            tiles,
-            levels,
+            radix,
         })
     }
 
-    pub(super) fn has_excess(&self) -> bool {
-        self.may_clip
-    }
-
-    pub(super) fn clip_spec<F>(&self, trace: &SoftmaxTrace<F>) -> ClipSpec {
-        let max = trace
-            .overflow
-            .values()
-            .flat_map(|v| v.iter())
-            .copied()
-            .max()
-            .unwrap_or(0);
-        if max == 0 {
-            return ClipSpec {
-                narrow_score: self.narrow_score(trace),
-                ..Default::default()
-            };
-        }
-        let (width, blocks) = [TILE, TILE * 2, TILE * 4]
-            .map(|width| width.min(self.shape.width))
-            .into_iter()
-            .map(|width| {
-                let per_row = self.shape.width / width;
-                let mut blocks: Vec<_> = trace
-                    .overflow
-                    .keys()
-                    .map(|&(row, col)| row * per_row + col * TILE / width)
-                    .collect();
-                blocks.dedup();
-                (width, blocks)
-            })
-            .min_by_key(|(width, blocks)| (blocks.len().next_power_of_two() * width, blocks.len()))
-            .expect("nonempty clip layout candidates");
-        let all: usize = (0..self.shape.rows).map(|row| row / width + 1).sum();
-        ClipSpec {
-            bits: ((u32::BITS - max.leading_zeros()) as usize).next_multiple_of(4),
-            width,
-            blocks: (blocks.len().next_power_of_two() < all.next_power_of_two()).then_some(blocks),
-            narrow_score: false,
+    fn active(&self, row: usize) -> usize {
+        if self.mask == SoftmaxMask::Causal {
+            row + 1
+        } else {
+            self.shape.width
         }
     }
 
-    pub(super) fn clip_plan(
+    fn tables(&self) -> [Table<'a>; 2] {
+        [
+            Table::Direct(self.tables.probabilities),
+            Table::Softmax {
+                sums: self.tables.sums,
+                limit: self.tables.limit,
+                radix: self.radix,
+            },
+        ]
+    }
+
+    pub(crate) fn find(&self, row: usize, col: usize) -> (usize, usize) {
+        if self.blocks.len() == 1 {
+            return (0, row * self.shape.width.next_power_of_two() + col);
+        }
+        let diff = (row ^ col) >> 6;
+        let id = if diff == 0 {
+            row >> 6
+        } else {
+            let level = diff.ilog2() as usize;
+            let diagonal = self.shape.rows >> 6;
+            2 * diagonal - (diagonal >> level) + (row >> (level + 7))
+        };
+        let tile = self.blocks[id].tile;
+        (id, (row - tile.row) * tile.shape.width + col - tile.col)
+    }
+
+    pub(crate) fn execute(
         &self,
-        layout: &mut Layout,
-        spec: &ClipSpec,
-    ) -> Result<Option<ClipPlan>> {
-        if spec.bits == 0 {
-            if spec.blocks.is_some() || spec.width != 0 {
-                return Err("invalid empty Softmax clip plan");
-            }
-            if !spec.narrow_score {
-                return Ok(None);
-            }
-            if !self.can_narrow_score() {
-                return Err("invalid Softmax score range plan");
-            }
-            return Ok(Some(ClipPlan::Narrow(Ranges::new(
-                layout,
-                Shape::new(self.shape.rows, 1)?,
-                [Range::signed(31)],
-            )?)));
-        }
-        if spec.narrow_score {
-            return Err("invalid clipped Softmax score range");
-        }
-        if !self.compact || !self.may_clip || spec.bits > 32 || !spec.bits.is_multiple_of(4) {
-            return Err("invalid Softmax clip width");
-        }
-        let width = spec.width;
-        if ![TILE, TILE * 2, TILE * 4]
+        score: impl Fn(usize, usize) -> i32,
+        packed: &mut Packed<'_>,
+    ) -> Result<SoftTrace> {
+        let mut addresses: Vec<_> = self
+            .blocks
             .iter()
-            .any(|&w| w.min(self.shape.width) == width)
-        {
-            return Err("invalid Softmax clip block width");
-        }
-        let per_row = self.shape.width / width;
-        let blocks = if let Some(blocks) = &spec.blocks {
-            if blocks.is_empty()
-                || blocks.windows(2).any(|pair| pair[0] >= pair[1])
-                || blocks.iter().any(|&id| {
-                    id / per_row >= self.shape.rows || (id % per_row) * width > id / per_row
-                })
-            {
-                return Err("invalid Softmax clip blocks");
-            }
-            blocks.clone()
-        } else {
-            (0..self.shape.rows)
-                .flat_map(|row| (0..=row / width).map(move |col| row * per_row + col))
-                .collect()
-        };
-        let shape = Shape::new(blocks.len(), width)?;
-        Ok(Some(ClipPlan::Overflow(OverflowPlan {
-            ranges: Ranges::new(layout, shape, [Range::unsigned(spec.bits)])?,
-            blocks,
-            shape,
-            per_row,
-        })))
-    }
-
-    pub(super) fn record_clip<F>(
-        &self,
-        plan: &ClipPlan,
-        trace: &SoftmaxTrace<F>,
-        advice: &mut Advice,
-    ) -> Result<()> {
-        match plan {
-            ClipPlan::Overflow(plan) => {
-                plan.ranges.record(advice, &[&plan.values(&trace.overflow)])
-            }
-            ClipPlan::Narrow(range) => range.record(advice, &[&trace.shifts]),
-        }
-    }
-
-    fn can_narrow_score(&self) -> bool {
-        self.compact && self.may_clip && self.tables.sums.len() - 1 <= 1 << 30
-    }
-
-    pub(super) fn narrow_score<F>(&self, trace: &SoftmaxTrace<F>) -> bool {
-        self.can_narrow_score()
-            && trace.overflow.is_empty()
-            && trace
-                .shifts
-                .iter()
-                .all(|shift| (-(1i64 << 30)..(1i64 << 30)).contains(shift))
-    }
-
-    fn active(&self, row: usize) -> std::ops::Range<usize> {
-        match self.mask {
-            SoftmaxMask::Full => 0..self.shape.width,
-            SoftmaxMask::Causal => 0..row + 1,
-        }
-    }
-
-    fn masks_at<F: ProofField>(&self, point: &[F]) -> (F, F) {
-        let (row, col) = point.split_at(self.shape.row_vars());
-        let columns = weights(col);
-        let mut prefix = vec![F::zero()];
-        let mut total = F::zero();
-        for &weight in &columns {
-            total += weight;
-            prefix.push(total);
-        }
-        let mut mask = F::zero();
-        let mut first = F::zero();
-        for (row, weight) in weights(row).into_iter().take(self.shape.rows).enumerate() {
-            let active = self.active(row);
-            mask += weight * (prefix[active.end] - prefix[active.start]);
-            first += weight * columns[active.start];
-        }
-        (mask, first)
-    }
-
-    fn location(&self, row: usize, col: usize) -> Option<(usize, usize)> {
-        if row >= self.shape.rows || col >= self.shape.width {
-            return None;
-        }
-        if self.levels.is_empty() {
-            return Some((0, row * self.shape.width.next_power_of_two() + col));
-        }
-        let blocks = (row ^ col) / TILE;
-        let tile = if blocks == 0 {
-            row / TILE
-        } else if row > col {
-            let high = (row ^ col).ilog2() as usize;
-            self.levels[blocks.ilog2() as usize] + (row >> (high + 1))
-        } else {
-            return None;
-        };
-        let tile_plan = &self.tiles[tile];
-        Some((
-            tile,
-            (row - tile_plan.row) * tile_plan.shape.width + col - tile_plan.col,
-        ))
-    }
-
-    fn index<F>(&self, trace: &SoftmaxTrace<F>, row: usize, col: usize) -> usize {
-        self.location(row, col)
-            .map_or(0, |(tile, offset)| trace.indices[tile].get(offset) as usize)
-    }
-
-    pub(super) fn probabilities<'s, F: Sync>(
-        &'s self,
-        trace: &'s SoftmaxTrace<F>,
-    ) -> impl IndexedParallelIterator<Item = Vec<i32>> + 's {
-        (0..self.shape.rows).into_par_iter().map(move |row| {
-            self.active(row)
-                .map(|col| self.tables.probabilities[self.index(trace, row, col)])
-                .collect()
-        })
-    }
-
-    pub(super) fn bind_probabilities<F: ProofField>(
-        &self,
-        trace: &SoftmaxTrace<F>,
-        point: &[F],
-    ) -> Vec<F> {
-        let mut output = vec![F::zero(); self.shape.width.next_power_of_two()];
-        for (row, weight) in weights(point).into_iter().take(self.shape.rows).enumerate() {
-            for col in self.active(row) {
-                output[col] +=
-                    weight * F::from_i32(self.tables.probabilities[self.index(trace, row, col)]);
-            }
-        }
-        output
-    }
-
-    pub(crate) fn bind(&self, t: &mut impl Transcript) {
-        t.append(&u64::from(matches!(self.mask, SoftmaxMask::Causal)));
-        t.append(&u64::from(self.has_excess()));
-        t.append(&(self.tables.limit as u64));
-        bind_i32(t, self.tables.sums);
-        bind_i32(t, self.tables.probabilities);
-    }
-
-    pub(super) fn score_tiles(&self) -> impl Iterator<Item = (usize, usize, Shape)> + '_ {
-        self.tiles.iter().map(|t| (t.row, t.col, t.shape))
-    }
-
-    pub(super) fn score<F>(&self, trace: &SoftmaxTrace<F>, row: usize, col: usize) -> i32 {
-        if row >= self.shape.rows || col > row {
-            return 0;
-        }
-        let excess = trace
-            .overflow
-            .get(&(row, col / 64))
-            .map_or(0, |values| values[col % 64]);
-        (trace.shifts[row] - self.index(trace, row, col) as i64 - i64::from(excess)) as i32
-    }
-
-    pub(crate) fn execute<F: ProofField>(
-        &self,
-        x: &[i32],
-        advice: &mut Advice,
-    ) -> Result<SoftmaxTrace<F>> {
-        self.shape.check(x)?;
-        self.execute_rows(
-            |r| &x[r * self.shape.width..][..self.shape.width],
-            false,
-            advice,
-        )
-    }
-
-    pub(super) fn execute_causal<'w, F: ProofField>(
-        &self,
-        row: impl Fn(usize) -> &'w [i32],
-        advice: &mut Advice,
-    ) -> Result<SoftmaxTrace<F>> {
-        self.execute_rows(row, true, advice)
-    }
-
-    fn execute_rows<'w, F: ProofField>(
-        &self,
-        score_row: impl Fn(usize) -> &'w [i32],
-        causal: bool,
-        advice: &mut Advice,
-    ) -> Result<SoftmaxTrace<F>> {
-        let last = (self.tables.sums.len() - 1) as i64;
+            .map(|block| Addresses::new(1 << block.read.cells, block.read.bits))
+            .collect();
+        let mut overflows: Vec<_> = self
+            .blocks
+            .iter()
+            .map(|block| vec![0i64; block.tile.shape.len()])
+            .collect();
+        let mut stats = Vec::with_capacity(self.shape.rows);
+        let max_address = (self.tables.sums.len() - 1) as i64;
         let limit = i64::from(self.tables.limit);
-        let mut raw_rows: [Vec<i64>; 3] = std::array::from_fn(|_| Vec::new());
-        let mut indices = self
-            .tiles
-            .iter()
-            .map(|tile| {
-                Addresses::zeros(
-                    1 << tile.shape.vars(),
-                    self.tables.sums.len().ilog2() as usize,
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut excess = self
-            .excess
-            .as_ref()
-            .map(|_| Vec::with_capacity(self.shape.rows * self.shape.width));
-        let mut overflow = std::collections::BTreeMap::new();
-        let sums = Table::Slice(self.tables.sums);
-        for r in 0..self.shape.rows {
-            let row = score_row(r);
-            let active = self.active(r);
-            let sum = |shift: i64, table: Table<'_>| {
-                row[active.clone()]
+        for row in 0..self.shape.rows {
+            let scores: Vec<_> = (0..self.active(row))
+                .map(|col| i64::from(score(row, col)))
+                .collect();
+            let table = |shift: i64, previous: bool| {
+                scores
                     .iter()
-                    .map(|&x| i64::from(table.at((shift - i64::from(x)).min(last) as usize)))
+                    .map(|value| {
+                        let index = (shift - value).min(max_address) as usize;
+                        i64::from(if previous {
+                            index
+                                .checked_sub(1)
+                                .map_or(self.tables.limit + 1, |i| self.tables.sums[i])
+                        } else {
+                            self.tables.sums[index]
+                        })
+                    })
                     .sum::<i64>()
             };
-            let mut lo = i64::from(*row[active.clone()].iter().max().expect("valid row"));
-            let mut hi = lo + last;
+            let mut lo = *scores.iter().max().expect("nonempty row");
+            let mut hi = lo + max_address;
             while lo < hi {
                 let mid = (lo + hi).div_euclid(2);
-                if sum(mid, sums) <= limit {
+                if table(mid, false) <= limit {
                     hi = mid;
                 } else {
                     lo = mid + 1;
                 }
             }
-            let gap = limit - sum(lo, sums);
-            let prev = sum(lo, self.previous) - limit - 1;
-            for (c, v) in raw_rows.iter_mut().zip([lo, gap, prev]) {
-                c.push(v);
-            }
-            for (i, &score) in row.iter().enumerate() {
-                let real = active.contains(&i);
-                let difference = if real { lo - i64::from(score) } else { 0 };
-                let index = difference.min(last) as usize;
-                if real {
-                    let (tile, offset) = self.location(r, i).expect("active Softmax cell");
-                    indices[tile].set(offset, index as u32);
-                }
-                if let Some(excess) = &mut excess {
-                    let amount = difference - index as i64;
-                    excess.push(amount);
-                    if causal && amount != 0 {
-                        overflow
-                            .entry((r, i / 64))
-                            .or_insert_with(|| Box::new([0; 64]))[i % 64] =
-                            amount.try_into().map_err(|_| "Softmax excess overflow")?;
-                    }
-                } else if difference != index as i64 {
-                    if !causal || !self.may_clip {
-                        return Err("Softmax exceeds the public score bound");
-                    }
-                    overflow
-                        .entry((r, i / TILE))
-                        .or_insert_with(|| Box::new([0; TILE]))[i % TILE] = (difference
-                        - index as i64)
-                        .try_into()
-                        .map_err(|_| "Softmax excess overflow")?;
-                }
-            }
-            if let Some(excess) = &mut excess {
-                excess.resize((r + 1) * self.shape.width, 0);
+            stats.push([lo, limit - table(lo, false), table(lo, true) - limit - 1]);
+            for (col, value) in scores.into_iter().enumerate() {
+                let (block, index) = self.find(row, col);
+                let difference = lo - value;
+                let address = difference.min(max_address);
+                addresses[block].set(index, address as usize);
+                let width = self.blocks[block].tile.shape.width;
+                let stride = width.next_power_of_two();
+                overflows[block][index / stride * width + index % stride] = difference - address;
             }
         }
-        let indices = indices.into_iter().map(Arc::new).collect::<Vec<_>>();
-        for (tile, values) in self.tiles.iter().zip(&indices) {
-            tile.lookup.record(advice, Arc::clone(values))?;
-        }
+        let column: [Vec<i64>; 3] =
+            std::array::from_fn(|i| stats.iter().map(|row| row[i]).collect());
         self.rows
-            .record(advice, &raw_rows.each_ref().map(Vec::as_slice))?;
-        if let (Some(ranges), Some(excess)) = (&self.excess, excess) {
-            ranges.record(advice, &[&excess])?;
+            .record(packed, column.each_ref().map(Vec::as_slice))?;
+        for ((block, addresses), overflow) in self.blocks.iter().zip(&addresses).zip(&overflows) {
+            block.read.record(packed, addresses)?;
+            block.overflow.record_adaptive(packed, overflow)?;
         }
-        let row_shape = Shape {
-            rows: self.shape.rows,
-            width: 1,
-        };
-        let shifts = raw_rows[0].clone();
-        let rows = raw_rows.map(|c| row_shape.padded(&c, F::zero(), F::from_i64));
-        Ok(SoftmaxTrace {
-            shifts,
-            rows,
-            indices,
-            overflow,
+        Ok(SoftTrace {
+            addresses: addresses.into_iter().map(Arc::new).collect(),
+            overflows,
+            stats,
         })
     }
 
-    pub(crate) fn reverse<'w, F: ProofField>(
-        &self,
-        claims: &[Claim<F>],
-        clips: &[Option<ClipPlan>],
-        trace: impl Fn(usize) -> (&'w SoftmaxTrace<F>, Option<&'w [i32]>) + Sync,
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<Vec<(Claim<F>, SoftmaxRead<F>)>> {
-        let vars = self.shape.vars();
-        let rows = self.shape.row_vars();
-        let stride = self.shape.width.next_power_of_two();
-        io.pow(vars + rows + 1)?;
-        let mix = io.challenge(1)?[0];
-        let clamp = io.challenge(vars)?;
-        let total = io.challenge(rows)?;
-        let limit = F::from_i32(self.tables.limit);
-        let last = F::from_u64((self.tables.sums.len() - 1) as u64);
-        let radix = F::from_u128(self.radix);
-        let has_excess = self.excess.is_some()
-            || clips
-                .iter()
-                .any(|clip| matches!(clip, Some(ClipPlan::Overflow(_))));
-        let expression = |v: &[F]| {
-            let condition = v[5] - v[0] - v[1]
-                + if has_excess {
-                    v[4] * (mix * (v[1] - last) - F::one())
-                } else {
-                    F::zero()
-                };
-            let sum = v[8] * v[3] + v[9] * (v[6] - limit - radix * (v[7] + limit + F::one()));
-            v[10] * v[8] * v[2] + v[11] * v[8] * condition + v[12] * sum
-        };
-        let batch = io.point(claims.len())?;
-        let sum = dot(claims.iter().map(|q| q.value), batch.iter().copied());
-        // Re-read compact Softmax sources until the shared fold has shrunk.
-        let replay_rounds = io.source_replay_rounds(vars);
-        let columns = |i: usize| {
-            let (t, scores) = trace(i);
-            let score = move |row, col| {
-                if row < self.shape.rows && col < self.shape.width {
-                    i64::from(scores.map_or_else(
-                        || self.score(t, row, col),
-                        |dense| dense[row * self.shape.width + col],
-                    ))
-                } else {
-                    0
-                }
-            };
-            let size = 1 << vars;
-            let clipped =
-                self.excess.is_some() || matches!(clips.get(i), Some(Some(ClipPlan::Overflow(_))));
-            let mut shared = Column::shared_source(size, if clipped { 5 } else { 4 }, move |i| {
-                let (row, col) = (i / stride, i % stride);
-                let address = self.index(t, row, col);
-                let score = score(row, col);
-                let excess = if clipped && row < self.shape.rows && self.active(row).contains(&col)
-                {
-                    F::from_i64(t.shifts[row] - score - address as i64)
-                } else {
-                    F::zero()
-                };
-                [
-                    F::from_i64(score),
-                    F::from_u64(address as u64),
-                    F::from_i32(self.tables.probabilities[address]),
-                    self.combined.field_at(address),
-                    excess,
-                ]
-            });
-            std::array::from_fn::<_, 13, _>(|j| match j {
-                0..=4 => shared
-                    .next()
-                    .unwrap_or_else(|| Column::repeat(vec![F::zero()].into(), size)),
-                5..=7 => Column::rows(t.rows[j - 5].as_slice().into(), stride),
-                8 => Column::source(size, |i| {
-                    let row = i / stride;
-                    F::from_bool(row < self.shape.rows && self.active(row).contains(&(i % stride)))
-                }),
-                9 => Column::source(size, |i| {
-                    let row = i / stride;
-                    F::from_bool(row < self.shape.rows && self.active(row).start == i % stride)
-                }),
-                10 => Column::equality(&claims[i].point),
-                11 => Column::equality(&clamp),
-                _ => Column::rows(weights(&total).into(), stride),
-            })
-            .map(|column| column.replay(replay_rounds))
-        };
-        let (end, values) = io.fold_weighted_masked(
-            instance(sum, vars, if has_excess { 4 } else { 3 }),
-            &batch,
-            Some([8, 9]),
-            || (0..claims.len()).into_par_iter().map(columns).collect(),
-            [0, 1, 2, 3, 4, 5, 6, 7],
-            8,
-            expression,
-        )?;
-        let point = &end.challenges;
-        io.check_value(&end, || {
-            let mut x = [F::zero(); 13];
-            let (mask, first) = self.masks_at(point);
-            x[8..].copy_from_slice(&[
-                mask,
-                first,
-                F::zero(),
-                eq(&clamp, point),
-                eq(&total, &point[..rows]),
-            ]);
-            claims
-                .iter()
-                .zip(&values)
-                .zip(batch)
-                .map(|((q, v), w)| {
-                    x[..8].copy_from_slice(v);
-                    x[10] = eq(&q.point, point);
-                    w * expression(&x)
-                })
-                .sum()
-        })?;
-        Ok(values
-            .into_iter()
-            .map(|v| {
-                (
-                    Claim {
-                        point: point.clone(),
-                        value: v[0],
-                    },
-                    SoftmaxRead {
-                        cell: point.clone(),
-                        address: v[1],
-                        values: [v[2], v[3]],
-                        row_ranges: [v[5], v[6], v[7]],
-                        excess: v[4],
-                    },
-                )
-            })
-            .collect())
+    pub(crate) fn probability(&self, trace: &SoftTrace, row: usize, col: usize) -> i32 {
+        if row >= self.shape.rows || col >= self.active(row) {
+            return 0;
+        }
+        let (block, index) = self.find(row, col);
+        self.tables.probabilities[trace.addresses[block].get(index)]
     }
 
-    pub(crate) fn defer<'s, 'w, F: ProofField>(
-        reads: Vec<(&'s Self, SoftmaxRead<F>)>,
-        clips: &[Option<ClipPlan>],
-        trace: impl Fn(usize) -> &'w SoftmaxTrace<F>,
-        io: &mut Session<'_, '_, F>,
-
-        lookups: &mut Batches<'s, F>,
-    ) -> Result<()> {
-        for (i, (op, read)) in reads.into_iter().enumerate() {
-            op.rows
-                .check(&[(&read.cell[..op.shape.row_vars()], read.row_ranges)], io)?;
-            if let Some(excess) = &op.excess {
-                excess.check(&[(&read.cell, [read.excess])], io)?;
-            } else {
-                match clips.get(i).and_then(Option::as_ref) {
-                    Some(ClipPlan::Overflow(clip)) => clip.check(
-                        &read.cell,
-                        read.excess,
-                        || clip.values(&trace(i).overflow),
-                        io,
-                    )?,
-                    clip => {
-                        if !read.excess.is_zero() {
-                            return Err("unexpected Softmax excess");
+    pub(crate) fn reverse<'w>(
+        &self,
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        lookups: &mut Lookups<'a>,
+        claim: Claim,
+        witness: impl Fn() -> &'w SoftTrace,
+        score: impl Fn(usize, usize) -> i32 + Sync,
+    ) -> Result<Claim> {
+        let (vars, rb) = (self.shape.bits(), self.shape.row_bits());
+        let stride = self.shape.width.next_power_of_two();
+        let len = 1 << vars;
+        let rand = io.random(vars + rb + 1, vars + rb + 1)?;
+        let (p, r) = rand[..vars + rb].split_at(vars);
+        let mix = rand[vars + rb];
+        let tables = self.tables();
+        let last = F::from_u64((self.tables.sums.len() - 1) as u64);
+        let radix = F::from_u128(self.radix);
+        let limit = F::from_i32(self.tables.limit);
+        let formula = |v: &[F]| {
+            let [score, index, prob, table, extra, shift, less, more, active, first, query, check, row] =
+                v.try_into().expect("Softmax columns");
+            let clamp = shift - score - index - extra + mix * extra * (index - last);
+            let totals =
+                active * table - first * (limit - less - radix * (limit + F::one() + more));
+            active * (query * prob + check * clamp) + row * totals
+        };
+        let rw = weights(r);
+        let (end, v) = io.fold(
+            claim.value,
+            vars,
+            4,
+            || {
+                let trace = witness();
+                let score = &score;
+                let coordinates = |i| (i / stride, i % stride);
+                let cell = move |i| {
+                    let (row, col) = coordinates(i);
+                    (row < self.shape.rows && col < self.active(row)).then(|| self.find(row, col))
+                };
+                vec![
+                    Column::source(len, move |i| {
+                        let (row, col) = coordinates(i);
+                        if cell(i).is_some() {
+                            F::from_i32(score(row, col))
+                        } else {
+                            F::zero()
                         }
-                        if let Some(ClipPlan::Narrow(range)) = clip {
-                            range.check(
-                                &[(&read.cell[..op.shape.row_vars()], [read.row_ranges[0]])],
-                                io,
-                            )?;
-                        }
-                    }
-                }
-            }
-            let tables = [Table::Slice(op.tables.probabilities), op.combined];
-            if let [tile] = op.tiles.as_slice() {
-                lookups.push(
-                    &tables,
-                    &tile.lookup,
-                    Read {
-                        cell: read.cell,
-                        address: read.address,
-                        output: Box::new(read.values),
-                        witness: io.proving().then(|| Arc::clone(&trace(i).indices[0])),
-                    },
-                );
-                continue;
-            }
-
-            let (row, col) = read.cell.split_at(op.shape.row_vars());
-            let defaults = [F::zero(), tables[0].field_at(0), tables[1].field_at(0)];
-            let mut sum = defaults;
-            for (j, tile) in op.tiles.iter().enumerate() {
-                let (weight, cell) = tile.read(row, col);
-                let witness = io.proving().then(|| Arc::clone(&trace(i).indices[j]));
-                let values = io.values(|| {
-                    let (r, c) = cell.split_at(tile.shape.row_vars());
-                    let columns = weights(c);
-                    let mut values = [F::zero(); 3];
-                    let indices = witness.as_deref().expect("Softmax tile witness");
-                    for (row, row_weight) in weights(r).into_iter().enumerate() {
-                        let mut partial = [F::zero(); 3];
-                        for (col, &column_weight) in columns.iter().enumerate() {
-                            let address = indices.get(row * columns.len() + col);
-                            partial[0] += column_weight * F::from_u64(u64::from(address));
-                            for (value, table) in partial[1..].iter_mut().zip(tables) {
-                                *value += column_weight * table.field_at::<F>(address as usize);
-                            }
-                        }
-                        for (v, part) in values.iter_mut().zip(partial) {
-                            *v += row_weight * part;
-                        }
-                    }
-                    values
-                })?;
-                for ((total, value), default) in sum.iter_mut().zip(values).zip(defaults) {
-                    *total += weight * (value - default);
-                }
-                lookups.push(
-                    &tables,
-                    &tile.lookup,
-                    Read {
-                        cell,
-                        address: values[0],
-                        output: Box::new([values[1], values[2]]),
-                        witness,
-                    },
-                );
-            }
-            if sum != [read.address, read.values[0], read.values[1]] {
-                return Err("invalid tiled Softmax lookup evaluation");
-            }
+                    }),
+                    Column::source(len, move |i| {
+                        F::from_u64(cell(i).map_or(0, |(b, j)| trace.addresses[b].get(j)) as u64)
+                    }),
+                    Column::source(len, move |i| {
+                        tables[0].value(cell(i).map_or(0, |(b, j)| trace.addresses[b].get(j)))
+                    }),
+                    Column::source(len, move |i| {
+                        tables[1].value(cell(i).map_or(0, |(b, j)| trace.addresses[b].get(j)))
+                    }),
+                    Column::source(len, move |i| {
+                        F::from_i64(cell(i).map_or(0, |(b, j)| {
+                            let shape = self.blocks[b].tile.shape;
+                            let stride = shape.width.next_power_of_two();
+                            trace.overflows[b][j / stride * shape.width + j % stride]
+                        }))
+                    }),
+                    Column::source(len, move |i| {
+                        F::from_i64(trace.stats.get(i / stride).map_or(0, |v| v[0]))
+                    }),
+                    Column::source(len, move |i| {
+                        F::from_i64(trace.stats.get(i / stride).map_or(0, |v| v[1]))
+                    }),
+                    Column::source(len, move |i| {
+                        F::from_i64(trace.stats.get(i / stride).map_or(0, |v| v[2]))
+                    }),
+                    Column::source(len, move |i| F::from_bool(cell(i).is_some())),
+                    Column::source(len, move |i| {
+                        F::from_bool(i / stride < self.shape.rows && i % stride == 0)
+                    }),
+                    Column::Dense(weights(&claim.point)),
+                    Column::Dense(weights(p)),
+                    Column::source(len, |i| rw[i / stride]),
+                ]
+            },
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            formula,
+        )?;
+        let (rpoint, cpoint) = end.challenges.split_at(rb);
+        let mut prefix = vec![F::zero()];
+        for w in weights(cpoint) {
+            prefix.push(prefix[prefix.len() - 1] + w);
         }
-        Ok(())
+        let rows = weights(rpoint);
+        let active = inner(
+            rows.iter().copied(),
+            (0..self.shape.rows).map(|i| prefix[self.active(i)]),
+        );
+        let row_active: F = rows.iter().take(self.shape.rows).copied().sum();
+        io.expect(&end, || {
+            let mut values = v.to_vec();
+            values.extend([
+                active,
+                row_active * prefix[1],
+                equality(&claim.point, &end.challenges),
+                equality(p, &end.challenges),
+                inner(rows.iter().copied(), rw.iter().copied()),
+            ]);
+            formula(&values)
+        })?;
+        self.rows
+            .open(io, requests, rpoint, v[5..].try_into().expect("row stats"))?;
+
+        let defaults = [F::zero(), tables[0].value(0), tables[1].value(0), F::zero()];
+        let mut full = defaults;
+        for (i, block) in self.blocks.iter().enumerate() {
+            let (factor, point) = block.tile.restrict(rpoint, cpoint);
+            let [a, b, c, d] = io.values(|| {
+                let shape = block.tile.shape;
+                let trace = witness();
+                let mut result = [F::zero(); 4];
+                for (j, w) in weights(&point).into_iter().enumerate() {
+                    let address = trace.addresses[i].get(j);
+                    for (dst, val) in result.iter_mut().zip([
+                        F::from_u64(address as u64),
+                        tables[0].value(address),
+                        tables[1].value(address),
+                    ]) {
+                        *dst += w * val;
+                    }
+                }
+                result[3] = shape.evaluate(&trace.overflows[i], &point);
+                result
+            })?;
+            for ((sum, value), base) in full.iter_mut().zip([a, b, c, d]).zip(defaults) {
+                *sum += factor * (value - base);
+            }
+            block.overflow.open(io, requests, &point, [d])?;
+            lookups.read(
+                &block.read,
+                &tables,
+                point,
+                a,
+                vec![b, c],
+                io.proving().then(|| witness().addresses[i].clone()),
+            );
+        }
+        if !io.proving() && full != v[1..5] {
+            return Err("inconsistent Softmax tiles");
+        }
+        Ok(Claim::new(end.challenges, v[0]))
     }
 }

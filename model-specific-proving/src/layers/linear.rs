@@ -1,202 +1,109 @@
-//! Matrix and pointwise products, with shared Euclidean remainder checks.
-
-use std::borrow::Cow;
-
-use jolt_poly::MultilinearPoly;
-use jolt_transcript::Transcript;
+use jolt_field::Ring;
 use rayon::prelude::*;
 
+use super::{Projection, Rotary};
 use crate::protocol::{
-    pcs::{bind_i32, Advice, Layout},
-    range::{Range, Ranges, I32},
-    session::{instance, Claim, Column, ProofField, Session},
-    tensor::{bind_rows, dot, eq, integer_dot, weights, Shape},
+    field::F,
+    opening::{Layout, Packed, Request},
+    range::{Ranges, Width, I32},
+    sumcheck::{Column, Session},
+    tensor::{bind_rows, equality, inner, weights, Claim, Shape},
     Result,
 };
 
 pub(crate) struct Rounded {
-    pub(crate) output: Vec<i32>,
-    remainder: Vec<i32>,
+    pub values: Vec<i32>,
+    pub(crate) remainder: Vec<i32>,
 }
 
-pub(super) fn quotient_remainder(raw: i128, bits: usize) -> Result<(i32, i32)> {
-    let output = i32::try_from(raw >> bits).map_err(|_| "fixed-point overflow")?;
-    let remainder = (raw & ((1i128 << bits) - 1)) as i32;
-    Ok((output, remainder))
+impl Rounded {
+    pub(crate) fn make(
+        shape: Shape,
+        bits: usize,
+        compute: impl Fn(usize, usize) -> i128 + Sync,
+    ) -> Result<Self> {
+        let mut values = vec![0; shape.len()];
+        let mut remainder = vec![0; shape.len()];
+        values
+            .par_chunks_mut(shape.width)
+            .zip(remainder.par_chunks_mut(shape.width))
+            .enumerate()
+            .try_for_each(|(row, (values, remainder))| {
+                for (col, (value, rem)) in values.iter_mut().zip(remainder).enumerate() {
+                    let raw = compute(row, col);
+                    *value = i32::try_from(raw >> bits).map_err(|_| "fixed-point overflow")?;
+                    *rem = (raw & ((1 << bits) - 1)) as i32;
+                }
+                Ok(())
+            })?;
+        Ok(Self { values, remainder })
+    }
 }
 
-struct Rounding {
-    shape: Shape,
+pub(crate) struct Rounding {
+    pub shape: Shape,
     bits: usize,
-    check_output: bool,
-    ranges: Vec<Ranges>,
+    ranges: Ranges<2>,
 }
 
 impl Rounding {
-    fn new(layout: &mut Layout, shape: Shape, bits: usize, check_output: bool) -> Result<Self> {
-        if bits > 30 {
-            return Err("invalid fixed-point scale");
-        }
-        let first = if check_output {
-            I32
-        } else {
-            Range::unsigned(0)
-        };
-        let mut ranges = Vec::new();
-        let mut remaining = shape.width;
-        while remaining != 0 {
-            let width = if check_output {
-                remaining
-            } else {
-                1 << remaining.ilog2()
-            };
-            ranges.push(Ranges::new(
-                layout,
-                Shape::new(shape.rows, width)?,
-                [first, Range::unsigned(bits)],
-            )?);
-            remaining -= width;
-        }
-        Ok(Self {
+    pub(crate) fn new(layout: &mut Layout, shape: Shape, bits: usize) -> Self {
+        let ranges = Ranges::new(layout, shape, [I32, Width::unsigned(bits)]);
+        Self {
             shape,
             bits,
-            check_output,
             ranges,
-        })
+        }
     }
 
-    fn execute(
+    pub(crate) fn execute(
         &self,
-        advice: &mut Advice,
-        values: impl IntoIterator<Item = i128>,
+        packed: &mut Packed<'_>,
+        compute: impl Fn(usize, usize) -> i128 + Sync,
     ) -> Result<Rounded> {
-        let mut output = Vec::with_capacity(self.shape.rows * self.shape.width);
-        let mut remainder = Vec::with_capacity(output.capacity());
-        for raw in values {
-            let (q, r) = quotient_remainder(raw, self.bits)?;
-            output.push(q);
-            remainder.push(r);
-        }
-        self.record(advice, Rounded { output, remainder })
-    }
-
-    fn record(&self, advice: &mut Advice, rounded: Rounded) -> Result<Rounded> {
-        let values: &[i32] = if self.check_output {
-            &rounded.output
-        } else {
-            &[]
-        };
-        let mut offset = 0;
-        for range in &self.ranges {
-            range.record_columns(
-                advice,
-                &[values, &rounded.remainder],
-                self.shape.width,
-                offset,
-            )?;
-            offset += range.shape.width;
-        }
+        let rounded = Rounded::make(self.shape, self.bits, compute)?;
+        self.ranges
+            .record(packed, [&rounded.values, &rounded.remainder])?;
         Ok(rounded)
     }
 
-    fn reverse<'w, F: ProofField>(
+    pub(crate) fn recover<'w>(
         &self,
-        q: &Claim<F>,
-        witness: impl FnOnce() -> &'w Rounded,
-        io: &mut Session<'_, '_, F>,
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        claim: &Claim,
+        trace: impl FnOnce() -> &'w [i32],
     ) -> Result<F> {
-        let rounded = F::from_u64(1 << self.bits) * q.value;
-        if let [range] = self.ranges.as_slice() {
-            let [rem] = io.values(|| [self.shape.eval(&witness().remainder, &q.point)])?;
-            let output = if self.check_output {
-                q.value
-            } else {
-                F::zero()
-            };
-            range.check(&[(&q.point, [output, rem])], io)?;
-            return Ok(rounded + rem);
-        }
-
-        let (rows, cols) = q.point.split_at(self.shape.row_vars());
-        let remainder: Option<Vec<F>> = io
-            .proving()
-            .then(|| bind_rows(self.shape.width, &witness().remainder, rows));
-        let mut offset = 0;
-        let mut total = F::zero();
-        for range in &self.ranges {
-            let width = range.shape.width;
-            let (prefix, suffix) = cols.split_at(cols.len() - width.ilog2() as usize);
-            let [rem] = io.values(|| {
-                let values = remainder.as_ref().expect("prover remainder evaluations");
-                [dot(
-                    values[offset..][..width].iter().copied(),
-                    weights(suffix),
-                )]
-            })?;
-            range.check(&[(&[rows, suffix].concat(), [F::zero(), rem])], io)?;
-            // An aligned block fixes the high column coordinates.
-            let weight: F = prefix
-                .iter()
-                .enumerate()
-                .map(|(i, &r)| {
-                    if offset >> (cols.len() - i - 1) & 1 == 1 {
-                        r
-                    } else {
-                        F::one() - r
-                    }
-                })
-                .product();
-            total += rem * weight;
-            offset += width;
-        }
-        Ok(rounded + total)
+        let [remainder] = io.values(|| [self.shape.evaluate(trace(), &claim.point)])?;
+        self.ranges
+            .open(io, requests, &claim.point, [claim.value, remainder])?;
+        Ok(F::from_u64(1 << self.bits) * claim.value + remainder)
     }
 }
 
-/// A public matrix with weights stored by output channel.
-#[derive(Clone, Copy)]
-pub struct Projection<'a> {
-    pub weights: &'a [i32],
-    pub bias: &'a [i32],
+pub(crate) fn wide_dot(left: &[i32], right: &[i32]) -> i128 {
+    left.iter()
+        .zip(right)
+        .map(|(&a, &b)| i128::from(a) * i128::from(b))
+        .sum()
 }
 
-impl Projection<'_> {
-    pub(super) fn output_bound(self, input: usize, bound: u128, scale: u128) -> u128 {
-        self.weights
-            .chunks_exact(input)
-            .zip(self.bias)
-            .map(|(row, &bias)| {
-                let norm: u128 = row.iter().map(|w| u128::from(w.unsigned_abs())).sum();
-                (norm * bound).div_ceil(scale) + u128::from(bias.unsigned_abs())
-            })
-            .max()
-            .unwrap_or(0)
-            .min(1 << 31)
-    }
-}
-
-pub(super) fn narrow_dot(left: &[i32], right: &[i32]) -> i64 {
-    let mut lanes = [0i64; 8];
-    let mut left = left.chunks_exact(8);
-    let mut right = right.chunks_exact(8);
-    for (a, b) in left.by_ref().zip(right.by_ref()) {
+pub(crate) fn narrow_dot(left: &[i32], right: &[i32]) -> i128 {
+    let mut sums = [0i64; 8];
+    let mut lhs = left.chunks_exact(8);
+    let mut rhs = right.chunks_exact(8);
+    for (a, b) in lhs.by_ref().zip(rhs.by_ref()) {
         for i in 0..8 {
-            lanes[i] += i64::from(a[i]) * i64::from(b[i]);
+            sums[i] += i64::from(a[i]) * i64::from(b[i]);
         }
     }
-    let tail: i64 = left
-        .remainder()
-        .iter()
-        .zip(right.remainder())
-        .map(|(&a, &b)| i64::from(a) * i64::from(b))
-        .sum();
-    lanes.into_iter().sum::<i64>() + tail
+    i128::from(sums.into_iter().sum::<i64>()) + wide_dot(lhs.remainder(), rhs.remainder())
 }
 
 pub(crate) struct Linear<'a> {
-    weights: Projection<'a>,
-    weight_norms: Vec<u128>,
     input: Shape,
+    projection: Projection<'a>,
+    weights_norm: Vec<u128>,
     rounding: Rounding,
 }
 
@@ -206,24 +113,21 @@ impl<'a> Linear<'a> {
         input: Shape,
         projection: Projection<'a>,
         bits: usize,
-        public: bool,
     ) -> Result<Self> {
-        let output = Shape::new(input.rows, projection.bias.len())?;
-        if input.width.checked_mul(output.width) != Some(projection.weights.len()) {
+        let shape = Shape::new(input.rows, projection.bias.len())?;
+        if input.width.checked_mul(shape.width) != Some(projection.weights.len()) || bits > 30 {
             return Err("invalid projection dimensions");
         }
-        layout.integer_bits = layout
-            .integer_bits
-            .max(input.width.next_power_of_two().ilog2() + 65);
+        let weights_norm = projection
+            .weights
+            .chunks_exact(input.width)
+            .map(|w| w.iter().map(|x| u128::from(x.unsigned_abs())).sum())
+            .collect();
         Ok(Self {
-            weights: projection,
-            weight_norms: projection
-                .weights
-                .chunks_exact(input.width)
-                .map(|row| row.iter().map(|w| u128::from(w.unsigned_abs())).sum())
-                .collect(),
             input,
-            rounding: Rounding::new(layout, output, bits, !public)?,
+            projection,
+            weights_norm,
+            rounding: Rounding::new(layout, shape, bits),
         })
     }
 
@@ -231,605 +135,185 @@ impl<'a> Linear<'a> {
         self.rounding.shape
     }
 
-    pub(crate) fn range_slots(&self) -> usize {
-        self.rounding.ranges.len()
-    }
-
-    pub(crate) fn bind(&self, t: &mut impl Transcript) {
-        bind_i32(t, self.weights.weights);
-        bind_i32(t, self.weights.bias);
-    }
-
-    pub(crate) fn execute(&self, x: &[i32], advice: &mut Advice) -> Result<Rounded> {
-        self.input.check(x)?;
-        let scale = 1i128 << self.rounding.bits;
-        let bits = self.rounding.bits;
-        let (rows, width) = (self.input.rows, self.rounding.shape.width);
-        let mut output = vec![0; rows * width];
-        let mut remainder = vec![0; rows * width];
-        let input_width = self.input.width;
-        output
-            .par_chunks_mut(width)
-            .zip(remainder.par_chunks_mut(width))
-            .zip(x.par_chunks_exact(input_width))
-            .try_for_each(|((out, rem), row)| -> Result<()> {
-                let max_input = u128::from(row.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0));
-                for (col, (out, rem)) in out.iter_mut().zip(rem).enumerate() {
-                    let weights = &self.weights.weights[col * input_width..][..input_width];
-                    let dot = if max_input * self.weight_norms[col] <= i64::MAX as u128 {
-                        i128::from(narrow_dot(row, weights))
-                    } else {
-                        integer_dot(row, weights)
-                    };
-                    (*out, *rem) =
-                        quotient_remainder(dot + i128::from(self.weights.bias[col]) * scale, bits)?;
-                }
-                Ok(())
-            })?;
-        self.rounding.record(advice, Rounded { output, remainder })
-    }
-
-    pub(crate) fn reverse<'w, F: ProofField>(
-        &self,
-        q: Claim<F>,
-        trace: impl Fn() -> (&'w [i32], &'w Rounded),
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<Claim<F>> {
-        let raw = self.rounding.reverse(&q, || trace().1, io)?;
-        let (row, col) = q.point.split_at(self.input.row_vars());
-        let active: F = weights::<F>(row).into_iter().take(self.input.rows).sum();
-        let bias = dot(
-            self.weights.bias.iter().copied().map(F::from_i32),
-            weights(col),
-        );
-        let sum = raw - F::from_u64(1 << self.rounding.bits) * active * bias;
-        let public = bind_rows(self.input.width, self.weights.weights, col);
-        let mut claim =
-            io.public_dot(sum, &public, || bind_rows(self.input.width, trace().0, row))?;
-        claim.point = [row, &claim.point].concat();
-        Ok(claim)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum ProductKind {
-    Pointwise,
-    Matrix {
-        inner: usize,
-        transpose: bool,
-        factor: i32,
-    },
-}
-
-pub(crate) struct Product {
-    kind: ProductKind,
-    rounding: Rounding,
-}
-
-pub(super) struct ValueColumns {
-    values: Vec<i32>,
-    max_abs: u128,
-}
-
-impl ValueColumns {
-    pub(super) fn new(values: &[i32], shape: Shape) -> Self {
-        let mut transposed = vec![0; values.len()];
-        for (row, values) in values.chunks_exact(shape.width).enumerate() {
-            for (col, &value) in values.iter().enumerate() {
-                transposed[col * shape.rows + row] = value;
-            }
+    pub(crate) fn execute(&self, input: &[i32], packed: &mut Packed<'_>) -> Result<Rounded> {
+        if input.len() != self.input.len() {
+            return Err("invalid projection input");
         }
-        Self {
-            values: transposed,
-            max_abs: u128::from(values.iter().map(|v| v.unsigned_abs()).max().unwrap_or(0)),
-        }
-    }
-}
-
-impl Product {
-    pub(crate) fn new(
-        layout: &mut Layout,
-        shape: Shape,
-        bits: usize,
-        kind: ProductKind,
-    ) -> Result<Self> {
-        Self::with_output_range(layout, shape, bits, kind, true)
-    }
-
-    pub(super) fn with_output_range(
-        layout: &mut Layout,
-        shape: Shape,
-        mut bits: usize,
-        mut kind: ProductKind,
-        check_output: bool,
-    ) -> Result<Self> {
-        if bits > 30 {
-            return Err("invalid fixed-point scale");
-        }
-        if let ProductKind::Matrix {
-            inner,
-            ref mut factor,
-            ..
-        } = kind
-        {
-            // Cancel the common power of two before proving Euclidean division.
-            let shift = (factor.trailing_zeros() as usize).min(bits);
-            *factor >>= shift;
-            bits -= shift;
-            let integer_bits = inner.next_power_of_two().ilog2()
-                + (u32::BITS - factor.unsigned_abs().leading_zeros())
-                + 65;
-            layout.integer_bits = layout.integer_bits.max(integer_bits);
-        }
-        Ok(Self {
-            kind,
-            rounding: Rounding::new(layout, shape, bits, check_output)?,
+        let stride = self.input.width;
+        let bounds: Vec<_> = input
+            .chunks_exact(stride)
+            .map(|row| u128::from(row.iter().map(|x| x.unsigned_abs()).max().unwrap_or(0)))
+            .collect();
+        self.rounding.execute(packed, |row, col| {
+            let x = &input[row * stride..][..stride];
+            let w = &self.projection.weights[col * stride..][..stride];
+            let dot = if bounds[row] * self.weights_norm[col] <= i64::MAX as u128 {
+                narrow_dot(x, w)
+            } else {
+                wide_dot(x, w)
+            };
+            dot + (i128::from(self.projection.bias[col]) << self.rounding.bits)
         })
+    }
+
+    pub(crate) fn reverse<'w>(
+        &self,
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        claim: Claim,
+        witness: impl Fn() -> (&'w Rounded, &'w [i32]),
+    ) -> Result<Claim> {
+        let raw = self
+            .rounding
+            .recover(io, requests, &claim, || &witness().0.remainder)?;
+        let (row, col) = claim.point.split_at(self.input.row_bits());
+        let active: F = weights(row).into_iter().take(self.input.rows).sum();
+        let bias = inner(
+            weights(col),
+            self.projection.bias.iter().copied().map(F::from_i32),
+        );
+        let public = bind_rows(self.input.width, self.projection.weights, col);
+        let raw = raw - F::from_u64(1 << self.rounding.bits) * active * bias;
+        let end = io.dot(raw, &public, || {
+            bind_rows(self.input.width, witness().1, row)
+        })?;
+        Ok(Claim::new([row, &end.point].concat(), end.value))
+    }
+}
+
+pub(crate) struct Hadamard(Rounding);
+
+impl Hadamard {
+    pub(crate) fn new(layout: &mut Layout, shape: Shape, bits: usize) -> Self {
+        Self(Rounding::new(layout, shape, bits))
     }
 
     pub(crate) fn execute(
         &self,
         left: &[i32],
         right: &[i32],
-        advice: &mut Advice,
+        packed: &mut Packed<'_>,
     ) -> Result<Rounded> {
-        let shape = self.rounding.shape;
-        match self.kind {
-            ProductKind::Pointwise => {
-                shape.check(left)?;
-                shape.check(right)?;
-                self.rounding.execute(
-                    advice,
-                    left.iter()
-                        .zip(right)
-                        .map(|(&a, &b)| i128::from(a) * i128::from(b)),
-                )
-            }
-            ProductKind::Matrix { inner, .. } => {
-                Shape::new(shape.rows, inner)?.check(left)?;
-                self.execute_matrix(left.chunks_exact(inner).map(Cow::Borrowed), right, advice)
-            }
+        let shape = self.0.shape;
+        if left.len() != shape.len() || right.len() != shape.len() {
+            return Err("invalid product dimensions");
         }
+        self.0.execute(packed, |row, col| {
+            let i = row * shape.width + col;
+            i128::from(left[i]) * i128::from(right[i])
+        })
     }
 
-    pub(super) fn execute_matrix<'a>(
+    pub(crate) fn reverse<'w>(
         &self,
-        left: impl Iterator<Item = Cow<'a, [i32]>>,
-        right: &[i32],
-        advice: &mut Advice,
-    ) -> Result<Rounded> {
-        let shape = self.rounding.shape;
-        let ProductKind::Matrix {
-            inner,
-            transpose,
-            factor,
-        } = self.kind
-        else {
-            return Err("expected a matrix product");
-        };
-        if transpose {
-            Shape::new(shape.width, inner)?.check(right)?;
-        } else {
-            Shape::new(inner, shape.width)?.check(right)?;
-        }
-        self.rounding.execute(
-            advice,
-            left.flat_map(|row| {
-                (0..shape.width).map(move |j| {
-                    let sum: i128 = row
-                        .iter()
-                        .enumerate()
-                        .map(|(k, &x)| {
-                            let index = if transpose {
-                                j * inner + k
-                            } else {
-                                k * shape.width + j
-                            };
-                            i128::from(x) * i128::from(right[index])
-                        })
-                        .sum();
-                    i128::from(factor) * sum
-                })
-            }),
-        )
-    }
-
-    pub(super) fn execute_values(
-        &self,
-        left: impl IndexedParallelIterator<Item = Vec<i32>>,
-        right: &ValueColumns,
-        advice: &mut Advice,
-    ) -> Result<Rounded> {
-        let shape = self.rounding.shape;
-        let ProductKind::Matrix {
-            inner,
-            transpose: false,
-            factor,
-        } = self.kind
-        else {
-            return Err("expected an attention value product");
-        };
-        let mut output = vec![0; shape.rows * shape.width];
-        let mut remainder = vec![0; output.len()];
-        left.zip(output.par_chunks_mut(shape.width))
-            .zip(remainder.par_chunks_mut(shape.width))
-            .try_for_each(|((row, output), remainder)| -> Result<()> {
-                let norm: u128 = row.iter().map(|v| u128::from(v.unsigned_abs())).sum();
-                let narrow = norm * right.max_abs <= i64::MAX as u128;
-                for ((out, rem), values) in output
-                    .iter_mut()
-                    .zip(remainder)
-                    .zip(right.values.chunks_exact(inner))
-                {
-                    let values = &values[..row.len()];
-                    let dot = if narrow {
-                        i128::from(narrow_dot(&row, values))
-                    } else {
-                        integer_dot(&row, values)
-                    };
-                    (*out, *rem) =
-                        quotient_remainder(dot * i128::from(factor), self.rounding.bits)?;
-                }
-                Ok(())
-            })?;
-        self.rounding.record(advice, Rounded { output, remainder })
-    }
-
-    pub(super) fn reverse_values<'w, F: ProofField>(
-        products: &[&Self],
-        point: &[F],
-        claims: &[F],
-        trace: impl Fn(usize) -> &'w Rounded,
-        values: impl FnOnce() -> &'w [i32],
-        probabilities: impl Fn(usize, &[F]) -> Vec<F> + Sync,
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<(Vec<Claim<F>>, Claim<F>)> {
-        let first = products[0];
-        let shape = first.rounding.shape;
-        let ProductKind::Matrix {
-            inner,
-            transpose: false,
-            factor,
-        } = first.kind
-        else {
-            return Err("expected an attention value product");
-        };
-        let (row, col) = point.split_at(shape.row_vars());
-        let raw: Vec<_> = products
-            .iter()
-            .zip(claims)
-            .enumerate()
-            .map(|(i, (product, &value))| {
-                product.rounding.reverse(
-                    &Claim {
-                        point: point.to_vec(),
-                        value,
-                    },
-                    || trace(i),
-                    io,
-                )
-            })
-            .collect::<Result<_>>()?;
-        let mix = if raw.len() == 1 {
-            vec![F::one()]
-        } else {
-            io.point(raw.len())?
-        };
-        let sum = dot(raw, mix.iter().copied());
-        let scale = F::from_i32(factor);
-        let size = inner.next_power_of_two();
-        let mut columns = Vec::new();
-        let (end, [value]) = io.fold(
-            instance(sum, size.ilog2() as usize, 2),
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        claim: Claim,
+        witness: impl Fn() -> (&'w Rounded, &'w [i32], &'w [i32]),
+    ) -> Result<[Claim; 2]> {
+        let raw = self
+            .0
+            .recover(io, requests, &claim, || &witness().0.remainder)?;
+        let shape = self.0.shape;
+        let len = 1 << shape.bits();
+        let (end, [left, right]) = io.fold(
+            raw,
+            shape.bits(),
+            3,
             || {
-                columns = (0..products.len())
-                    .into_par_iter()
-                    .map(|i| probabilities(i, row))
-                    .collect();
-                let mut mixed = vec![F::zero(); size];
-                for (column, &weight) in columns.iter().zip(&mix) {
-                    for (out, &entry) in mixed.iter_mut().zip(column) {
-                        *out += weight * entry;
-                    }
-                }
-                let w = weights::<F>(col);
-                let mut v = vec![F::zero(); size];
-                for (out, row) in v.iter_mut().zip(values().chunks_exact(shape.width)) {
-                    *out = dot(row.iter().copied().map(F::from_i32), w.iter().copied());
-                }
-                [Column::owned(v), Column::owned(mixed)]
+                let (_, a, b) = witness();
+                vec![
+                    Column::source(len, move |i| shape.at(a, i)),
+                    Column::source(len, move |i| shape.at(b, i)),
+                    Column::Dense(weights(&claim.point)),
+                ]
             },
-            [0],
-            |v| scale * v[0] * v[1],
+            [0, 1],
+            |v| v[0] * v[1] * v[2],
         )?;
-        let probabilities = (0..products.len())
-            .map(|i| {
-                let [value] = io.values(|| [columns[i].evaluate(&end.challenges)])?;
-                Ok(Claim {
-                    point: [row, &end.challenges].concat(),
-                    value,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        io.check_value(&end, || {
-            scale * value * dot(probabilities.iter().map(|q| q.value), mix)
+        io.expect(&end, || {
+            left * right * equality(&claim.point, &end.challenges)
         })?;
-        Ok((
-            probabilities,
-            Claim {
-                point: [&end.challenges, col].concat(),
-                value,
-            },
-        ))
-    }
-
-    pub(crate) fn reverse<'w, F: ProofField>(
-        &self,
-        q: Claim<F>,
-        trace: impl Fn() -> (&'w [i32], &'w [i32], &'w Rounded),
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<[Claim<F>; 2]> {
-        let shape = self.rounding.shape;
-        match self.kind {
-            ProductKind::Pointwise => {
-                let sum = self.rounding.reverse(&q, || trace().2, io)?;
-                io.pow(shape.vars())?;
-                let (point, [left, right]) = io.relation(
-                    instance(sum, shape.vars(), 3),
-                    || {
-                        [
-                            Column::integer(trace().0, shape),
-                            Column::integer(trace().1, shape),
-                            Column::equality(&q.point),
-                        ]
-                    },
-                    |v| v[0] * v[1] * v[2],
-                    |p, &[l, r]| eq(&q.point, p) * l * r,
-                )?;
-                Ok([
-                    Claim {
-                        point: point.clone(),
-                        value: left,
-                    },
-                    Claim {
-                        point,
-                        value: right,
-                    },
-                ])
-            }
-            ProductKind::Matrix { inner, .. } => self.reverse_matrix(
-                q,
-                || (trace().1, trace().2),
-                |row| bind_rows(inner, trace().0, row),
-                io,
-            ),
-        }
-    }
-
-    pub(super) fn reverse_matrix<'w, F: ProofField>(
-        &self,
-        q: Claim<F>,
-        trace: impl Fn() -> (&'w [i32], &'w Rounded),
-        bind_left: impl FnOnce(&[F]) -> Vec<F>,
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<[Claim<F>; 2]> {
-        let ProductKind::Matrix {
-            inner,
-            transpose,
-            factor,
-        } = self.kind
-        else {
-            return Err("expected a matrix product");
-        };
-        let sum = self.rounding.reverse(&q, || trace().1, io)?;
-        let shape = self.rounding.shape;
-        let (row, col) = q.point.split_at(shape.row_vars());
-        let scale = F::from_i32(factor);
-        let (point, [left, right]) = io.relation(
-            instance(sum, inner.next_power_of_two().ilog2() as usize, 2),
-            || {
-                let a = bind_left(row);
-                let b = trace().0;
-                let b = if transpose {
-                    bind_rows(inner, b, col)
-                } else {
-                    let w = weights::<F>(col);
-                    let mut out = vec![F::zero(); inner.next_power_of_two()];
-                    for (x, row) in out.iter_mut().zip(b.chunks_exact(shape.width)) {
-                        *x = dot(row.iter().copied().map(F::from_i32), w.iter().copied());
-                    }
-                    out
-                };
-                [Column::owned(a), Column::owned(b)]
-            },
-            |v| scale * v[0] * v[1],
-            |_, &[a, b]| scale * a * b,
-        )?;
-        let rhs = if transpose {
-            [col, &point].concat()
-        } else {
-            [&point, col].concat()
-        };
         Ok([
-            Claim {
-                point: [row, &point].concat(),
-                value: left,
-            },
-            Claim {
-                point: rhs,
-                value: right,
-            },
+            Claim::new(end.challenges.clone(), left),
+            Claim::new(end.challenges, right),
         ])
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Rotary<'a> {
-    pub cos: &'a [i32],
-    pub sin: &'a [i32],
-}
-
-pub(crate) struct Rotate<'a> {
-    coefficients: Rotary<'a>,
+pub(crate) struct Rotation<'a> {
     rounding: Rounding,
+    table: Rotary<'a>,
 }
 
-impl<'a> Rotate<'a> {
+impl<'a> Rotation<'a> {
     pub(crate) fn new(
         layout: &mut Layout,
         shape: Shape,
         bits: usize,
-        c: Rotary<'a>,
+        table: Rotary<'a>,
     ) -> Result<Self> {
-        let len = shape.rows * (shape.width / 2);
-        if !shape.width.is_multiple_of(2)
-            || c.cos.len() != len
-            || c.sin.len() != len
-            || c.cos
-                .iter()
-                .chain(c.sin)
-                .any(|x| i64::from(*x).abs() > 1 << bits)
+        if !shape.width.is_power_of_two()
+            || shape.width < 2
+            || table.cos.len() != shape.len() / 2
+            || table.sin.len() != table.cos.len()
         {
-            return Err("invalid rotary coefficients");
+            return Err("invalid rotary dimensions");
         }
         Ok(Self {
-            coefficients: c,
-            rounding: Rounding::new(layout, shape, bits, true)?,
+            rounding: Rounding::new(layout, shape, bits),
+            table,
         })
     }
 
-    pub(crate) fn bind(&self, t: &mut impl Transcript) {
-        bind_i32(t, self.coefficients.cos);
-        bind_i32(t, self.coefficients.sin);
+    fn coefficients(&self, row: usize, col: usize) -> (i32, i32) {
+        let half = self.rounding.shape.width / 2;
+        let i = row * half + col % half;
+        let sine = self.table.sin[i];
+        (self.table.cos[i], if col < half { -sine } else { sine })
     }
 
-    pub(crate) fn execute(&self, x: &[i32], advice: &mut Advice) -> Result<Rounded> {
-        let w = self.rounding.shape.width;
-        let half = w / 2;
-        self.rounding.execute(
-            advice,
-            x.chunks_exact(w).enumerate().flat_map(|(r, row)| {
-                (0..w).map(move |i| {
-                    let j = i % half;
-                    let (c, s) = (
-                        self.coefficients.cos[r * half + j],
-                        self.coefficients.sin[r * half + j],
-                    );
-                    let cross = if i < half {
-                        -i128::from(row[j + half])
-                    } else {
-                        i128::from(row[j])
-                    };
-                    i128::from(row[i]) * i128::from(c) + i128::from(s) * cross
-                })
-            }),
-        )
+    pub(crate) fn execute(&self, input: &[i32], packed: &mut Packed<'_>) -> Result<Rounded> {
+        let width = self.rounding.shape.width;
+        self.rounding.execute(packed, |row, col| {
+            let (cos, sin) = self.coefficients(row, col);
+            let x = &input[row * width..][..width];
+            i128::from(cos) * i128::from(x[col])
+                + i128::from(sin) * i128::from(x[col ^ (width / 2)])
+        })
     }
 
-    pub(crate) fn reverse<'w, F: ProofField>(
+    pub(crate) fn reverse<'w>(
         &self,
-        q: Claim<F>,
-        trace: impl Fn() -> (&'w [i32], &'w Rounded),
-        io: &mut Session<'_, '_, F>,
-    ) -> Result<Claim<F>> {
-        let sum = self.rounding.reverse(&q, || trace().1, io)?;
+        io: &mut Session<'_, '_>,
+        requests: &mut Vec<Request>,
+        claim: Claim,
+        witness: impl Fn() -> (&'w Rounded, &'w [i32]),
+    ) -> Result<Claim> {
+        let sum = self
+            .rounding
+            .recover(io, requests, &claim, || &witness().0.remainder)?;
         let shape = self.rounding.shape;
-        let half = shape.width / 2;
-        let mut w = weights(&q.point);
-        for (r, row) in w
-            .chunks_exact_mut(shape.width.next_power_of_two())
+        let mut coefficients = weights(&claim.point);
+        for (row, entries) in coefficients
+            .chunks_exact_mut(shape.width)
+            .take(shape.rows)
             .enumerate()
         {
-            if r >= shape.rows {
-                row.fill(F::zero());
-                continue;
+            let half = shape.width / 2;
+            for i in 0..half {
+                let (c, s) = self.coefficients(row, i);
+                let (c, s) = (F::from_i32(c), F::from_i32(s));
+                let (a, b) = (entries[i], entries[i + half]);
+                entries[i] = a * c - b * s;
+                entries[i + half] = b * c + a * s;
             }
-            for j in 0..half {
-                let (a, b) = (row[j], row[j + half]);
-                let c = F::from_i32(self.coefficients.cos[r * half + j]);
-                let s = F::from_i32(self.coefficients.sin[r * half + j]);
-                row[j] = a * c + b * s;
-                row[j + half] = b * c - a * s;
-            }
-            row[shape.width..].fill(F::zero());
         }
-        io.public_dot(sum, &w, || shape.padded(trace().0, F::zero(), F::from_i32))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matrix_rounding_cancels_the_public_scale_for_negative_scores() {
-        let mut layout = Layout::default();
-        let product = Product::new(
-            &mut layout,
-            Shape::new(1, 2).unwrap(),
-            5,
-            ProductKind::Matrix {
-                inner: 1,
-                transpose: true,
-                factor: 12,
-            },
-        )
-        .unwrap();
-        let trace = product
-            .execute(&[1], &[-3, 3], &mut layout.witness())
-            .unwrap();
-        assert_eq!(product.rounding.bits, 3);
-        assert_eq!(trace.output, [-2, 1]);
-        assert_eq!(trace.remainder, [7, 1]);
-    }
-}
-
-#[cfg(test)]
-#[test]
-fn parallel_projection_preserves_wide_and_narrow_remainders() {
-    let mut layout = Layout::default();
-    let input = Shape::new(3, 4).unwrap();
-    let weights = [i32::MIN, i32::MIN, i32::MAX, i32::MAX, -1, 3, 1, -3];
-    let bias = [0, -2];
-    let plan = Linear::new(
-        &mut layout,
-        input,
-        Projection {
-            weights: &weights,
-            bias: &bias,
-        },
-        30,
-        false,
-    )
-    .unwrap();
-    let x = [
-        i32::MIN,
-        i32::MIN,
-        i32::MIN,
-        i32::MIN,
-        -7,
-        -7,
-        -7,
-        -7,
-        0,
-        -1,
-        0,
-        0,
-    ];
-    let actual = plan.execute(&x, &mut layout.witness()).unwrap();
-    let scale = 1i128 << 30;
-    let (output, remainder): (Vec<_>, Vec<_>) = x
-        .chunks_exact(4)
-        .flat_map(|row| {
-            weights.chunks_exact(4).zip(bias).map(move |(w, b)| {
-                let value = integer_dot(row, w) + i128::from(b) * scale;
-                (
-                    value.div_euclid(scale) as i32,
-                    value.rem_euclid(scale) as i32,
-                )
-            })
+        io.dot(sum, &coefficients, || {
+            let input = witness().1;
+            (0..coefficients.len())
+                .map(|i| shape.at(input, i))
+                .collect()
         })
-        .unzip();
-    assert_eq!(actual.output, output);
-    assert_eq!(actual.remainder, remainder);
+    }
 }

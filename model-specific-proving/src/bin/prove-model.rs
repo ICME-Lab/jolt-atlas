@@ -1,24 +1,18 @@
-use std::{error::Error, path::Path, time::Instant};
-
 use model_specific_proving::weights::ModelWeights;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let model_dir = args
+    let path = args
         .next()
         .ok_or("usage: prove-model MODEL_DIR FRACTIONAL_BITS TOKEN_ID...")?;
-    let fractional_bits = args.next().ok_or("missing fractional bits")?.parse()?;
+    let bits = args.next().ok_or("missing fractional bits")?.parse()?;
     let tokens = args
         .map(|arg| arg.parse())
         .collect::<Result<Vec<usize>, _>>()?;
-    let weights = ModelWeights::from_safetensors(Path::new(&model_dir), fractional_bits)?;
+    let weights = ModelWeights::from_safetensors(path.as_ref(), bits)?;
     let model = weights.model(tokens.len())?;
-    let start = Instant::now();
-    let (logits, proof) = model.prove(&tokens, None)?;
-    println!("prove: {:.3} s", start.elapsed().as_secs_f64());
-    let start = Instant::now();
-    model.verify(&tokens, None, &logits, &proof)?;
-    println!("verify: {:.3} s", start.elapsed().as_secs_f64());
-    println!("{}", serde_json::to_string(&logits)?);
+    let (output, proof) = model.prove(&tokens, None)?;
+    model.verify(&tokens, None, &output, &proof)?;
+    println!("{}", serde_json::to_string(&output)?);
     Ok(())
 }

@@ -1052,6 +1052,12 @@ Qwen3-0.6Bの実重み、全28層、小数部14ビット、基準計測と同じ
 
 ゲートの28列は18〜24ビットで合計271.50 MiB、残差の56列は17〜28ビットで合計189.625 MiB。残差を受けるRMSNormの分散は全行が44ビット以下で、52ビットの条件を超えた行はなかった。入力Aだけの観測。時間は基準の最初のコミットとBitZの評価証明・書き出しの約241秒だけをパディング後の容量で比例換算した。証明サイズはBitZの512行ごとに送る列の16バイトの折り畳み値の減少分を差し引いた。例外行の処理、別の入力での頻度、ピークメモリへの効果、`up`・`V`・RoPEの範囲列の削減は試算に含めていない。[基準計測](#全28層1024トークンの基準プロファイル)
 
+#### FlashProveの中間テンソルと丸め
+
+- FlashProveはセグメントの中間テンソルをパックしてコミットする。FFNの `up`、活性化出力、Normの出力、グループ内の残差は `af` などに入り、Q/K/VとAttention出力は `qa` に入る。グループ境界の残差 `xbO` は次のグループが参照する。次のグループで同じ配列を改めてコミットしない。[FFNの配列](https://github.com/anthropics/FlashProve/blob/main/docs/format/11-2-feed-forward-segment.md#L34-L62) · [Attentionの入力と出力](https://github.com/anthropics/FlashProve/blob/main/docs/format/11-3-attention-segment.md#L23-L36)
+- 右シフトの丸めでは `A + 2^(k-1) - 2^k Q` の範囲をLookupで証明する。`k ≤ 16` で桁形式 `h=0` の箇所は余りを別にコミットしない。`h=1,2` では余りの上位桁を保持する。Attention出力射影とMLP downの商は隣り合うコミット済みの残差の差 `Q = residual_next - residual_prev` で表すため、射影出力専用の列が要らない。この方法をAtlasに持ち込む場合、残差をSumcheck chainで拘束し、差を整数として確定できることが条件。FlashProveの中点を上に丸める式をAtlasの切り下げに移す場合は `2^(k-1)` を加えない。[丸めのLookup](https://github.com/anthropics/FlashProve/blob/main/docs/format/11-2-feed-forward-segment.md#L599-L620) · [公開上限の検査](https://github.com/anthropics/FlashProve/blob/main/verifier/src/cp_verify.cpp#L1451-L1479)
+- MLPの活性化と `up` の要素積 `hh` はコミットせず、downの積和に直接使う。Q/K射影もRoPEの積和に入れてから丸める。Atlasはこれらの間で丸めるため、同じ融合をする場合は現行の丸めを証明に残す方式と、モデルの整数演算を変更する方式を区別する。[FlashProveの整数演算](https://github.com/anthropics/FlashProve/blob/main/docs/format/11-2-feed-forward-segment.md#L331-L359)
+
 ## 計測の元データ
 
 比較の再集計に必要な値をここに記録する。秒数は各試行の区間計測。ピークは計測対象プロセスの物理メモリ使用量で、ビット配列の容量はパディング後のPCS入力。1 MiBは2²⁰バイト。

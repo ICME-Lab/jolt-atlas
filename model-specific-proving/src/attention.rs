@@ -23,12 +23,9 @@ pub(crate) struct Context<'a> {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Projected {
     transformed: Rounded,
-    norm: Option<(WitnessValues, Vec<Slot>)>,
+    norm: Option<(Option<Witness>, Vec<Slot>)>,
     rotary: Option<Rounded>,
 }
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct WitnessValues(Option<Witness>);
 
 impl Projected {
     fn execute(
@@ -47,12 +44,12 @@ impl Projected {
                 let plan = params.at(shape.rows, bits)?;
                 let output = p.map(|v| plan.witness(v)).transpose()?;
                 let slots = plan.record(advice, p, output.as_ref())?;
-                Ok((WitnessValues(output), slots))
+                Ok((output, slots))
             })
             .transpose()?;
         let values = norm
             .as_ref()
-            .map_or(p, |(x, _)| x.0.as_ref().map(|x| x.result.as_slice()));
+            .map_or(p, |(x, _)| x.as_ref().map(|x| x.result.as_slice()));
         let rotary = rotation
             .map(|r| r.apply(advice, transformed.shape, bits, values))
             .transpose()?;
@@ -67,7 +64,7 @@ impl Projected {
         if let Some(rope) = &self.rotary {
             rope.values.as_deref()
         } else if let Some((x, _)) = &self.norm {
-            x.0.as_ref().map(|w| w.result.as_slice())
+            x.as_ref().map(|w| w.result.as_slice())
         } else {
             self.transformed.values.as_deref()
         }
@@ -78,17 +75,15 @@ impl Projected {
         io: &mut Channel<'_, '_>,
         requests: &mut Requests,
         ctx: &Context<'_>,
-        weights: Projection<'_>,
         norm: Option<NormalizationParameters<'_>>,
         mut claims: Vec<Claim<F>>,
-        input: Option<&[i32]>,
     ) -> Result<Vec<Claim<F>>> {
         if let Some((r, rounded)) = ctx.settings.rotary.zip(self.rotary.as_ref()) {
             let p = self.transformed.values.as_deref();
             let v = self
                 .norm
                 .as_ref()
-                .map_or(p, |(x, _)| x.0.as_ref().map(|x| x.result.as_slice()));
+                .map_or(p, |(x, _)| x.as_ref().map(|x| x.result.as_slice()));
             claims = vec![r.reverse(io, requests, rounded, &claims, v)?];
         }
         if let Some((norm, (trace, slots))) = norm.zip(self.norm.as_ref()) {
@@ -96,18 +91,14 @@ impl Projected {
             claims = vec![n.reduce_model(
                 io,
                 self.transformed.values.as_deref(),
-                trace.0.as_ref(),
+                trace.as_ref(),
                 &claims,
                 &[],
                 slots,
                 requests,
             )?];
         }
-        let terms: Vec<_> = claims
-            .into_iter()
-            .map(|c| (&self.transformed, weights, c))
-            .collect();
-        linear::reverse(io, requests, ctx.shape, ctx.bits, &terms, input)
+        Ok(claims)
     }
 }
 
@@ -246,6 +237,16 @@ impl<'a> Context<'a> {
             .iter()
             .map(|[_, v]| linear::project(advice, self.shape, self.bits, *v, input))
             .collect::<Result<Vec<_>>>()?;
+        let value_columns: Vec<_> = values
+            .iter()
+            .map(|v| {
+                v.values.as_ref().map(|x| {
+                    (0..channels)
+                        .flat_map(|c| x[c..].iter().step_by(channels).copied())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
         let mut heads = Vec::new();
         let group = p.queries.len() / p.groups.len();
         for (i, q) in queries.iter().enumerate() {
@@ -275,15 +276,17 @@ impl<'a> Context<'a> {
                 probability
                     .probabilities
                     .as_deref()
-                    .zip(v.values.as_deref())
+                    .zip(value_columns[i / group].as_deref())
                     .map(|(prob, vals)| {
                         let soft = &soft;
+                        let compact = narrow(prob, vals, n);
                         move |r, c| {
-                            (0..soft.count(r))
-                                .map(|j| {
-                                    i128::from(prob[r * n + j]) * i128::from(vals[j * channels + c])
-                                })
-                                .sum()
+                            let count = soft.count(r);
+                            crate::tensor::dot(
+                                &prob[r * n..][..count],
+                                &vals[c * n..][..count],
+                                compact,
+                            )
                         }
                     }),
             )?;
@@ -344,9 +347,8 @@ impl<'a> Context<'a> {
         let weights = basis(heads);
         let point = [r, col].concat();
         let mut value = F::zero();
-        let mut from_input = Vec::new();
         let soft = Soft::new(self.shape.rows, p.mask, p.tables)?;
-        let mut shared_values = Vec::new();
+        let mut projections = Vec::new();
         let shift = p.factor.trailing_zeros().min(2 * self.bits);
         for (g, key) in trace.keys.iter().enumerate() {
             let v = &trace.values[g];
@@ -401,40 +403,33 @@ impl<'a> Context<'a> {
                     p.factor >> shift,
                     q.values().zip(key.values()),
                 )?;
-                from_input.extend(q.reverse(
+                let query_claims = q.reverse(
                     io,
                     requests,
                     self,
-                    p.queries[i],
                     self.head_norms.map(|n| n[0]),
                     vec![q_claim],
-                    input,
-                )?);
+                )?;
+                projections.extend(
+                    query_claims
+                        .into_iter()
+                        .map(|claim| (&q.transformed, p.queries[i], claim)),
+                );
                 k_claims.push(k_claim);
-                shared_values.push((v, p.groups[g][1], vc));
+                projections.push((v, p.groups[g][1], vc));
             }
-            from_input.extend(key.reverse(
-                io,
-                requests,
-                self,
-                p.groups[g][0],
-                self.head_norms.map(|n| n[1]),
-                k_claims,
-                input,
-            )?);
+            let key_claims =
+                key.reverse(io, requests, self, self.head_norms.map(|n| n[1]), k_claims)?;
+            projections.extend(
+                key_claims
+                    .into_iter()
+                    .map(|claim| (&key.transformed, p.groups[g][0], claim)),
+            );
         }
         if value != claim.value {
             return Err("invalid Attention head concatenation");
         }
-        from_input.extend(linear::reverse(
-            io,
-            requests,
-            self.shape,
-            self.bits,
-            &shared_values,
-            input,
-        )?);
-        Ok(from_input)
+        linear::reverse(io, requests, self.shape, self.bits, &projections, input)
     }
 }
 

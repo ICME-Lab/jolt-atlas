@@ -1,12 +1,16 @@
 //! A residual addition only splits an existing evaluation claim.
 
+#[cfg(test)]
 use crate::norm::Claim;
+#[cfg(test)]
 use jolt_field::Field;
+#[cfg(test)]
 use jolt_transcript::{Encoding, Transcript};
 
 /// The caller sends `left_value` before any challenge that uses either child.
 /// The two returned claims still have to be discharged by their producers.
-pub fn split<F: Field + Encoding>(
+#[cfg(test)]
+pub(crate) fn split<F: Field + Encoding>(
     output: Claim<F>,
     left_value: F,
     transcript: &mut impl Transcript,

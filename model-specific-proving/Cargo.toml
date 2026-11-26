@@ -17,6 +17,7 @@ required-features = ["safetensors-weights"]
 bincode = "1.3"
 tracing = "0.1"
 tempfile = "3"
+memmap2 = "0.9"
 world-common = { package = "common", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
 world-field = { package = "field", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
 world-pcs = { package = "pcs", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }

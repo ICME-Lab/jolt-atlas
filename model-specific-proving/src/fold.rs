@@ -5,6 +5,12 @@ use rayon::prelude::*;
 
 pub(crate) enum Column<'a, F> {
     Source(usize, Box<dyn Fn(usize) -> F + Sync + 'a>),
+    Selector {
+        len: usize,
+        read: Box<dyn Fn(usize) -> usize + Sync + 'a>,
+        radix: usize,
+        values: Vec<F>,
+    },
     Table {
         values: Vec<F>,
         len: usize,
@@ -17,6 +23,19 @@ impl<'a, F: Field> Column<'a, F> {
         Self::Source(len, Box::new(read))
     }
 
+    pub(crate) fn selector(
+        len: usize,
+        values: &[F],
+        read: impl Fn(usize) -> usize + Sync + 'a,
+    ) -> Self {
+        Self::Selector {
+            len,
+            read: Box::new(read),
+            radix: values.len(),
+            values: values.to_vec(),
+        }
+    }
+
     pub(crate) fn table(values: Vec<F>, len: usize, repeat: usize) -> Self {
         Self::Table {
             values,
@@ -27,13 +46,25 @@ impl<'a, F: Field> Column<'a, F> {
 
     fn len(&self) -> usize {
         match self {
-            Self::Source(len, _) | Self::Table { len, .. } => *len,
+            Self::Source(len, _) | Self::Table { len, .. } | Self::Selector { len, .. } => *len,
         }
     }
 
     fn at(&self, index: usize) -> F {
         match self {
             Self::Source(_, read) => read(index),
+            Self::Selector {
+                len,
+                read,
+                radix,
+                values,
+            } => {
+                let mut sum = values[read(index)];
+                for (prefix, table) in values.chunks_exact(*radix).enumerate().skip(1) {
+                    sum += table[read(prefix * *len + index)];
+                }
+                sum
+            }
             Self::Table { values, shift, .. } => values[(index >> shift) & (values.len() - 1)],
         }
     }
@@ -61,6 +92,20 @@ impl<'a, F: Field> Column<'a, F> {
             return;
         }
 
+        if let Self::Selector {
+            len, radix, values, ..
+        } = self
+        {
+            if values.len() == *radix {
+                let next: Vec<_> = values.iter().map(|&v| point * v).collect();
+                for (value, &b) in values.iter_mut().zip(&next) {
+                    *value -= b;
+                }
+                values.extend(next);
+                *len = half;
+                return;
+            }
+        }
         let value = |i| {
             let a = self.at(i);
             a + point * (self.at(i + half) - a)
@@ -208,7 +253,11 @@ pub(crate) fn agreement<F: Field>(a: &[F], b: &[F]) -> F {
 }
 
 pub(crate) fn basis<F: Field>(point: &[F]) -> Vec<F> {
-    let mut weights = vec![F::one()];
+    basis_scaled(point, F::one())
+}
+
+pub(crate) fn basis_scaled<F: Field>(point: &[F], scale: F) -> Vec<F> {
+    let mut weights = vec![scale];
     for &r in point.iter().rev() {
         let count = weights.len();
         for i in 0..count {

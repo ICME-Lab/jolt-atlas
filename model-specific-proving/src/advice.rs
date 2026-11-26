@@ -1,7 +1,5 @@
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom, Write},
-};
+use rayon::prelude::*;
+use std::{fs::File, io::Write};
 
 use crate::{
     bitz::{Group, Query, RangeColumn},
@@ -17,6 +15,7 @@ pub(crate) struct Slot(usize);
 
 pub(crate) struct Advice {
     file: Option<File>,
+    mapped: Option<memmap2::Mmap>,
     columns: Vec<Record>,
     cursor: u64,
 }
@@ -63,6 +62,7 @@ impl Advice {
         };
         Ok(Self {
             file,
+            mapped: None,
             columns: Vec::new(),
             cursor: 0,
         })
@@ -72,7 +72,7 @@ impl Advice {
         &mut self,
         shape: Shape,
         width: Width,
-        source: impl Fn(usize) -> i128,
+        source: impl Fn(usize) -> i128 + Sync,
     ) -> Result<Slot> {
         self.record(shape, width, false, source)
     }
@@ -81,7 +81,7 @@ impl Advice {
         &mut self,
         shape: Shape,
         width: u8,
-        source: impl Fn(usize) -> i128,
+        source: impl Fn(usize) -> i128 + Sync,
     ) -> Result<Slot> {
         self.record(shape, Width::Unsigned(width), true, source)
     }
@@ -91,27 +91,32 @@ impl Advice {
         shape: Shape,
         mut width: Width,
         fixed: bool,
-        source: impl Fn(usize) -> i128,
+        source: impl Fn(usize) -> i128 + Sync,
     ) -> Result<Slot> {
         let slot = Slot(self.columns.len());
         let start = self.cursor;
         if let Some(file) = &mut self.file {
             if !fixed {
-                let mut required = 0;
-                for j in 0..shape.rows * shape.cols {
-                    let x = source(j);
-                    let n = match width {
-                        Width::Signed(_) => {
-                            129 - if x < 0 {
-                                (!x as u128).leading_zeros()
-                            } else {
-                                (x as u128).leading_zeros()
+                let required = (0..shape.rows * shape.cols)
+                    .into_par_iter()
+                    .with_min_len(8192)
+                    .map(|j| {
+                        let x = source(j);
+                        let n = match width {
+                            Width::Signed(_) => {
+                                129 - if x < 0 {
+                                    (!x as u128).leading_zeros()
+                                } else {
+                                    (x as u128).leading_zeros()
+                                }
                             }
-                        }
-                        Width::Unsigned(_) => 128 - (x as u128).leading_zeros(),
-                    };
-                    required = required.max(n as usize);
-                }
+                            Width::Unsigned(_) => 128 - (x as u128).leading_zeros(),
+                        };
+                        n as usize
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let mut required = required;
                 required = required.max(usize::from(matches!(width, Width::Signed(_))));
                 if required > bits(width) {
                     return Err("advice exceeds declared integer range");
@@ -121,17 +126,32 @@ impl Advice {
             let n = bits(width);
             if n != 0 {
                 let len = shape.padded();
-                let mut out = vec![0u8; (len * n).div_ceil(8) + 16];
-                for i in 0..len {
-                    let x = shape.index(i).map_or(0, &source);
-                    let encoded =
-                        encode(x, width).ok_or("advice exceeds declared integer range")? as u128;
-                    let at = i * n / 8;
-                    let before = u128::from_le_bytes(out[at..][..16].try_into().unwrap());
-                    out[at..][..16]
-                        .copy_from_slice(&(before | (encoded << (i * n % 8))).to_le_bytes());
-                }
-                out.truncate((len * n).div_ceil(8));
+                let mut out = vec![0u8; (len * n).div_ceil(8)];
+                out.par_chunks_mut(128 * n).enumerate().try_for_each(
+                    |(block, chunk)| -> Result<()> {
+                        let start = block << 10;
+                        let mut cursor = 0;
+                        let mut word = 0u128;
+                        let mut used = 0;
+                        for i in start..(start + 1024).min(len) {
+                            let x = shape.index(i).map_or(0, &source);
+                            let value = encode(x, width)
+                                .ok_or("advice exceeds declared integer range")?
+                                as u128;
+                            word |= value << used;
+                            used += n;
+                            while used >= 64 {
+                                chunk[cursor..cursor + 8]
+                                    .copy_from_slice(&(word as u64).to_le_bytes());
+                                cursor += 8;
+                                used -= 64;
+                                word = if used == 0 { 0 } else { value >> (n - used) };
+                            }
+                        }
+                        chunk[cursor..].copy_from_slice(&word.to_le_bytes()[..used.div_ceil(8)]);
+                        Ok(())
+                    },
+                )?;
                 file.write_all(&out).map_err(|_| "could not store advice")?;
                 self.cursor += out.len() as u64;
             }
@@ -203,34 +223,28 @@ impl Advice {
         Ok(Buckets(groups))
     }
 
-    fn load(&mut self, ids: &[usize]) -> Result<Vec<Vec<u8>>> {
-        let file = self.file.as_mut().ok_or("missing prover advice")?;
-        ids.iter()
-            .map(|&i| {
-                let record = &self.columns[i];
-                let len = (bits(record.kind.width) * (1 << record.kind.vars)).div_ceil(8);
-                let mut buffer = vec![0; len + 16];
-                if len != 0 {
-                    file.seek(SeekFrom::Start(record.at))
-                        .and_then(|_| file.read_exact(&mut buffer[..len]))
-                        .map_err(|_| "could not read advice")?;
-                }
-                Ok(buffer)
-            })
-            .collect()
+    fn seal(&mut self) -> Result<()> {
+        let mut file = self.file.take().ok_or("missing prover advice")?;
+        file.write_all(&[0; 16])
+            .map_err(|_| "could not finish advice file")?;
+        // The temporary file is private, and its only writable handle is dropped here.
+        let mapped =
+            unsafe { memmap2::Mmap::map(&file) }.map_err(|_| "could not map prover advice")?;
+        self.mapped = Some(mapped);
+        Ok(())
     }
 
-    fn commit(&mut self, group: &Group, ids: &[usize]) -> Result<crate::bitz::Committed> {
-        let buffers = self.load(ids)?;
-        group.commit_detached(|i, cell| self.value(ids[i], cell, &buffers[i]))
-    }
-
-    fn value(&self, id: usize, cell: usize, data: &[u8]) -> i128 {
-        let width = self.columns[id].kind.width;
-        let n = bits(width);
-        let bit = cell * n;
-        let word = u128::from_le_bytes(data[bit / 8..][..16].try_into().unwrap());
-        ((word >> (bit % 8)) & ((1 << n) - 1)) as i128 - offset(width)
+    fn source<'a>(&'a self, ids: &'a [usize]) -> impl Fn(usize, usize) -> i128 + Sync + 'a {
+        let data = self.mapped.as_ref().unwrap();
+        move |slot, cell| {
+            let record = &self.columns[ids[slot]];
+            let width = record.kind.width;
+            let n = bits(width);
+            let bit = cell * n;
+            let at = record.at as usize + bit / 8;
+            let word = u128::from_le_bytes(data[at..][..16].try_into().unwrap());
+            ((word >> (bit % 8)) & ((1 << n) - 1)) as i128 - offset(width)
+        }
     }
 }
 
@@ -240,10 +254,11 @@ impl Buckets {
         advice: &mut Advice,
         channel: &mut ProverState<Keccak>,
     ) -> Result<Vec<[u8; 32]>> {
+        advice.seal()?;
         self.0
             .iter()
             .map(|(group, ids)| {
-                let root = advice.commit(group, ids)?.root;
+                let root = group.commit_detached(advice.source(ids))?.root;
                 channel.append_bytes(&root);
                 Ok(root)
             })
@@ -294,13 +309,12 @@ impl Buckets {
             for (i, (((group, ids), root), queries)) in
                 self.0.iter().zip(roots).zip(requests).enumerate()
             {
-                let data = advice.load(ids)?;
-                let source = |i: usize, cell: usize| advice.value(ids[i], cell, data[i].as_slice());
-                let committed = group.commit_detached(source)?;
+                let source = advice.source(ids);
+                let committed = group.commit_detached(&source)?;
                 if &committed.root != root {
                     return Err("advice commitment changed");
                 }
-                let job = group.reduce(committed, &queries, channel, Some(source))?;
+                let job = group.reduce(committed, &queries, channel, source)?;
                 if let Some((send, receive)) = &queue {
                     if i != 0 {
                         emit(receive.recv().map_err(|_| "BitZ worker stopped")??)?;

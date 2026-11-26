@@ -1,10 +1,11 @@
+use rayon::prelude::*;
 use std::sync::Arc;
 
 use crate::{
     advice::{Advice, Requests, Slot},
     channel::{Channel, Result},
     field::F,
-    fold::{agreement, basis, Column},
+    fold::{agreement, basis, basis_scaled, Column},
     tensor::Shape,
 };
 use jolt_field::{One, Ring, Zero};
@@ -32,14 +33,17 @@ impl Table<'_> {
         }
     }
 
+    #[inline]
     pub(crate) fn values(self, i: usize) -> (F, F) {
         match self {
             Self::Values(a) => (F::from_i32(a[i]), F::zero()),
             Self::Pair(prob, sums, limit, scale) => {
                 let previous = if i == 0 { limit + 1 } else { sums[i - 1] };
+                let initial = u128::from(sums[0] as u32) + scale * (limit as u128 + 1);
+                let value = u128::from(sums[i] as u32) + scale * previous as u128;
                 (
-                    F::from_i32(prob[i]),
-                    F::from_i32(sums[i]) + F::from_u128(scale) * F::from_i32(previous),
+                    F::from_i64(i64::from(prob[i]) - i64::from(prob[0])),
+                    F::from_i128(value as i128 - initial as i128),
                 )
             }
         }
@@ -157,13 +161,30 @@ impl<'a> Lookups<'a> {
             b,
             2,
             || {
-                let mut bins = vec![F::zero(); n];
-                for (r, &m) in reads.iter().zip(mix) {
-                    let codes = r.lookup.addresses.as_ref().unwrap();
-                    for (&addr, w) in codes.iter().zip(basis(&r.point)) {
-                        bins[addr as usize] += m * w;
-                    }
-                }
+                let jobs = reads
+                    .len()
+                    .div_ceil(rayon::current_num_threads().min(4))
+                    .max(1);
+                let bins = reads
+                    .par_chunks(jobs)
+                    .zip(mix.par_chunks(jobs))
+                    .map(|(reads, mix)| {
+                        let mut local = vec![F::zero(); n];
+                        for (r, &m) in reads.iter().zip(mix) {
+                            let codes = r.lookup.addresses.as_ref().unwrap();
+                            for (&addr, w) in codes.iter().zip(basis_scaled(&r.point, m)) {
+                                local[addr as usize] += w;
+                            }
+                        }
+                        local
+                    })
+                    .reduce_with(|mut a, b| {
+                        for (v, w) in a.iter_mut().zip(b) {
+                            *v += w;
+                        }
+                        a
+                    })
+                    .unwrap();
                 [Column::table(bins, n, 1), Column::source(n, value)]
             },
             [0],
@@ -183,7 +204,6 @@ impl<'a> Lookups<'a> {
         } else {
             let count = reads.len().div_ceil(batch);
             let partials = io.fields(count, || {
-                use rayon::prelude::*;
                 let selection = basis(&at.challenges);
                 reads
                     .par_chunks(batch)
@@ -253,8 +273,8 @@ impl<'a> Lookups<'a> {
                     let codes = r.lookup.addresses.as_ref().unwrap();
                     for (&(_, shift, width), weights) in digits.iter().zip(weights) {
                         let mask = (1usize << width) - 1;
-                        cols.push(Column::source(len, move |i| {
-                            weights[(codes[i] as usize >> shift) & mask]
+                        cols.push(Column::selector(len, weights, move |i| {
+                            (codes[i] as usize >> shift) & mask
                         }));
                     }
                     cols.push(Column::table(basis(&r.point), len, 1));

@@ -7,7 +7,7 @@ use crate::{
 use jolt_sumcheck::single::{
     prove_single, verify_single, SingleFormat, SingleInstance, SingleReduction, SingleSumcheckProof,
 };
-use jolt_transcript::{FieldTranscript, Keccak, ProverState, Transcript, VerifierState};
+use jolt_transcript::{Keccak, ProverState, Transcript, VerifierState};
 use serde::{Deserialize, Serialize};
 
 pub type Result<T> = std::result::Result<T, &'static str>;

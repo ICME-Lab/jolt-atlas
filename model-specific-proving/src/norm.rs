@@ -1,6 +1,6 @@
 //! A normalization proof also reduces any outstanding evaluation of its input.
 
-use crate::fold::{agreement, basis, Column, Fold};
+use crate::fold::{agreement, basis, basis_scaled, Column, Fold};
 use crate::{
     advice::{Advice, Requests, Slot},
     channel::Channel,
@@ -16,12 +16,11 @@ use jolt_transcript::{Encoding, FieldTranscript, ProverTranscript};
 #[cfg(test)]
 use crate::bitz;
 #[cfg(test)]
-use jolt_transcript::{Keccak, ProverState, VerifierState};
+use jolt_transcript::{ProverState, Transcript, VerifierState};
 
 type Result<T> = std::result::Result<T, &'static str>;
 const PRIVATE: usize = 15;
 const TOTAL: usize = 24;
-const DEGREE: usize = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Claim<F> {
@@ -92,19 +91,25 @@ impl<F: Field + 'static> Weights<F> {
         if self.points.is_empty() {
             return Column::table(vec![F::zero()], len, len);
         }
+        let column = &self.points[0].1[self.split..];
+        if self.points.iter().all(|(_, p)| &p[self.split..] == column) {
+            let col = basis(column);
+            let mut row = vec![F::zero(); len / stride];
+            for (a, p) in &self.points {
+                for (acc, w) in row.iter_mut().zip(basis_scaled(&p[..self.split], *a)) {
+                    *acc += w;
+                }
+            }
+            return Column::source(len, move |i| row[i / stride] * col[i % stride]);
+        }
         let terms: Vec<_> = self
             .points
             .iter()
             .map(|(a, point)| {
                 let (row, col) = point.split_at(self.split);
-                let values: Vec<_> = basis(row).into_iter().map(|w| *a * w).collect();
-                (values, basis(col))
+                (basis_scaled(row, *a), basis(col))
             })
             .collect();
-        if terms.len() == 1 {
-            let (r, c) = terms.into_iter().next().unwrap();
-            return Column::source(len, move |i| r[i / stride] * c[i % stride]);
-        }
         let mut out = vec![F::zero(); len];
         out.par_chunks_mut(stride)
             .with_min_len(8)
@@ -259,7 +264,11 @@ impl Norm<'_> {
             claims: SingleInstance {
                 input_claim,
                 rounds: domain.rounds(),
-                degree: DEGREE,
+                degree: if domain.height == self.rows && domain.stride == self.gain.len() {
+                    3
+                } else {
+                    4
+                },
                 format: SingleFormat::Compressed,
             },
             point: point.to_vec(),
@@ -455,11 +464,19 @@ impl Norm<'_> {
             }
             15 => public(self.gain),
             16 => public(self.bias),
+            17 if d.stride == width => Column::table(vec![F::one()], size, size),
+            18 if d.stride == width && d.height == self.rows => {
+                Column::table(vec![F::one()], size, size)
+            }
             17 => Column::source(size, move |i| F::from_bool(i % d.stride < width)),
             18 => Column::source(size, move |i| {
                 F::from_bool(i / d.stride < self.rows && i % d.stride < width)
             }),
-            19 => Column::source(size, move |i| F::from_bool(i % d.stride == 0)),
+            19 => Column::table(
+                (0..d.stride).map(|i| F::from_bool(i == 0)).collect(),
+                size,
+                1,
+            ),
             20 => out.take().unwrap(),
             21 => carry.take().unwrap(),
             22 => Column::source(size, {
@@ -495,7 +512,7 @@ impl Norm<'_> {
         let check = self.check(domain, channel, output, carry)?;
         let mut fold = Fold {
             columns: Vec::from(self.columns(domain, input, witness, &check)),
-            degree: DEGREE,
+            degree: check.claims.degree,
             relation: |v: &[F]| self.polynomial(&check.coefficients, v.try_into().unwrap()),
         };
         let (rounds, end) = prove_single(&mut fold, &check.claims, channel)
@@ -623,27 +640,32 @@ mod tests {
             let domain = self.domain()?;
             let witness = self.witness(input)?;
             let group = self.group(domain)?;
-            let committed = group.commit(
-                |slot, i| {
-                    if slot < 5 {
-                        self.cell(
-                            input,
-                            &witness,
-                            i / domain.stride,
-                            i % domain.stride,
-                            slot + 1,
-                        )
-                    } else {
-                        witness.stats.get(i).map_or(0, |row| row[slot - 5])
-                    }
-                },
-                channel,
-            )?;
+            let source = |slot: usize, i: usize| {
+                if slot < 5 {
+                    self.cell(
+                        input,
+                        &witness,
+                        i / domain.stride,
+                        i % domain.stride,
+                        slot + 1,
+                    )
+                } else {
+                    witness.stats.get(i).map_or(0, |r| r[slot - 5])
+                }
+            };
+            let committed = group.commit_detached(source)?;
+            channel.append_bytes(&committed.root);
             let root = committed.root;
             let (relation, reduction) =
                 self.prove_with(domain, input, &witness, output, carry, channel)?;
-            let evaluations =
-                group.prove(committed, &reduction.queries(domain.row_bits()), channel)?;
+            let evaluations = group
+                .reduce(
+                    committed,
+                    &reduction.queries(domain.row_bits()),
+                    channel,
+                    source,
+                )?
+                .open(&mut std::collections::HashMap::new())?;
             Ok((
                 CommittedProof {
                     root,

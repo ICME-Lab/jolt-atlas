@@ -1,26 +1,26 @@
 //! Jolt transcript and polynomial traits for World BitZ's prime field.
 
-use crypto_primitives::LiftElement;
 use jolt_field::{CanonicalBytes, CanonicalEncoding, Field, Ring};
 use jolt_transcript::{
     ChallengeSetSize, Encoding, FieldTranscript, Keccak, ProverState, ProverTranscript,
     VerificationError, VerifierState, VerifierTranscript, MAX_CHALLENGE_BYTES,
 };
-use num_traits::{ConstOne, ConstZero, Zero};
+use num_traits::Zero;
 
-const MODULUS: u128 = (1 << 119) - 69;
+const MASK: u128 = (1 << 119) - 1;
+const MODULUS: u128 = MASK - 68;
 pub type Scalar = world_field::Fq<MODULUS>;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct F(pub Scalar);
+pub struct F(u128);
 
 jolt_field::impl_ring_ops!(impl[] F {
-    add(a, b): Self(a.0 + b.0),
-    sub(a, b): Self(a.0 - b.0),
-    mul(a, b): Self(a.0 * b.0),
-    neg(a): Self(-a.0),
-    zero: Self(Scalar::ZERO),
-    one: Self(Scalar::ONE),
+    add(a, b): Self(canonical(a.0 + b.0)),
+    sub(a, b): Self(canonical((a.0 + MODULUS) - b.0)),
+    mul(a, b): a.multiply(b),
+    neg(a): Self(canonical(MODULUS - a.0)),
+    zero: Self(0),
+    one: Self(1),
 });
 jolt_field::impl_serde_bytes!(impl[] F, 16);
 
@@ -32,7 +32,7 @@ impl std::fmt::Display for F {
 
 impl Ring for F {
     fn from_u64(value: u64) -> Self {
-        Self(Scalar::from(value))
+        Self(u128::from(value))
     }
 
     fn from_i64(value: i64) -> Self {
@@ -45,7 +45,7 @@ impl Ring for F {
     }
 
     fn from_u128(value: u128) -> Self {
-        Self(Scalar::from(value))
+        Self(canonical(fold(value)))
     }
 
     fn from_i128(value: i128) -> Self {
@@ -58,13 +58,43 @@ impl Ring for F {
     }
 }
 
+#[inline]
+fn canonical(value: u128) -> u128 {
+    if value < MODULUS {
+        value
+    } else {
+        value - MODULUS
+    }
+}
+
+#[inline]
+fn fold(value: u128) -> u128 {
+    (value & MASK) + 69 * (value >> 119)
+}
+
 impl F {
+    #[inline]
+    fn multiply(self, other: Self) -> Self {
+        let [a, b] = [u128::from(self.0 as u64), self.0 >> 64];
+        let [c, d] = [u128::from(other.0 as u64), other.0 >> 64];
+        let low = a * c;
+        let middle = a * d + b * c + (low >> 64);
+        let upper = b * d + (middle >> 64);
+        let tail = u128::from(low as u64) | ((middle & ((1 << 55) - 1)) << 64);
+        let high = (u128::from(middle as u64) >> 55) | (upper << 9);
+        Self(canonical(fold(tail + 69 * high)))
+    }
+
+    pub(crate) fn scalar(self) -> Scalar {
+        Scalar::from(self.0)
+    }
+
     pub(crate) fn mul_integer(self, integer: i128) -> Self {
         let magnitude = integer.unsigned_abs();
         let Ok(word) = u64::try_from(magnitude) else {
             return self * Self::from_i128(integer);
         };
-        let x = self.0.lift();
+        let x = self.0;
         let lower = u128::from(x as u64) * u128::from(word);
         let upper = (x >> 64) * u128::from(word) + (lower >> 64);
         let low_bits = (upper as u64 & ((1 << 55) - 1)) as u128;
@@ -79,7 +109,7 @@ impl F {
 
 impl Field for F {
     fn inverse(&self) -> Option<Self> {
-        (!self.is_zero()).then(|| Self::from_u128(Scalar::META.pow(self.0.lift(), MODULUS - 2)))
+        (!self.is_zero()).then(|| Self::from_u128(Scalar::META.pow(self.0, MODULUS - 2)))
     }
 
     fn random<R: rand_core::RngCore>(rng: &mut R) -> Self {
@@ -97,7 +127,7 @@ impl CanonicalBytes for F {
     const NUM_BYTES: usize = 16;
 
     fn to_bytes_le(&self, out: &mut [u8]) {
-        out.copy_from_slice(&self.0.lift().to_le_bytes());
+        out.copy_from_slice(&self.0.to_le_bytes());
     }
 }
 
@@ -118,11 +148,11 @@ impl CanonicalEncoding for F {
     }
 
     fn num_bits(&self) -> u32 {
-        128 - self.0.lift().leading_zeros()
+        128 - self.0.leading_zeros()
     }
 
     fn to_u128_checked(&self) -> Option<u128> {
-        Some(self.0.lift())
+        Some(self.0)
     }
 
     fn from_u128_checked(value: u128) -> Option<Self> {
@@ -136,7 +166,7 @@ impl CanonicalEncoding for F {
 
 impl Encoding for F {
     fn encode(&self) -> impl AsRef<[u8]> {
-        self.0.lift().to_le_bytes()
+        self.0.to_le_bytes()
     }
 }
 
@@ -213,5 +243,53 @@ impl Mixing<F> for ProverState<Keccak> {
 impl Mixing<F> for VerifierState<'_, Keccak> {
     fn grind_mix(&mut self, bits: u32) -> Result<(), VerificationError> {
         self.check_grind(bits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crypto_primitives::LiftElement;
+
+    #[test]
+    fn field_operations_match_world_on_carries_and_boundaries() {
+        let boundary = [
+            0,
+            1,
+            68,
+            69,
+            1 << 55,
+            1 << 64,
+            MODULUS - 2,
+            MODULUS - 1,
+            MODULUS,
+            u128::MAX,
+        ];
+        let check = |a, b| {
+            let (aa, bb) = (F::from_u128(a), F::from_u128(b));
+            let (sa, sb) = (Scalar::from(a), Scalar::from(b));
+            assert_eq!((aa * bb).0, (sa * sb).lift());
+            assert_eq!((aa + bb).0, (sa + sb).lift());
+            assert_eq!((aa - bb).0, (sa - sb).lift());
+            assert_eq!(
+                aa.mul_integer(i128::from(b as i64)),
+                aa * F::from_i64(b as i64)
+            );
+        };
+        for a in boundary {
+            for b in boundary {
+                check(a, b);
+            }
+        }
+        let mut seed = 12345u128;
+        let mut random = || {
+            seed = seed
+                .wrapping_mul(47026247687942121848144207491837523525)
+                .wrapping_add(1);
+            seed ^ (seed >> 79)
+        };
+        for _ in 0..10000 {
+            check(random(), random());
+        }
     }
 }

@@ -7,7 +7,7 @@ use jolt_field::{Ring, Zero};
 use jolt_sumcheck::single::{
     prove_single, verify_single, SingleFormat, SingleInstance, SingleReduction, SingleSumcheckProof,
 };
-use jolt_transcript::{FieldTranscript, Keccak, ProverState, Transcript, VerifierState};
+use jolt_transcript::{Keccak, ProverState, Transcript, VerifierState};
 use std::{ops::Range, sync::OnceLock};
 use world_common::{shape::MIN_LOG_BITS, BitZParams, LinearClaim, Root, SecurityLevel, Shape};
 use world_field::{gf128::smallest_generator, F128};
@@ -146,51 +146,54 @@ impl Group {
         })
     }
 
-    /// A slot includes the full Boolean domain. Callers pad tensor holes with zero.
-    pub fn commit(
-        &self,
-        source: impl Fn(usize, usize) -> i128,
-        outer: &mut ProverState<Keccak>,
-    ) -> Result<Committed> {
-        let result = self.commit_detached(source)?;
-        outer.append_bytes(&result.root);
-        Ok(result)
-    }
-
     pub(crate) fn commit_detached(
         &self,
-        source: impl Fn(usize, usize) -> i128,
+        source: impl Fn(usize, usize) -> i128 + Sync,
     ) -> Result<Committed> {
         let mut packed = vec![F128::from(0u128); self.pcs.packed_len()];
-        for (slot, placement) in self.placements.iter().enumerate() {
-            let bit_count = placement.range.bits();
-            let offset = placement.range.offset();
-            let cells = 1 << placement.range.vars;
-            for col in 0..placement.columns {
-                for group in 0..WORDS {
-                    let mut planes = [0u128; 65];
-                    let start = col * ROWS + group * 128;
-                    for index in start..(start + 128).min(cells) {
-                        let value = source(slot, index)
-                            .checked_add(offset)
-                            .ok_or("range overflow")?;
-                        if !(0..1i128 << bit_count).contains(&value) {
-                            return Err("integer outside committed range");
+        use rayon::prelude::*;
+        let mut rest = packed.as_mut_slice();
+        let jobs: Vec<_> = self
+            .placements
+            .iter()
+            .enumerate()
+            .map(|(slot, placement)| {
+                let words = placement.range.bits() * placement.columns * WORDS;
+                let (here, tail) = std::mem::take(&mut rest).split_at_mut(words);
+                rest = tail;
+                (slot, placement, here)
+            })
+            .collect();
+        jobs.into_par_iter()
+            .try_for_each(|(slot, placement, output)| -> Result<()> {
+                let width = placement.range.bits();
+                let offset = placement.range.offset();
+                let cells = 1 << placement.range.vars;
+                for col in 0..placement.columns {
+                    for group in 0..WORDS {
+                        let mut planes = [0u128; 65];
+                        let start = col * ROWS + group * 128;
+                        for index in start..(start + 128).min(cells) {
+                            let value = source(slot, index)
+                                .checked_add(offset)
+                                .ok_or("range overflow")?;
+                            if !(0..1i128 << width).contains(&value) {
+                                return Err("integer outside committed range");
+                            }
+                            let mut value = value as u128;
+                            while value != 0 {
+                                planes[value.trailing_zeros() as usize] |= 1 << (index - start);
+                                value &= value - 1;
+                            }
                         }
-                        let mut value = value as u128;
-                        while value != 0 {
-                            planes[value.trailing_zeros() as usize] |= 1 << (index - start);
-                            value &= value - 1;
+                        for (bit, &encoded) in planes[..width].iter().enumerate() {
+                            let pos = (bit * placement.columns + col) * WORDS + group;
+                            output[pos] = F128::from(encoded);
                         }
-                    }
-                    for (bit, &encoded) in planes[..bit_count].iter().enumerate() {
-                        let pos =
-                            ((placement.start + bit * placement.columns + col) * WORDS) + group;
-                        packed[pos] = F128::from(encoded);
                     }
                 }
-            }
-        }
+                Ok(())
+            })?;
         let mut channel = build_prover(DOMAIN, b"");
         let (root, data) = self
             .pcs
@@ -268,22 +271,12 @@ impl Group {
         Ok((instance, queries))
     }
 
-    pub fn prove(
-        &self,
-        committed: Committed,
-        queries: &[Query],
-        outer: &mut ProverState<Keccak>,
-    ) -> Result<Proof> {
-        self.reduce(committed, queries, outer, None::<fn(usize, usize) -> i128>)?
-            .open(&mut std::collections::HashMap::new())
-    }
-
     pub(crate) fn reduce(
         &self,
         committed: Committed,
         queries: &[Query],
         outer: &mut ProverState<Keccak>,
-        source: Option<impl Fn(usize, usize) -> i128 + Sync>,
+        source: impl Fn(usize, usize) -> i128 + Sync,
     ) -> Result<Pending<'_>> {
         use rayon::prelude::*;
         let (instance, queries) = self.prepare(queries, outer)?;
@@ -291,37 +284,31 @@ impl Group {
             .par_iter()
             .map(|q| {
                 let mut values = vec![F::zero(); ROWS];
-                if let Some(source) = &source {
-                    let layout = q.placement.range;
-                    let count = (1 << layout.vars).min(ROWS);
-                    for (col, &weight) in q.column.iter().enumerate() {
-                        let w = weight * q.scale;
-                        for (row, v) in values[..count].iter_mut().enumerate() {
-                            let x = (source(q.slot, col * ROWS + row) + layout.offset()) as u128;
-                            if q.binary {
-                                let mut bits = x;
-                                while bits != 0 {
-                                    *v += w * q.planes[bits.trailing_zeros() as usize];
-                                    bits &= bits - 1;
-                                }
-                            } else {
-                                *v += w.mul_integer(x as i128);
-                            }
+                let layout = q.placement.range;
+                let count = (1 << layout.vars).min(ROWS);
+                if q.binary && q.planes.iter().all(|&x| x == F::from_u64(1)) {
+                    // Lookup advice is one-hot. The verifier still checks the committed bits.
+                    values[..count].fill(q.scale);
+                    return (basis(&q.row), values);
+                }
+                let mut coefficients = [F::zero(); 65];
+                for (col, &weight) in q.column.iter().enumerate() {
+                    let w = weight * q.scale;
+                    if q.binary {
+                        for (out, &x) in coefficients.iter_mut().zip(&q.planes) {
+                            *out = w * x;
                         }
                     }
-                } else {
-                    for (bit, columns) in q.columns().enumerate() {
-                        let scale = q.scale * q.planes[bit];
-                        for (col, &weight) in columns.zip(&q.column) {
-                            for (word, output) in values.chunks_exact_mut(128).enumerate() {
-                                let mut mask = u128::from_le_bytes(
-                                    committed.packed[col * WORDS + word].to_bytes(),
-                                );
-                                while mask != 0 {
-                                    output[mask.trailing_zeros() as usize] += scale * weight;
-                                    mask &= mask - 1;
-                                }
+                    for (row, v) in values[..count].iter_mut().enumerate() {
+                        let x = (source(q.slot, col * ROWS + row) + layout.offset()) as u128;
+                        if q.binary {
+                            let mut bits = x;
+                            while bits != 0 {
+                                *v += coefficients[bits.trailing_zeros() as usize];
+                                bits &= bits - 1;
                             }
+                        } else {
+                            *v += w.mul_integer(x as i128);
                         }
                     }
                 }
@@ -382,9 +369,9 @@ impl Group {
         }
         LinearClaim::new(
             &self.parameters,
-            basis(&end.challenges).into_iter().map(|x| x.0).collect(),
-            column_weights.into_iter().map(|x| x.0).collect(),
-            end.output_claim.0,
+            basis(&end.challenges).into_iter().map(F::scalar).collect(),
+            column_weights.into_iter().map(F::scalar).collect(),
+            end.output_claim.scalar(),
         )
         .map_err(|_| "invalid BitZ linear claim")
     }
@@ -480,9 +467,14 @@ mod tests {
             .collect();
         let tag = [0x63; 32];
         let mut prover = prover_transcript::<Keccak>(&tag, b"");
-        let committed = group.commit(|slot, i| data[slot][i], &mut prover).unwrap();
+        let committed = group.commit_detached(|slot, i| data[slot][i]).unwrap();
+        prover.append_bytes(&committed.root);
         let root = committed.root;
-        let proof = group.prove(committed, &queries, &mut prover).unwrap();
+        let proof = group
+            .reduce(committed, &queries, &mut prover, |slot, i| data[slot][i])
+            .unwrap()
+            .open(&mut std::collections::HashMap::new())
+            .unwrap();
         let mut verifier = verifier_transcript::<Keccak>(&tag, b"", prover.narg_string());
         group.bind_root(root, &mut verifier);
         group.verify(root, &queries, &proof, &mut verifier).unwrap();

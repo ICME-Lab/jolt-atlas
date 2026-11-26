@@ -111,7 +111,7 @@ pub(super) fn prove(
 
 fn factored_sum(
     point: &[Field],
-    work: impl Fn(Range<usize>, &[Field]) -> (Wide256, Wide256) + Sync,
+    work: impl Fn(Range<usize>, &[Field], &mut Vec<Field>) -> (Wide256, Wide256) + Sync,
 ) -> (Wide256, Wide256) {
     let low_vars = point.len().min(TILE.ilog2() as usize);
     let (low, high) = point.split_at(low_vars);
@@ -119,9 +119,9 @@ fn factored_sum(
     let hi = poly::eq_table(high);
     hi.par_iter()
         .enumerate()
-        .map(|(i, &weight)| {
+        .map_init(Vec::new, |scratch, (i, &weight)| {
             let start = i * lo.len();
-            let (b, inf) = work(start..start + lo.len(), &lo);
+            let (b, inf) = work(start..start + lo.len(), &lo, scratch);
             if hi.len() == 1 {
                 (b, inf)
             } else {
@@ -195,7 +195,7 @@ fn prove_relation(
                 let projected = source_lut.filter(|_| paired.is_none()).map(|(lut, level)| {
                     packed_round::PackedRound::new(lut, level, stride, &prefix)
                 });
-                let mut sums = factored_sum(&point[..i], |range, eq| {
+                let mut sums = factored_sum(&point[..i], |range, eq, scratch| {
                     if let Some(lut) = paired {
                         let group = 1 << lut.log_trees;
                         let mut sums = (Wide256::zero(), Wide256::zero());
@@ -215,8 +215,8 @@ fn prove_relation(
                         return sums;
                     }
                     if let Some(projected) = &projected {
-                        let mut buf = vec![Field::ZERO; 4 * range.len()];
-                        let mut parts = buf.chunks_exact_mut(range.len());
+                        scratch.resize(4 * range.len(), Field::ZERO);
+                        let mut parts = scratch.chunks_exact_mut(range.len());
                         let [l0, l1, r0, r1] = std::array::from_fn(|_| parts.next().unwrap());
                         for (start, out) in [
                             (0, l0.as_mut()),
@@ -317,7 +317,7 @@ fn prove_relation(
         let half = 1 << i;
         let (l0, l1) = left.split_at_mut(half);
         let (r0, r1) = right.split_at_mut(half);
-        let sums = factored_sum(&point[..i], |range, weights| {
+        let sums = factored_sum(&point[..i], |range, weights, _| {
             if sends_one(point[i]) {
                 round_sums::<true>(
                     &l0[range.clone()],

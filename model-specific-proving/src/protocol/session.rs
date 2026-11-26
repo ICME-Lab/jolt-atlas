@@ -836,6 +836,38 @@ impl<C, E> Fold<C, E> {
         } else {
             None
         };
+        let lookup = match &columns[0] {
+            Column::Lookup {
+                addresses,
+                len,
+                width,
+                weights,
+                ..
+            } => {
+                let prefixes = weights.len() / width;
+                let digits: Vec<_> = columns
+                    .iter()
+                    .map_while(|col| {
+                        let Column::Lookup {
+                            addresses: source,
+                            len: size,
+                            shift,
+                            width,
+                            weights,
+                        } = col
+                        else {
+                            return None;
+                        };
+                        (std::ptr::eq(*addresses, *source)
+                            && len == size
+                            && weights.len() / width == prefixes)
+                            .then_some((*shift, *width, weights.as_slice()))
+                    })
+                    .collect();
+                (digits.len() > 1).then_some((*addresses, prefixes, digits))
+            }
+            _ => None,
+        };
         let zeros = || vec![F::zero(); self.degree + 1];
         let sum = |start: usize, end: usize| {
             let mut deltas = vec![F::zero(); columns.len()];
@@ -855,6 +887,28 @@ impl<C, E> Fold<C, E> {
                     values[..width].copy_from_slice(&low[..width]);
                     for j in 0..width {
                         deltas[j] = high[j] - low[j];
+                    }
+                }
+                if let Some((addresses, prefixes, digits)) = &lookup {
+                    first = digits.len();
+                    for low in &mut values[..first] {
+                        *low = F::zero();
+                    }
+                    for high in &mut deltas[..first] {
+                        *high = F::zero();
+                    }
+                    for prefix in 0..*prefixes {
+                        let start = prefix * half * 2 + i;
+                        let low = addresses.get(start) as usize;
+                        let high = addresses.get(start + half) as usize;
+                        for (digit, &(shift, width, table)) in digits.iter().enumerate() {
+                            let entries = &table[prefix * width..][..width];
+                            values[digit] += entries[(low >> shift) & (width - 1)];
+                            deltas[digit] += entries[(high >> shift) & (width - 1)];
+                        }
+                    }
+                    for (high, &low) in deltas[..first].iter_mut().zip(&values[..first]) {
+                        *high -= low;
                     }
                 }
                 for ((v, delta), col) in values[first..]

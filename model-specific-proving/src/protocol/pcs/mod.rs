@@ -68,8 +68,14 @@ impl Layout {
         self.slots[slot.id] = slot;
     }
 
-    pub(crate) fn remove_last(&mut self) -> Result<()> {
-        self.slots.pop().map(|_| ()).ok_or("empty advice layout")
+    pub(crate) fn remove_last(&mut self, count: usize) -> Result<()> {
+        let len = self
+            .slots
+            .len()
+            .checked_sub(count)
+            .ok_or("invalid advice slot count")?;
+        self.slots.truncate(len);
+        Ok(())
     }
 
     pub(crate) fn witness(&self) -> Advice {
@@ -151,33 +157,24 @@ impl Advice {
     }
 
     fn fill_bits(&mut self, slot: Slot, mut set: impl FnMut(usize)) -> Result<()> {
-        match slot.kind {
-            Kind::Bits { planes } => {
-                let cells = 1 << slot.cell_vars;
-                let lanes = 1 << slot.digit_vars();
-                let digits = self.digits(slot)?;
-                for (digit, rows) in digits.chunks_exact(cells).enumerate() {
-                    let first = digit * lanes;
-                    let used = planes.saturating_sub(first).min(lanes);
-                    for (cell, &code) in rows.iter().enumerate() {
-                        if code >= 1 << used {
-                            return Err("invalid range digit");
-                        }
-                        let mut remaining = code;
-                        while remaining != 0 {
-                            let bit = remaining.trailing_zeros() as usize;
-                            set((first + bit) * cells + cell);
-                            remaining &= remaining - 1;
-                        }
-                    }
+        let Kind::Bits { planes } = slot.kind else {
+            return Err("invalid range advice slot");
+        };
+        let cells = 1 << slot.cell_vars;
+        let lanes = 1 << slot.digit_vars();
+        let digits = self.digits(slot)?;
+        for (digit, rows) in digits.chunks_exact(cells).enumerate() {
+            let first = digit * lanes;
+            let used = planes.saturating_sub(first).min(lanes);
+            for (cell, &code) in rows.iter().enumerate() {
+                if code >= 1 << used {
+                    return Err("invalid range digit");
                 }
-            }
-            Kind::Lookup { .. } => {
-                let cells = 1 << slot.cell_vars;
-                let (addresses, shift, mask) = self.take_lookup(slot)?;
-                for cell in 0..addresses.len() {
-                    let digit = addresses.digit(cell, shift, mask);
-                    set(usize::from(digit) * cells + cell);
+                let mut remaining = code;
+                while remaining != 0 {
+                    let bit = remaining.trailing_zeros() as usize;
+                    set((first + bit) * cells + cell);
+                    remaining &= remaining - 1;
                 }
             }
         }

@@ -29,7 +29,7 @@ struct Rounding {
     shape: Shape,
     bits: usize,
     check_output: bool,
-    ranges: Ranges,
+    ranges: Vec<Ranges>,
 }
 
 impl Rounding {
@@ -42,7 +42,21 @@ impl Rounding {
         } else {
             Range::unsigned(0)
         };
-        let ranges = Ranges::new(layout, shape, [first, Range::unsigned(bits)])?;
+        let mut ranges = Vec::new();
+        let mut remaining = shape.width;
+        while remaining != 0 {
+            let width = if check_output {
+                remaining
+            } else {
+                1 << remaining.ilog2()
+            };
+            ranges.push(Ranges::new(
+                layout,
+                Shape::new(shape.rows, width)?,
+                [first, Range::unsigned(bits)],
+            )?);
+            remaining -= width;
+        }
         Ok(Self {
             shape,
             bits,
@@ -72,7 +86,16 @@ impl Rounding {
         } else {
             &[]
         };
-        self.ranges.record(advice, &[values, &rounded.remainder])?;
+        let mut offset = 0;
+        for range in &self.ranges {
+            range.record_columns(
+                advice,
+                &[values, &rounded.remainder],
+                self.shape.width,
+                offset,
+            )?;
+            offset += range.shape.width;
+        }
         Ok(rounded)
     }
 
@@ -82,14 +105,51 @@ impl Rounding {
         witness: impl FnOnce() -> &'w Rounded,
         io: &mut Session<'_, '_, F>,
     ) -> Result<F> {
-        let [rem] = io.values(|| [self.shape.eval(&witness().remainder, &q.point)])?;
-        let output = if self.check_output {
-            q.value
-        } else {
-            F::zero()
-        };
-        self.ranges.check(&[(&q.point, [output, rem])], io)?;
-        Ok(F::from_u64(1 << self.bits) * q.value + rem)
+        let rounded = F::from_u64(1 << self.bits) * q.value;
+        if let [range] = self.ranges.as_slice() {
+            let [rem] = io.values(|| [self.shape.eval(&witness().remainder, &q.point)])?;
+            let output = if self.check_output {
+                q.value
+            } else {
+                F::zero()
+            };
+            range.check(&[(&q.point, [output, rem])], io)?;
+            return Ok(rounded + rem);
+        }
+
+        let (rows, cols) = q.point.split_at(self.shape.row_vars());
+        let remainder: Option<Vec<F>> = io
+            .proving()
+            .then(|| bind_rows(self.shape.width, &witness().remainder, rows));
+        let mut offset = 0;
+        let mut total = F::zero();
+        for range in &self.ranges {
+            let width = range.shape.width;
+            let (prefix, suffix) = cols.split_at(cols.len() - width.ilog2() as usize);
+            let [rem] = io.values(|| {
+                let values = remainder.as_ref().expect("prover remainder evaluations");
+                [dot(
+                    values[offset..][..width].iter().copied(),
+                    weights(suffix),
+                )]
+            })?;
+            range.check(&[(&[rows, suffix].concat(), [F::zero(), rem])], io)?;
+            // An aligned block fixes the high column coordinates.
+            let weight: F = prefix
+                .iter()
+                .enumerate()
+                .map(|(i, &r)| {
+                    if offset >> (cols.len() - i - 1) & 1 == 1 {
+                        r
+                    } else {
+                        F::one() - r
+                    }
+                })
+                .product();
+            total += rem * weight;
+            offset += width;
+        }
+        Ok(rounded + total)
     }
 }
 
@@ -169,6 +229,10 @@ impl<'a> Linear<'a> {
 
     pub(crate) fn shape(&self) -> Shape {
         self.rounding.shape
+    }
+
+    pub(crate) fn range_slots(&self) -> usize {
+        self.rounding.ranges.len()
     }
 
     pub(crate) fn bind(&self, t: &mut impl Transcript) {

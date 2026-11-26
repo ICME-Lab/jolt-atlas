@@ -645,11 +645,11 @@ impl Model<'_> {
     }
 
     fn top_k_plan(&self, cfg: &TopKConfig) -> Result<TopKPlan> {
-        if !matches!(&self.head, Head::Decoder { .. }) {
+        let Head::Decoder { logits, .. } = &self.head else {
             return Err("invalid Top-K configuration");
-        }
+        };
         let mut layout = self.layout.clone();
-        layout.remove_last()?;
+        layout.remove_last(logits.range_slots())?;
         TopKPlan::new(layout, self.shape, self.bits, self.embeddings.tokens, cfg)
     }
 

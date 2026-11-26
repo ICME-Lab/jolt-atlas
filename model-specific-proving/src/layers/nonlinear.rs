@@ -310,17 +310,21 @@ pub struct NormalizationParameters<'a> {
 }
 
 impl NormalizationParameters<'_> {
-    pub(crate) fn output_bound(self, width: usize, bits: u8) -> Option<u128> {
-        let min_dev = u128::try_from(self.epsilon_variance_units).ok()?.isqrt();
-        if min_dev == 0 {
-            return None;
-        }
-        // Sum of centered squares is below width * (dev + 1)^2.
+    fn quotient_bound(self, width: usize, bits: usize) -> u128 {
+        let min_dev = (self.epsilon_variance_units as u128).isqrt();
+        // Each centered square is bounded by the sum of squares, below width * (dev + 1)^2.
         let width = width as u128;
         let root = width.isqrt();
         let root = root + u128::from(root * root < width);
+        ((root << bits) * (min_dev + 1)).div_ceil(min_dev)
+    }
+
+    pub(crate) fn output_bound(self, width: usize, bits: u8) -> Option<u128> {
+        if self.epsilon_variance_units <= 0 {
+            return None;
+        }
+        let centered = self.quotient_bound(width, bits.into());
         let scale = 1u128 << bits;
-        let centered = (root * scale * (min_dev + 1)).div_ceil(min_dev);
         self.gain
             .iter()
             .zip(self.bias)
@@ -367,10 +371,15 @@ impl<'a> Norm<'a> {
         let row = Shape::new(shape.rows, 1)?;
         let ranges = [u(65), rem, rem, u(33), u(34), u(34), I32, rem, rem];
         let rows = Ranges::new(layout, row, &ranges[..p.kind.stats()])?;
+        let quotient_bits = if p.kind == NormalizationKind::Rms {
+            p.quotient_bound(shape.width, bits).ilog2() as usize + 2
+        } else {
+            49
+        };
         let cells = Ranges::new(
             layout,
             shape,
-            [Range::signed(49), I32, u(33), u(33), u(bits)],
+            [Range::signed(quotient_bits), I32, u(33), u(33), u(bits)],
         )?;
         Ok(Self {
             shape,

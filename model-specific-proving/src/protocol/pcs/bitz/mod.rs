@@ -3,7 +3,7 @@ mod layout;
 
 use std::sync::OnceLock;
 
-use jolt_field::{One, Zero};
+use jolt_field::Zero;
 use world_common::{BitZParams, LinearClaim, Root, SecurityLevel, Shape};
 use world_field::{gf128::smallest_generator, F128};
 use world_pcs::{Pcs, ProverData};
@@ -42,14 +42,50 @@ pub(super) fn commit(
         .iter()
         .map(|(_, pcs)| F128::zeroed_vec(pcs.packed_len()))
         .collect();
-    for &slot in &layout.slots {
-        let cells = 1 << slot.cell_vars;
-        let (group, offset) = plan.slots[slot.id];
-        advice.fill_bits(slot, |i| {
-            let i = offset + i / cells * cells.max(ROWS) + i % cells;
-            let word = &mut packed[group][i / ROWS];
-            *word = F128::from(word.to_u128() | (1 << (i % ROWS)));
-        })?;
+    let mut slots = layout.slots.iter().copied().peekable();
+    while let Some(slot) = slots.next() {
+        if let Kind::Lookup { .. } = slot.kind {
+            let (addresses, shift, mask) = advice.take_lookup(slot)?;
+            let mut digits = vec![(slot, shift, mask)];
+            while let Some(&next) = slots.peek() {
+                if !matches!(&advice.0[next.id], Some(Part::Lookup { addresses: next_addresses, .. })
+                    if Arc::ptr_eq(&addresses, next_addresses))
+                {
+                    break;
+                }
+                let (_, shift, mask) = advice.take_lookup(next)?;
+                digits.push((next, shift, mask));
+                slots.next();
+            }
+            let mut block = vec![[0u128; 16]; digits.len()];
+            let words = addresses.len().div_ceil(128);
+            let stride = addresses.len().max(ROWS) / 128;
+            for word in 0..words {
+                block.fill([0; 16]);
+                let start = word * 128;
+                for cell in start..(start + 128).min(addresses.len()) {
+                    let address = addresses.get(cell);
+                    let bit = 1 << (cell - start);
+                    for (&(_, shift, mask), dst) in digits.iter().zip(&mut block) {
+                        dst[((address >> shift) & mask) as usize] |= bit;
+                    }
+                }
+                for (&(slot, _, mask), src) in digits.iter().zip(&block) {
+                    let (group, offset) = plan.slots[slot.id];
+                    for (plane, &value) in src.iter().take(mask as usize + 1).enumerate() {
+                        packed[group][offset / 128 + plane * stride + word] = F128::from(value);
+                    }
+                }
+            }
+        } else {
+            let cells = 1 << slot.cell_vars;
+            let (group, offset) = plan.slots[slot.id];
+            advice.fill_bits(slot, |i| {
+                let i = offset + i / cells * cells.max(ROWS) + i % cells;
+                let word = &mut packed[group][i / 128];
+                *word = F128::from(word.to_u128() | (1 << (i % 128)));
+            })?;
+        }
     }
     packed
         .into_iter()
@@ -175,21 +211,40 @@ impl Query {
             .map(move |&axis| axis * scale)
             .flat_map(|axis| self.cells.iter().map(move |&cell| axis * cell))
     }
+}
 
-    fn project(&self, words: &[F128]) -> Vec<F> {
-        let mut rows = vec![F::zero(); ROWS];
-        for (word, weight) in words[self.column..]
-            .iter()
-            .zip(self.column_weights(F::one()))
-        {
+fn project(queries: &[Query], words: &[F128]) -> Vec<Vec<F>> {
+    let mut projected = vec![vec![F::zero(); ROWS]; queries.len()];
+    let mut order: Vec<_> = (0..queries.len()).collect();
+    let span = |i: usize| {
+        let q = &queries[i];
+        (q.column, q.axes.len() * q.cells.len())
+    };
+    order.sort_unstable_by_key(|&i| span(i));
+    for indices in order.chunk_by(|&i, &j| span(i) == span(j)) {
+        let first = &queries[indices[0]];
+        let cols = first.axes.len() * first.cells.len();
+        let mut weighted = vec![F::zero(); indices.len()];
+        for (column, word) in words[first.column..][..cols].iter().enumerate() {
             let mut bits = word.to_u128();
+            if bits == 0 {
+                continue;
+            }
+            for (&i, w) in indices.iter().zip(&mut weighted) {
+                let q = &queries[i];
+                let cells = q.cells.len();
+                *w = q.axes[column / cells] * q.cells[column % cells];
+            }
             while bits != 0 {
-                rows[bits.trailing_zeros() as usize] += weight;
+                let row = bits.trailing_zeros() as usize;
+                for (&i, &weight) in indices.iter().zip(&weighted) {
+                    projected[i][row] += weight;
+                }
                 bits &= bits - 1;
             }
         }
-        rows
     }
+    projected
 }
 
 // Fold only the low seven coordinates. The terminal column weights need not be an MLE point.
@@ -215,14 +270,11 @@ fn batch(
     let (end, []) = io.fold(
         instance(sum, ROW_VARS, 2),
         || {
+            let rows = project(&queries, words.expect("prover has packed bits"));
             queries
                 .iter()
-                .flat_map(|q| {
-                    [
-                        Column::owned(q.project(words.expect("prover has packed bits"))),
-                        Column::owned(weights(&q.row_point)),
-                    ]
-                })
+                .zip(rows)
+                .flat_map(|(q, rows)| [Column::owned(rows), Column::owned(weights(&q.row_point))])
                 .collect::<Vec<_>>()
         },
         [],

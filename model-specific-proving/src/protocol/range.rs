@@ -30,7 +30,7 @@ pub(crate) const I32: Range = Range::signed(32);
 pub(crate) struct Ranges {
     pub(crate) slot: Slot,
     ranges: Box<[Range]>,
-    shape: Shape,
+    pub(crate) shape: Shape,
 }
 
 impl Ranges {
@@ -69,6 +69,16 @@ impl Ranges {
         advice: &mut Advice,
         values: &[&[T]],
     ) -> Result<()> {
+        self.record_columns(advice, values, self.shape.width, 0)
+    }
+
+    pub(crate) fn record_columns<T: Copy + Into<i128>>(
+        &self,
+        advice: &mut Advice,
+        values: &[&[T]],
+        width: usize,
+        offset: usize,
+    ) -> Result<()> {
         if values.len() != self.ranges.len() {
             return Err("invalid range witness count");
         }
@@ -84,8 +94,15 @@ impl Ranges {
             if range.bits == 0 && values.is_empty() {
                 continue;
             }
-            self.shape.check(values)?;
-            let codes = values.iter().map(|&v| v.into() + range.offset);
+            if values.len() != self.shape.rows * width || offset + self.shape.width > width {
+                return Err("invalid range witness shape");
+            }
+            let rows = || {
+                values
+                    .chunks_exact(width)
+                    .map(|row| &row[offset..][..self.shape.width])
+            };
+            let codes = rows().flatten().map(|&v| v.into() + range.offset);
             if codes.clone().any(|v| v < 0 || v >= 1i128 << range.bits) {
                 return Err("integer exceeds declared range");
             }
@@ -97,10 +114,7 @@ impl Ranges {
                 let encode = |value: i128| (((value >> bit) as u8) & mask) << shift;
                 let dst = &mut digits[plane / lanes * cells..][..cells];
                 let pad = encode(range.offset);
-                for (row, values) in dst
-                    .chunks_exact_mut(stride)
-                    .zip(values.chunks_exact(self.shape.width))
-                {
+                for (row, values) in dst.chunks_exact_mut(stride).zip(rows()) {
                     let (used, padding) = row.split_at_mut(self.shape.width);
                     for (digit, &value) in used.iter_mut().zip(values) {
                         *digit |= encode(value.into() + range.offset);

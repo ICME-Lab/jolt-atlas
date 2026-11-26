@@ -223,15 +223,20 @@ impl<'a, 'w, F: ProofField> Batches<'a, 'w, F> {
 
 impl Lookup {
     pub(crate) fn new(layout: &mut Layout, cells: usize, size: usize) -> Result<Self> {
-        const DIGIT_BITS: usize = 4;
         if size < 2 || !size.is_power_of_two() || size.ilog2() > u32::BITS {
             return Err("invalid lookup table size");
         }
         let address_vars = size.ilog2() as usize;
-        let first = (address_vars - 1) % DIGIT_BITS + 1;
+        // Keep at most eight factors in the address-link Sumcheck.
+        let digit_bits = if (17..=24).contains(&address_vars) {
+            3
+        } else {
+            4
+        };
+        let first = (address_vars - 1) % digit_bits + 1;
         let sizes = std::iter::once(first).chain(std::iter::repeat_n(
-            DIGIT_BITS,
-            (address_vars - first) / DIGIT_BITS,
+            digit_bits,
+            (address_vars - first) / digit_bits,
         ));
         let cols = sizes
             .map(|address_vars| layout.add(cells, Kind::Lookup { address_vars }))

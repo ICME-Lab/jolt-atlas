@@ -12,7 +12,7 @@ use crate::{
     layers::{Attention, Mlp, NormalizationParameters},
     linear,
     lookup::Lookups,
-    mlp::Feed,
+    mlp::{gate_fits, Feed},
     norm::{Claim, Width, Witness},
     projection::Projection,
     protocol::{Candidate, Header, Proof, TopKConfig},
@@ -53,6 +53,7 @@ pub struct Model<'a> {
     embeddings: PublicEmbeddings<'a>,
     layers: Vec<Layer<'a>>,
     qk_norms: Vec<Option<[NormalizationParameters<'a>; 2]>>,
+    bounded_gates: Vec<bool>,
     norm: NormalizationParameters<'a>,
     decoder: Option<&'a [i32]>,
     digest: [u8; 32],
@@ -301,12 +302,22 @@ impl<'a> Model<'a> {
             }
             Architecture::Encoder { embedding_norm } => (embedding_norm, None),
         };
+        let bounded_gates = layers
+            .iter()
+            .map(|p| {
+                decoder.is_some()
+                    && p.mlp
+                        .gate
+                        .is_some_and(|gate| gate_fits(p.mlp_norm, gate, bits.into()))
+            })
+            .collect();
         let mut model = Self {
             shape,
             bits: bits.into(),
             embeddings,
             layers,
             qk_norms: qk_norms.to_vec(),
+            bounded_gates,
             norm,
             decoder,
             digest: [0; 32],
@@ -416,6 +427,7 @@ impl<'a> Model<'a> {
                 shape,
                 bits,
                 m.as_ref().map_or(h, Normalized::values),
+                self.bounded_gates[i],
             )?;
             let after_mlp = Sum::forward(advice, shape, h, &mlp.output)?;
             if !pre {

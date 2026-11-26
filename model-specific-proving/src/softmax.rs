@@ -148,7 +148,12 @@ impl<'a> Soft<'a> {
                     let (mut a, mut b) = (max, max + last);
                     while a < b {
                         let mid = a + (b - a) / 2;
-                        if sum(mid, false) <= limit {
+                        let above = row.iter().try_fold(0i64, |total, &v| {
+                            let address = (mid - i64::from(v)).min(last) as usize;
+                            let total = total + i64::from(self.tables.sums[address]);
+                            (total <= limit).then_some(total)
+                        });
+                        if above.is_some() {
                             b = mid;
                         } else {
                             a = mid + 1;

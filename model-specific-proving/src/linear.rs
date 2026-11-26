@@ -17,6 +17,17 @@ pub(crate) fn project(
     p: Projection<'_>,
     values: Option<&[i32]>,
 ) -> Result<Rounded> {
+    project_with_range(advice, shape, bits, p, values, true)
+}
+
+pub(crate) fn project_with_range(
+    advice: &mut Advice,
+    shape: Shape,
+    bits: u32,
+    p: Projection<'_>,
+    values: Option<&[i32]>,
+    check_output: bool,
+) -> Result<Rounded> {
     let output = Shape::new(shape.rows, p.bias.len())?;
     let (out, remainder) = values
         .map(|input| {
@@ -29,7 +40,7 @@ pub(crate) fn project(
         })
         .transpose()?
         .map_or((None, None), |(a, b)| (Some(a), Some(b)));
-    Rounded::record(advice, output, bits, true, out, remainder)
+    Rounded::record(advice, output, bits, check_output, out, remainder)
 }
 
 pub(crate) fn reverse(

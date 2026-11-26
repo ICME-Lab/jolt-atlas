@@ -3,7 +3,7 @@ use crate::{
     channel::{Channel, Result},
     field::F,
     fold::{agreement, Column},
-    layers::{Activation, Mlp},
+    layers::{Activation, Mlp, NormalizationKind, NormalizationParameters, Projection},
     linear,
     lookup::{Lookup, Lookups, Table},
     norm::{Claim, Width},
@@ -59,6 +59,53 @@ fn address(value: i32, lower: i32, last: i64, symmetric: bool) -> (usize, [i64; 
             [sign, abs, (address - x).max(0), (x - address).max(0)],
         )
     }
+}
+
+pub(crate) fn gate_fits(
+    norm: NormalizationParameters<'_>,
+    gate: Projection<'_>,
+    bits: u32,
+) -> bool {
+    let width = norm.gain.len();
+    if norm.kind != NormalizationKind::Rms
+        || width == 0
+        || width > 1 << 20
+        || width != norm.bias.len()
+        || gate.weights.len() != width.saturating_mul(gate.bias.len())
+        || norm.epsilon_variance_units <= 0
+    {
+        return false;
+    }
+    let ceil_sqrt = |n: u128| {
+        let root = n.isqrt();
+        root + u128::from(root * root < n)
+    };
+    let scale = 1u128 << bits;
+    let root = (norm.epsilon_variance_units as u128).isqrt();
+    // The integer RMS divisor is at least sqrt(epsilon). Flooring each
+    // normalized coordinate adds less than one unit in magnitude.
+    let quotient = ceil_sqrt(width as u128) * ((scale * (root + 1)).div_ceil(root) + 1);
+    gate.weights
+        .chunks_exact(width)
+        .zip(gate.bias)
+        .all(|(row, &bias)| {
+            let moments = row.iter().zip(norm.gain).zip(norm.bias).try_fold(
+                (0u128, 0u128),
+                |(squares, error), ((&weight, &gain), &offset)| {
+                    let w = u128::from(weight.unsigned_abs());
+                    let scaled = (w * u128::from(gain.unsigned_abs())).div_ceil(scale);
+                    Some((
+                        squares.checked_add(scaled * scaled)?,
+                        error + w * (u128::from(offset.unsigned_abs()) + 1),
+                    ))
+                },
+            );
+            moments.is_some_and(|(squares, error)| {
+                (quotient * ceil_sqrt(squares) + error).div_ceil(scale)
+                    + u128::from(bias.unsigned_abs())
+                    <= i32::MAX as u128
+            })
+        })
 }
 
 impl Activated {
@@ -241,17 +288,19 @@ impl Feed {
         shape: Shape,
         bits: u32,
         input: Option<&[i32]>,
+        bounded_gate: bool,
     ) -> Result<Self> {
         let up = linear::project(advice, shape, bits, p.up, input)?;
         let gate = p
             .gate
-            .map(|g| linear::project(advice, shape, bits, g, input))
+            .map(|g| linear::project_with_range(advice, shape, bits, g, input, !bounded_gate))
             .transpose()?;
         let x = gate.as_ref().unwrap_or(&up);
         if x.shape != up.shape {
             return Err("invalid MLP gate width");
         }
-        let activated = Activated::prepare(advice, p.activation, up.shape, x.values.as_deref())?;
+        let mut activated =
+            Activated::prepare(advice, p.activation, up.shape, x.values.as_deref())?;
         let product = gate
             .as_ref()
             .map(|_| {
@@ -273,6 +322,9 @@ impl Feed {
                 )
             })
             .transpose()?;
+        if product.is_some() {
+            activated.output = None;
+        }
         let out = product
             .as_ref()
             .map_or(activated.output.as_deref(), |x| x.values.as_deref());

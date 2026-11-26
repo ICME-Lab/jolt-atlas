@@ -175,29 +175,29 @@ pub(crate) struct Lookup {
     address_vars: usize,
 }
 
-pub(crate) struct Read<'w, F> {
+pub(crate) struct Read<F> {
     pub(crate) cell: Vec<F>,
     pub(crate) address: F,
     pub(crate) output: Box<[F]>,
-    pub(crate) witness: Option<&'w Addresses>,
+    pub(crate) witness: Option<Arc<Addresses>>,
 }
 
-impl<'w, F> Read<'w, F> {
-    fn witness(&self) -> &'w Addresses {
-        self.witness.expect("prover lookup witness")
+impl<F> Read<F> {
+    fn witness(&self) -> &Addresses {
+        self.witness.as_deref().expect("prover lookup witness")
     }
 }
 
-struct Batch<'a, 'w, F> {
+struct Batch<'a, F> {
     table: Box<[Table<'a>]>,
-    reads: Vec<(&'a Lookup, Read<'w, F>)>,
+    reads: Vec<(&'a Lookup, Read<F>)>,
 }
 
 #[derive(Default)]
-pub(crate) struct Batches<'a, 'w, F>(Vec<Batch<'a, 'w, F>>);
+pub(crate) struct Batches<'a, F>(Vec<Batch<'a, F>>);
 
-impl<'a, 'w, F: ProofField> Batches<'a, 'w, F> {
-    pub(crate) fn push(&mut self, table: &[Table<'a>], lookup: &'a Lookup, read: Read<'w, F>) {
+impl<'a, F: ProofField> Batches<'a, F> {
+    pub(crate) fn push(&mut self, table: &[Table<'a>], lookup: &'a Lookup, read: Read<F>) {
         if let Some(batch) = self.0.iter_mut().find(|b| {
             let (first, q) = &b.reads[0];
             q.cell.len() == read.cell.len() && lookup.parts_fit(first) && b.table.as_ref() == table
@@ -273,7 +273,7 @@ impl Lookup {
     }
 
     fn batch<F: ProofField>(
-        queries: &[(&Self, Read<'_, F>)],
+        queries: &[(&Self, Read<F>)],
         tables: &[Table<'_>],
         io: &mut Session<'_, '_, F>,
     ) -> Result<()> {
@@ -371,7 +371,7 @@ impl Lookup {
 
     fn link<F: ProofField>(
         &self,
-        queries: &[(&Self, Read<'_, F>)],
+        queries: &[(&Self, Read<F>)],
         address: &[F],
         mix: &[F],
         io: &mut Session<'_, '_, F>,

@@ -36,8 +36,7 @@ pub(crate) struct TopKPlan {
     blocks: Vec<Block>,
     rows: usize,
     vocab: usize,
-    shape: Shape,
-    real_rows: usize,
+    one_sided: bool,
     max_raw: i128,
     scale: i128,
 }
@@ -48,6 +47,7 @@ impl TopKPlan {
         input: Shape,
         fractional_bits: u8,
         weights: &[i32],
+        hidden_bounds: &[u128],
         cfg: &TopKConfig,
     ) -> Result<Self> {
         let real_rows = input.rows;
@@ -61,39 +61,68 @@ impl TopKPlan {
         {
             return Err("invalid Top-K configuration");
         }
-        let shape = Shape::new(cfg.rows_per_block, cfg.vocab_per_block)?;
         let rows = real_rows.next_power_of_two();
-        if shape.rows > rows || shape.width > vocab.next_power_of_two() {
+        if cfg.rows_per_block > rows || cfg.vocab_per_block > vocab.next_power_of_two() {
             return Err("invalid Top-K block size");
         }
         let scale = 1i128 << fractional_bits;
         let max_raw = weights
             .chunks_exact(input.width)
-            .map(|w| w.iter().map(|&x| i128::from(x).abs()).sum::<i128>() * (1 << 31))
+            .map(|w| {
+                w.iter()
+                    .zip(hidden_bounds)
+                    .map(|(&x, &bound)| i128::from(x).abs() * bound as i128)
+                    .sum::<i128>()
+            })
             .max()
             .ok_or("empty vocabulary")?;
-        let max_difference = max_raw + max_raw.max(scale * ((1i128 << 31) + 1));
+        let one_sided = max_raw <= scale * i128::from(i32::MAX);
+        let max_difference = max_raw
+            + if one_sided {
+                max_raw + scale - 1
+            } else {
+                max_raw.max(scale * ((1i128 << 31) + 1))
+            };
         let bits = (128 - max_difference.leading_zeros()) as usize;
         if bits >= 120 {
             return Err("unsupported Top-K range");
         }
+        let ranges = [
+            Range::unsigned(if one_sided { 0 } else { bits }),
+            Range::unsigned(bits),
+        ];
+
+        // Limit the temporary raw scores to a few rows of a wide vocabulary.
+        let scratch_rows = ((8 << 20) / (vocab * size_of::<i128>())).max(1);
+        let row_limit = cfg.rows_per_block.min(1 << scratch_rows.ilog2());
         let mut blocks = Vec::new();
-        for row in (0..rows).step_by(shape.rows) {
-            for col in (0..vocab).step_by(shape.width) {
+        let mut row = cfg.positions.start;
+        while row < cfg.positions.end {
+            let available = cfg.positions.end - row;
+            let alignment = if row == 0 {
+                row_limit
+            } else {
+                1 << row.trailing_zeros()
+            };
+            let block_rows = (1 << available.ilog2()).min(row_limit).min(alignment);
+            let mut col = 0;
+            while col < vocab {
+                let block_width = (1 << (vocab - col).ilog2()).min(cfg.vocab_per_block);
                 blocks.push(Block {
                     row,
                     col,
-                    ranges: Ranges::new(&mut layout, shape, [Range::unsigned(bits); 2])?,
+                    ranges: Ranges::new(&mut layout, Shape::new(block_rows, block_width)?, ranges)?,
                 });
+                col += block_width;
             }
+            row += block_rows;
         }
         Ok(Self {
             layout,
             blocks,
             rows,
             vocab,
-            shape,
-            real_rows,
+            one_sided,
             max_raw,
             scale,
         })
@@ -105,7 +134,10 @@ impl TopKPlan {
         }
         for row in candidates {
             if row.len() != cfg.k
-                || row.iter().any(|c| c.id >= self.vocab)
+                || row.iter().any(|c| {
+                    let (lo, hi) = self.selected_bounds(c.logit);
+                    c.id >= self.vocab || lo > self.max_raw || hi < -self.max_raw
+                })
                 || row.windows(2).any(|p| order(p[0]) >= order(p[1]))
             {
                 return Err("invalid Top-K candidates");
@@ -124,86 +156,70 @@ impl TopKPlan {
         (lower, lower + self.scale - 1)
     }
 
-    pub(crate) fn select(
+    pub(crate) fn select_and_record(
         &self,
         cfg: &TopKConfig,
         hidden: &[i32],
         weights: &[i32],
         width: usize,
+        advice: &mut Advice,
     ) -> Result<Vec<Vec<Candidate>>> {
-        cfg.positions
-            .clone()
-            .map(|row| {
-                let mut values = weights
+        let mut candidates = Vec::with_capacity(cfg.positions.len());
+        for blocks in self.blocks.chunk_by(|a, b| a.row == b.row) {
+            let first = &blocks[0];
+            let mut scores = Vec::with_capacity(first.ranges.shape.rows);
+            for row in first.row..first.row + first.ranges.shape.rows {
+                let hidden = &hidden[row * width..][..width];
+                let raw: Vec<_> = weights
                     .chunks_exact(width)
+                    .map(|w| integer_dot(hidden, w))
+                    .collect();
+                let mut row_candidates = raw
+                    .iter()
                     .enumerate()
-                    .map(|(id, w)| {
-                        let raw = integer_dot(&hidden[row * width..][..width], w);
+                    .map(|(id, &raw)| {
                         let logit = i32::try_from(raw.div_euclid(self.scale))
                             .map_err(|_| "Top-K logit overflow")?;
                         Ok(Candidate { id, logit })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                if values.len() > cfg.k {
-                    values.select_nth_unstable_by_key(cfg.k, |c| order(*c));
+                if row_candidates.len() > cfg.k {
+                    row_candidates.select_nth_unstable_by_key(cfg.k, |c| order(*c));
+                    row_candidates.truncate(cfg.k);
                 }
-                values.truncate(cfg.k);
-                values.sort_unstable_by_key(|c| order(*c));
-                Ok(values)
-            })
-            .collect()
-    }
-
-    pub(crate) fn record(
-        &self,
-        cfg: &TopKConfig,
-        candidates: &[Vec<Candidate>],
-        hidden: &[i32],
-        public: &[i32],
-        width: usize,
-        advice: &mut Advice,
-    ) -> Result<()> {
-        let by_id = candidates_by_id(candidates);
-        for block in &self.blocks {
-            let mut less = Vec::new();
-            let mut greater = Vec::new();
-            for row in block.row..block.row + self.shape.rows {
-                let selected_row = cfg
-                    .positions
-                    .contains(&row)
-                    .then(|| row - cfg.positions.start);
-                let kth = selected_row.map(|i| candidates[i].last().expect("nonempty candidates"));
-                let choices = selected_row.map_or(&[][..], |i| by_id[i].as_slice());
-                let start = choices.partition_point(|c| c.id < block.col);
-                let mut selected = choices[start..].iter().peekable();
-                for col in block.col..block.col + self.shape.width {
-                    let (lower, upper) = if row >= self.real_rows || col >= self.vocab {
-                        (0, 0)
-                    } else if let Some(kth) = kth {
-                        if selected.peek().is_some_and(|c| c.id == col) {
-                            self.selected_bounds(selected.next().expect("peeked candidate").logit)
+                row_candidates.sort_unstable_by_key(|c| order(*c));
+                scores.push(raw);
+                candidates.push(row_candidates);
+            }
+            let selected = &candidates[candidates.len() - scores.len()..];
+            let by_id = candidates_by_id(selected);
+            for block in blocks {
+                let shape = block.ranges.shape;
+                let mut lower_slack = Vec::new();
+                let mut upper_slack = Vec::with_capacity(shape.rows * shape.width);
+                for (i, (raw, ids)) in scores.iter().zip(&by_id).enumerate() {
+                    let kth = selected[i][cfg.k - 1];
+                    let start = ids.partition_point(|c| c.id < block.col);
+                    let mut choices = ids[start..].iter().peekable();
+                    for col in block.col..block.col + shape.width {
+                        let (lo, hi) = if choices.peek().is_some_and(|c| c.id == col) {
+                            self.selected_bounds(choices.next().expect("selected candidate").logit)
                         } else {
                             let maximum = i128::from(kth.logit) + i128::from(col > kth.id);
                             (self.scale * i128::from(i32::MIN), self.scale * maximum - 1)
+                        };
+                        if !self.one_sided {
+                            lower_slack.push(raw[col] - lo);
                         }
-                    } else {
-                        (-self.max_raw, self.max_raw)
-                    };
-                    let raw = if row < self.real_rows && col < self.vocab {
-                        integer_dot(
-                            &hidden[row * width..][..width],
-                            &public[col * width..][..width],
-                        )
-                    } else {
-                        0
-                    };
-                    less.push(raw - lower);
-                    greater.push(upper - raw);
+                        upper_slack.push(hi - raw[col]);
+                    }
                 }
+                block
+                    .ranges
+                    .record_packed(advice, &[&lower_slack, &upper_slack])?;
             }
-            block.ranges.record(advice, &[&less, &greater])?;
         }
-        Ok(())
+        Ok(candidates)
     }
 
     pub(crate) fn reduce<'w, F: ProofField>(
@@ -215,19 +231,22 @@ impl TopKPlan {
         trace: impl Fn() -> &'w [i32],
         io: &mut Session<'_, '_, F>,
     ) -> Result<Vec<Claim<F>>> {
-        let row_vars = self.shape.row_vars();
         let mut inputs = Vec::new();
         let by_id = candidates_by_id(candidates);
         for block in &self.blocks {
-            let query = io.point(self.shape.vars())?;
+            let shape = block.ranges.shape;
+            let row_vars = shape.row_vars();
+            let query = io.point(shape.vars())?;
             let (row, col) = query.split_at(row_vars);
-            let real = self.vocab.saturating_sub(block.col).min(self.shape.width);
-            let w = bind_rows(width, &public[block.col * width..][..real * width], col);
+            let w = bind_rows(
+                width,
+                &public[block.col * width..][..shape.width * width],
+                col,
+            );
             let hidden = || {
-                let end = (block.row + self.shape.rows).min(self.real_rows);
                 bind_rows(
                     width,
-                    &trace()[block.row.min(end) * width..end * width],
+                    &trace()[block.row * width..][..shape.rows * width],
                     row,
                 )
             };
@@ -239,39 +258,53 @@ impl TopKPlan {
             let mut upper = F::zero();
             for (i, &r) in rweights.iter().enumerate() {
                 let at = block.row + i;
-                if at >= self.real_rows {
-                    continue;
-                }
-                let mass: F = cweights.iter().take(real).copied().sum();
-                if !cfg.positions.contains(&at) {
-                    lower -= r * mass * F::from_i128(self.max_raw);
-                    upper += r * mass * F::from_i128(self.max_raw);
-                    continue;
-                }
                 let row_index = at - cfg.positions.start;
                 let kth = candidates[row_index].last().expect("validated candidates");
-                let below = (kth.id + 1).saturating_sub(block.col).min(real);
+                let below = (kth.id + 1).saturating_sub(block.col).min(shape.width);
                 let below: F = cweights.iter().take(below).copied().sum();
                 let min = self.scale * i128::from(i32::MIN);
                 let max = self.scale * i128::from(kth.logit) - 1;
-                lower += r * mass * F::from_i128(min);
-                upper += r * (mass * F::from_i128(max) + (mass - below) * F::from_i128(self.scale));
+                if !self.one_sided {
+                    lower += r * F::from_i128(min);
+                }
+                upper += r * (F::from_i128(max) + (F::one() - below) * F::from_i128(self.scale));
                 let choices = &by_id[row_index];
                 let start = choices.partition_point(|c| c.id < block.col);
                 for c in choices[start..]
                     .iter()
-                    .take_while(|c| c.id < block.col + real)
+                    .take_while(|c| c.id < block.col + shape.width)
                 {
                     let j = c.id - block.col;
                     let (lo, hi) = self.selected_bounds(c.logit);
                     let default = max + self.scale * i128::from(c.id > kth.id);
-                    lower += r * cweights[j] * F::from_i128(lo - min);
+                    if self.one_sided {
+                        let point = (0..shape.vars())
+                            .rev()
+                            .map(|bit| F::from_bool((i * shape.width + j) >> bit & 1 != 0))
+                            .collect();
+                        block
+                            .ranges
+                            .check_last_bits(point, self.scale.ilog2() as usize, io);
+                    } else {
+                        lower += r * cweights[j] * F::from_i128(lo - min);
+                    }
                     upper += r * cweights[j] * F::from_i128(hi - default);
                 }
             }
-            block
-                .ranges
-                .check(&[(&query, [raw - lower, upper - raw])], io)?;
+            block.ranges.check(
+                &[(
+                    &query,
+                    [
+                        if self.one_sided {
+                            F::zero()
+                        } else {
+                            raw - lower
+                        },
+                        upper - raw,
+                    ],
+                )],
+                io,
+            )?;
             let extra = self.rows.ilog2() as usize - row_vars;
             let mut full: Vec<_> = (0..extra)
                 .rev()

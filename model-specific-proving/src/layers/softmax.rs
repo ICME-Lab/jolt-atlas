@@ -806,7 +806,7 @@ impl<'a> Softmax<'a> {
         trace: impl Fn(usize) -> &'w SoftmaxTrace<F>,
         io: &mut Session<'_, '_, F>,
 
-        lookups: &mut Batches<'s, 'w, F>,
+        lookups: &mut Batches<'s, F>,
     ) -> Result<()> {
         for (i, (op, read)) in reads.into_iter().enumerate() {
             op.rows
@@ -843,7 +843,7 @@ impl<'a> Softmax<'a> {
                         cell: read.cell,
                         address: read.address,
                         output: Box::new(read.values),
-                        witness: io.proving().then(|| trace(i).indices[0].as_ref()),
+                        witness: io.proving().then(|| Arc::clone(&trace(i).indices[0])),
                     },
                 );
                 continue;
@@ -854,12 +854,12 @@ impl<'a> Softmax<'a> {
             let mut sum = defaults;
             for (j, tile) in op.tiles.iter().enumerate() {
                 let (weight, cell) = tile.read(row, col);
-                let witness = io.proving().then(|| trace(i).indices[j].as_ref());
+                let witness = io.proving().then(|| Arc::clone(&trace(i).indices[j]));
                 let values = io.values(|| {
                     let (r, c) = cell.split_at(tile.shape.row_vars());
                     let columns = weights(c);
                     let mut values = [F::zero(); 3];
-                    let indices = witness.expect("Softmax tile witness");
+                    let indices = witness.as_deref().expect("Softmax tile witness");
                     for (row, row_weight) in weights(r).into_iter().enumerate() {
                         let mut partial = [F::zero(); 3];
                         for (col, &column_weight) in columns.iter().enumerate() {

@@ -133,6 +133,82 @@ impl Ranges {
         advice.put(self.slot, Part::Digits(digits.into()))
     }
 
+    pub(crate) fn record_packed<T: Copy + Into<i128>>(
+        &self,
+        advice: &mut Advice,
+        values: &[&[T]],
+    ) -> Result<()> {
+        if values.len() != self.ranges.len() {
+            return Err("invalid range witness count");
+        }
+        let Kind::Bits { planes } = self.slot.kind else {
+            unreachable!("range slot is a bit slot");
+        };
+        let words = (1usize << self.shape.vars()).div_ceil(128);
+        let stride = self.shape.width.next_power_of_two();
+        let mut packed = vec![0u128; words * planes];
+        let mut plane = 0;
+        for (range, &values) in self.ranges.iter().zip(values) {
+            if range.bits == 0 && values.is_empty() {
+                continue;
+            }
+            self.shape.check(values)?;
+            for word in 0..words {
+                let mut bits = [0u128; 128];
+                for index in word * 128..((word + 1) * 128).min(1 << self.shape.vars()) {
+                    let (row, col) = (index / stride, index % stride);
+                    let value = if row < self.shape.rows && col < self.shape.width {
+                        values[row * self.shape.width + col].into()
+                    } else {
+                        0
+                    };
+                    let code = value + range.offset;
+                    if code < 0 || code >= 1i128 << range.bits {
+                        return Err("integer exceeds declared range");
+                    }
+                    let mut code = code as u128;
+                    while code != 0 {
+                        bits[code.trailing_zeros() as usize] |= 1 << (index % 128);
+                        code &= code - 1;
+                    }
+                }
+                for (bit, &value) in bits[..range.bits].iter().enumerate() {
+                    packed[(plane + bit) * words + word] = value;
+                }
+            }
+            plane += range.bits;
+        }
+        advice.put(self.slot, Part::Packed(packed))
+    }
+
+    pub(crate) fn check_last_bits<F: ProofField>(
+        &self,
+        point: Vec<F>,
+        keep: usize,
+        io: &mut Session<'_, '_, F>,
+    ) {
+        let last = self.ranges.last().expect("range");
+        if keep >= last.bits {
+            return;
+        }
+        let first: usize = self.ranges[..self.ranges.len() - 1]
+            .iter()
+            .map(|r| r.bits)
+            .sum();
+        let mut planes = vec![F::zero(); 1 << (self.slot.vars() - self.slot.cell_vars)];
+        for i in keep..last.bits {
+            planes[first + i] = F::from_u128(1 << (i - keep));
+        }
+        io.openings.push(Opening {
+            slot: self.slot.id,
+            claim: Claim {
+                point,
+                value: F::zero(),
+            },
+            planes: Some(planes),
+        });
+    }
+
     pub(crate) fn check<F: ProofField, V: AsRef<[F]>>(
         &self,
         claims: &[(&[F], V)],

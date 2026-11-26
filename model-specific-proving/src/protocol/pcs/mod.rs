@@ -109,6 +109,7 @@ impl Layout {
 }
 
 pub(crate) enum Part {
+    Packed(Vec<u128>),
     Digits(Arc<Vec<u8>>),
     Lookup {
         addresses: Arc<Addresses>,

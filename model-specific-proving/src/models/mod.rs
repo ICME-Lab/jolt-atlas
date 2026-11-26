@@ -368,19 +368,19 @@ impl<'a> Model<'a> {
         })
     }
 
-    fn reverse<'w, F: ProofField>(
+    fn reverse<F: ProofField>(
         &self,
         input: &[i32],
         output: &[i32],
         clipping: &ClipPlans,
-        witness: impl Fn() -> &'w Witness<F> + Sync,
+        witness: Option<Witness<F>>,
         io: &mut Session<'_, '_, F>,
     ) -> Result<()> {
         let claim = match &self.head {
             Head::Decoder { logits, .. } => logits.reverse(
                 point(logits.shape(), output, io)?,
                 || {
-                    let w = witness();
+                    let w = witness.as_ref().expect("model witness");
                     (&w.norm.output, w.logits.as_ref().expect("logits trace"))
                 },
                 io,
@@ -390,34 +390,58 @@ impl<'a> Model<'a> {
         self.reverse_layers(input, vec![claim], clipping, witness, io)
     }
 
-    fn reverse_layers<'w, F: ProofField>(
+    fn reverse_layers<F: ProofField>(
         &self,
         input: &[i32],
         mut claims: Vec<Claim<F>>,
         clipping: &ClipPlans,
-        witness: impl Fn() -> &'w Witness<F> + Sync,
+        witness: Option<Witness<F>>,
         io: &mut Session<'_, '_, F>,
     ) -> Result<()> {
         let shape = self.shape;
         let pre = matches!(self.head, Head::Decoder { .. });
-        let norm_trace = || &witness().norm;
+        let (mut layers, mut norm_witness) = witness.map(|w| (w.layers, w.norm)).unzip();
         if let Head::Decoder { norm, .. } = &self.head {
-            let last = || &witness().layers.last().expect("model layers").mlp_sum[..];
-            claims = vec![norm.reverse(&claims, || (last(), norm_trace()), io)?];
+            claims = vec![norm.reverse(
+                &claims,
+                || {
+                    let last = layers
+                        .as_ref()
+                        .and_then(|layers| layers.last())
+                        .expect("model layers");
+                    (
+                        last.mlp_sum.as_slice(),
+                        norm_witness.as_ref().expect("model norm"),
+                    )
+                },
+                io,
+            )?];
+            norm_witness = None;
         }
         let mut lookups = Batches::default();
         for (i, p) in self.layers.iter().enumerate().rev() {
-            let w = || &witness().layers[i];
-            let x = || match (i, pre) {
-                (0, true) => input,
-                (0, false) => &norm_trace().output,
-                (_, true) => &witness().layers[i - 1].mlp_sum,
-                (_, false) => &witness().layers[i - 1].mlp_norm.output,
+            let layer = layers
+                .as_mut()
+                .map(|layers| layers.pop().expect("layer witness"));
+            let w = || layer.as_ref().expect("layer witness");
+            let x = || {
+                if i == 0 && pre {
+                    return input;
+                }
+                match layers.as_ref().and_then(|layers| layers.last()) {
+                    None => norm_witness.as_ref().expect("model norm").output.as_slice(),
+                    Some(prev) if pre => prev.mlp_sum.as_slice(),
+                    Some(prev) => prev.mlp_norm.output.as_slice(),
+                }
             };
             claims = p.reverse(shape, pre, claims, &clipping[i], w, x, io, &mut lookups)?;
         }
         if let Head::Encoder(norm) = &self.head {
-            claims = vec![norm.reverse(&claims, || (input, norm_trace()), io)?];
+            claims = vec![norm.reverse(
+                &claims,
+                || (input, norm_witness.as_ref().expect("model norm")),
+                io,
+            )?];
         }
         if !io.proving()
             && claims
@@ -483,7 +507,7 @@ impl<'a> Model<'a> {
                 self.bind(t, tokens, segments, &output);
                 bind_clips(t, &specs);
             },
-            |w, io| self.reverse(&input, &output, &clipping, || &w, io),
+            |w, io| self.reverse(&input, &output, &clipping, Some(w), io),
         )?;
         proof.clipping = specs;
         Ok((output, proof))
@@ -510,7 +534,7 @@ impl<'a> Model<'a> {
                 self.bind(t, tokens, segments, output);
                 bind_clips(t, &proof.clipping);
             },
-            |io| self.reverse(&input, output, &clipping, || unreachable!(), io),
+            |io| self.reverse(&input, output, &clipping, None, io),
         )
     }
 }
@@ -563,7 +587,7 @@ impl LayerPlan<'_> {
         w: impl Fn() -> &'w LayerTrace<F> + Sync,
         x: impl Fn() -> &'w [i32] + Sync,
         io: &mut Session<'_, '_, F>,
-        lookups: &mut Batches<'s, 'w, F>,
+        lookups: &mut Batches<'s, F>,
     ) -> Result<Vec<Claim<F>>> {
         let p = self;
         let (skip, branch) = if pre {
@@ -620,14 +644,14 @@ impl LayerPlan<'_> {
 }
 
 impl Model<'_> {
-    fn reverse_top_k<'w, F: ProofField>(
+    fn reverse_top_k<F: ProofField>(
         &self,
         input: &[i32],
         plan: &TopKPlan,
         cfg: &TopKConfig,
         candidates: &[Vec<Candidate>],
         clipping: &ClipPlans,
-        witness: impl Fn() -> &'w Witness<F> + Sync,
+        witness: Option<Witness<F>>,
         io: &mut Session<'_, '_, F>,
     ) -> Result<()> {
         if !matches!(self.head, Head::Decoder { .. }) {
@@ -638,19 +662,26 @@ impl Model<'_> {
             candidates,
             self.embeddings.tokens,
             self.shape.width,
-            || &witness().norm.output,
+            || &witness.as_ref().expect("model witness").norm.output,
             io,
         )?;
         self.reverse_layers(input, claims, clipping, witness, io)
     }
 
     fn top_k_plan(&self, cfg: &TopKConfig) -> Result<TopKPlan> {
-        let Head::Decoder { logits, .. } = &self.head else {
+        let Head::Decoder { norm, logits } = &self.head else {
             return Err("invalid Top-K configuration");
         };
         let mut layout = self.layout.clone();
         layout.remove_last(logits.range_slots())?;
-        TopKPlan::new(layout, self.shape, self.bits, self.embeddings.tokens, cfg)
+        TopKPlan::new(
+            layout,
+            self.shape,
+            self.bits,
+            self.embeddings.tokens,
+            &norm.output_bounds(),
+            cfg,
+        )
     }
 
     fn bind_top_k(
@@ -675,19 +706,12 @@ impl Model<'_> {
         let norm = &witness.norm;
         let public = self.embeddings.tokens;
         let width = self.shape.width;
-        let candidates = plan.select(cfg, &norm.output, public, width)?;
-        plan.record(
-            cfg,
-            &candidates,
-            &norm.output,
-            public,
-            width,
-            &mut witness.advice,
-        )?;
+        let candidates =
+            plan.select_and_record(cfg, &norm.output, public, width, &mut witness.advice)?;
         let mut layout = plan.layout.clone();
         let (specs, clipping) = self.prepare_clip(&mut layout, &mut witness)?;
         let mut proof = Proof::prove(
-            &protocol_tag(b"atlas/model-specific/top-k/v3"),
+            &protocol_tag(b"atlas/model-specific/top-k/v4"),
             &layout,
             witness,
             |w| &mut w.advice,
@@ -695,7 +719,7 @@ impl Model<'_> {
                 self.bind_top_k(t, tokens, cfg, &candidates);
                 bind_clips(t, &specs);
             },
-            |w, io| self.reverse_top_k(&input, &plan, cfg, &candidates, &clipping, || &w, io),
+            |w, io| self.reverse_top_k(&input, &plan, cfg, &candidates, &clipping, Some(w), io),
         )?;
         proof.clipping = specs;
         Ok((candidates, proof))
@@ -714,23 +738,13 @@ impl Model<'_> {
         let mut layout = plan.layout.clone();
         let clipping = self.clip_plan(&mut layout, &proof.clipping)?;
         proof.verify(
-            &protocol_tag(b"atlas/model-specific/top-k/v3"),
+            &protocol_tag(b"atlas/model-specific/top-k/v4"),
             &layout,
             |t| {
                 self.bind_top_k(t, tokens, cfg, candidates);
                 bind_clips(t, &proof.clipping);
             },
-            |io| {
-                self.reverse_top_k(
-                    &input,
-                    &plan,
-                    cfg,
-                    candidates,
-                    &clipping,
-                    || unreachable!(),
-                    io,
-                )
-            },
+            |io| self.reverse_top_k(&input, &plan, cfg, candidates, &clipping, None, io),
         )
     }
 }

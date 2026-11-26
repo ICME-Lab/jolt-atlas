@@ -78,8 +78,26 @@ pub(super) fn commit(
                 }
             }
         } else {
-            let cells = 1 << slot.cell_vars;
+            let cells = 1usize << slot.cell_vars;
             let (group, offset) = plan.slots[slot.id];
+            if matches!(advice.0[slot.id], Some(Part::Packed(_))) {
+                let Some(Part::Packed(words)) = advice.0[slot.id].take() else {
+                    unreachable!("packed range advice");
+                };
+                let Kind::Bits { planes } = slot.kind else {
+                    return Err("invalid packed range advice");
+                };
+                if words.len() != planes * cells.div_ceil(128) {
+                    return Err("invalid packed range advice length");
+                }
+                for (dst, word) in packed[group][offset / 128..][..words.len()]
+                    .iter_mut()
+                    .zip(words)
+                {
+                    *dst = F128::from(word);
+                }
+                continue;
+            }
             advice.fill_bits(slot, |i| {
                 let i = offset + i / cells * cells.max(ROWS) + i % cells;
                 let word = &mut packed[group][i / 128];

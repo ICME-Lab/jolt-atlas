@@ -142,18 +142,19 @@ fn proves_encoder_with_public_segments() {
 
 #[test]
 fn proves_top_k_and_picks_the_lower_id_on_ties() {
-    let model = fixture(true, 2, 1, false);
-    let tokens = [0, 1];
+    let model = fixture(true, 3, 1, false);
+    let tokens = [0, 1, 2];
     let (logits, _) = model.prove(&tokens, None).unwrap();
     let cfg = TopKConfig {
-        positions: 0..2,
+        positions: 1..3,
         k: 2,
-        rows_per_block: 1,
+        rows_per_block: 2,
         vocab_per_block: 4,
     };
     let (mut candidates, proof) = model.prove_top_k(&tokens, &cfg).unwrap();
     let expected: Vec<_> = logits
         .chunks_exact(6)
+        .skip(1)
         .map(|row| {
             let mut r: Vec<_> = row
                 .iter()

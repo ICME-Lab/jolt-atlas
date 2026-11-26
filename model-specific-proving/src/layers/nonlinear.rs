@@ -29,7 +29,11 @@ pub(crate) struct Activate<'a> {
 
 enum ActivationProof {
     Direct(Box<[i32]>),
-    Clamp { ranges: Ranges, sign: Slot },
+    Clamp {
+        ranges: Ranges,
+        sign: Slot,
+        symmetric: bool,
+    },
 }
 
 pub(crate) struct ActivationTrace {
@@ -45,7 +49,10 @@ impl<'a> Activate<'a> {
         table: Activation<'a>,
         input_bound: Option<u128>,
     ) -> Result<Self> {
-        let lookup = Lookup::new(layout, shape.vars(), table.correction.len())?;
+        let size = table.correction.len();
+        if size < 2 || !size.is_power_of_two() {
+            return Err("invalid activation table size");
+        }
         let upper = i64::from(table.lower) + (table.correction.len() - 1) as i64;
         if upper > i64::from(i32::MAX) {
             return Err("invalid activation bounds");
@@ -66,11 +73,27 @@ impl<'a> Activate<'a> {
                     .collect::<std::result::Result<Box<[_]>, _>>()
                     .ok()
             });
+        let half = size / 2;
+        let symmetric = direct.is_none()
+            && half >= 2
+            && i64::from(table.lower) == -(half as i64)
+            && table.correction[0] == table.correction[size - 1]
+            && (1..half).all(|i| table.correction[half - i] == table.correction[half + i]);
+        let lookup = Lookup::new(layout, shape.vars(), if symmetric { half } else { size })?;
         let proof = match direct {
             Some(values) => ActivationProof::Direct(values),
             None => ActivationProof::Clamp {
-                ranges: Ranges::new(layout, shape, [Range::unsigned(32); 2])?,
+                ranges: Ranges::new(
+                    layout,
+                    shape,
+                    if symmetric {
+                        [Range::unsigned(0), Range::unsigned(31)]
+                    } else {
+                        [Range::unsigned(32); 2]
+                    },
+                )?,
                 sign: layout.add(shape.vars(), Kind::Bits { planes: 1 })?,
+                symmetric,
             },
         };
         Ok(Self {
@@ -84,14 +107,20 @@ impl<'a> Activate<'a> {
     pub(crate) fn bind(&self, t: &mut impl Transcript) {
         t.append(&(i64::from(self.table.lower) as u64));
         bind_i32(t, self.table.correction);
-        t.append(&u64::from(matches!(self.proof, ActivationProof::Direct(_))));
+        t.append(&match self.proof {
+            ActivationProof::Direct(_) => 1u64,
+            ActivationProof::Clamp {
+                symmetric: true, ..
+            } => 2,
+            ActivationProof::Clamp { .. } => 0,
+        });
     }
 
     pub(crate) fn execute(&self, x: &[i32], a: &mut Advice) -> Result<ActivationTrace> {
         self.shape.check(x)?;
         let lower = i64::from(self.table.lower);
         let upper = lower + (self.table.correction.len() - 1) as i64;
-        let (ranges, sign) = match &self.proof {
+        let (ranges, sign, symmetric) = match &self.proof {
             ActivationProof::Direct(table) => {
                 let zero = (-lower) as u32;
                 let stride = self.shape.width.next_power_of_two();
@@ -113,7 +142,11 @@ impl<'a> Activate<'a> {
                     signs: None,
                 });
             }
-            ActivationProof::Clamp { ranges, sign } => (ranges, *sign),
+            ActivationProof::Clamp {
+                ranges,
+                sign,
+                symmetric,
+            } => (ranges, *sign, *symmetric),
         };
         if lower > 0 || upper < 0 {
             return Err("activation domain must contain zero");
@@ -123,22 +156,35 @@ impl<'a> Activate<'a> {
         let mut excess = Vec::with_capacity(x.len());
         let size = 1 << self.shape.vars();
         let stride = self.shape.width.next_power_of_two();
-        let mut indices = vec![(-lower) as u32; size];
+        let table = self.correction(symmetric);
+        let mut indices = vec![if symmetric { 0 } else { (-lower) as u32 }; size];
         let mut signs = vec![0; size];
         for (row, values) in x.chunks_exact(self.shape.width).enumerate() {
             for (col, &value) in values.iter().enumerate() {
                 let x = i64::from(value);
-                let index = (x.clamp(lower, upper) - lower) as u32;
-                let correction = i64::from(self.table.correction[index as usize]);
+                let index = if symmetric {
+                    x.unsigned_abs().min((table.len() - 1) as u64) as u32
+                } else {
+                    (x.clamp(lower, upper) - lower) as u32
+                };
+                let correction = i64::from(table[index as usize]);
                 indices[row * stride + col] = index;
                 signs[row * stride + col] = u8::from(x >= 0);
                 output
                     .push(i32::try_from(x.max(0) + correction).map_err(|_| "activation overflow")?);
-                magnitude.push(x.unsigned_abs() as u32);
-                excess.push((x - lower - i64::from(index)).unsigned_abs() as u32);
+                if symmetric {
+                    excess.push(x.unsigned_abs() as u32 - index);
+                } else {
+                    magnitude.push(x.unsigned_abs() as u32);
+                    excess.push((x - lower - i64::from(index)).unsigned_abs() as u32);
+                }
             }
         }
-        ranges.record(a, &[&magnitude, &excess])?;
+        if symmetric {
+            ranges.record_packed(a, &[&magnitude, &excess])?;
+        } else {
+            ranges.record(a, &[&magnitude, &excess])?;
+        }
         let signs = Arc::new(signs);
         a.put(sign, Part::Digits(Arc::clone(&signs)))?;
         let indices = Arc::new(Addresses::Words(indices));
@@ -150,15 +196,24 @@ impl<'a> Activate<'a> {
         })
     }
 
+    fn correction(&self, symmetric: bool) -> &'a [i32] {
+        let values = self.table.correction;
+        if symmetric {
+            &values[values.len() / 2..]
+        } else {
+            values
+        }
+    }
+
     pub(crate) fn reverse<'s, 'w, F: ProofField>(
         &'s self,
         q: Claim<F>,
         trace: impl Fn() -> (&'w [i32], &'w ActivationTrace) + Sync,
         io: &mut Session<'_, '_, F>,
 
-        lookups: &mut Batches<'s, 'w, F>,
+        lookups: &mut Batches<'s, F>,
     ) -> Result<Claim<F>> {
-        let (ranges, sign) = match &self.proof {
+        let (ranges, sign, symmetric) = match &self.proof {
             ActivationProof::Direct(table) => {
                 let (row, col) = q.point.split_at(self.shape.row_vars());
                 let rows = weights(row);
@@ -195,28 +250,39 @@ impl<'a> Activate<'a> {
                         cell: q.point,
                         address,
                         output: Box::new([output]),
-                        witness: io.proving().then(|| trace().1.indices.as_ref()),
+                        witness: io.proving().then(|| Arc::clone(&trace().1.indices)),
                     },
                 );
                 return Ok(claim);
             }
-            ActivationProof::Clamp { ranges, sign } => (ranges, *sign),
+            ActivationProof::Clamp {
+                ranges,
+                sign,
+                symmetric,
+            } => (ranges, *sign, *symmetric),
         };
         let vars = self.shape.vars();
         io.pow(vars + 3)?;
         let mix = io.challenge(3)?;
         let random = io.challenge(vars)?;
         let lower = F::from_i32(self.table.lower);
-        let last = F::from_u64((self.table.correction.len() - 1) as u64);
+        let table = self.correction(symmetric);
+        let last = F::from_u64((table.len() - 1) as u64);
+        let magnitude = |v: &[F]| if symmetric { v[1] + v[5] } else { v[3] };
         let clamp = |v: &[F]| {
-            dot(
-                [
-                    last * (v[0] - v[1] - lower) - v[5] * (v[1] + v[1] - last),
-                    v[5] * v[1] * (v[1] - last),
-                    v[0] - (v[4] + v[4] - F::one()) * v[3],
-                ],
-                mix.iter().copied(),
-            )
+            let signed = v[0] - (v[4] + v[4] - F::one()) * magnitude(v);
+            if symmetric {
+                mix[0] * signed + mix[1] * v[5] * (v[1] - last)
+            } else {
+                dot(
+                    [
+                        last * (v[0] - v[1] - lower) - v[5] * (v[1] + v[1] - last),
+                        v[5] * v[1] * (v[1] - last),
+                        signed,
+                    ],
+                    mix.iter().copied(),
+                )
+            }
         };
         let shape = self.shape;
         let width = shape.width.next_power_of_two();
@@ -238,15 +304,20 @@ impl<'a> Activate<'a> {
                 [
                     Column::source(size, move |i| F::from_i64(x(i))),
                     Column::source(size, move |i| F::from_u64(u64::from(address(i)))),
-                    Column::source(size, move |i| {
-                        F::from_i32(self.table.correction[address(i) as usize])
-                    }),
-                    Column::source(size, move |i| F::from_i64(x(i).abs())),
+                    Column::source(size, move |i| F::from_i32(table[address(i) as usize])),
+                    if symmetric {
+                        Column::repeat(vec![F::zero()].into(), size)
+                    } else {
+                        Column::source(size, move |i| F::from_i64(x(i).abs()))
+                    },
                     Column::Bits(trace.signs.as_deref().expect("activation sign witness"), 1),
                     Column::source(size, move |i| {
-                        F::from_i64(
-                            (x(i) - i64::from(self.table.lower) - i64::from(address(i))).abs(),
-                        )
+                        let surplus = if symmetric {
+                            x(i).abs() - i64::from(address(i))
+                        } else {
+                            (x(i) - i64::from(self.table.lower) - i64::from(address(i))).abs()
+                        };
+                        F::from_i64(surplus)
                     }),
                     Column::source(size, move |i| F::from_bool(active(i))),
                     Column::equality(&q.point),
@@ -254,12 +325,12 @@ impl<'a> Activate<'a> {
                 ]
                 .map(|column| column.replay(replay))
             },
-            |v| v[6] * v[7] * (v[4] * v[3] + v[2]) + v[8] * clamp(v),
+            |v| v[6] * v[7] * (v[4] * magnitude(v) + v[2]) + v[8] * clamp(v),
             |p, v: &[F; 6]| {
                 let (row, col) = p.split_at(shape.row_vars());
                 let active = weights::<F>(row).into_iter().take(shape.rows).sum::<F>()
                     * weights::<F>(col).into_iter().take(shape.width).sum::<F>();
-                active * eq(&q.point, p) * (v[4] * v[3] + v[2]) + eq(&random, p) * clamp(v)
+                active * eq(&q.point, p) * (v[4] * magnitude(v) + v[2]) + eq(&random, p) * clamp(v)
             },
         )?;
         ranges.check(&[(&point, [v[3], v[5]])], io)?;
@@ -271,13 +342,13 @@ impl<'a> Activate<'a> {
             },
         ));
         lookups.push(
-            &[Table::Slice(self.table.correction)],
+            &[Table::Slice(table)],
             &self.lookup,
             Read {
                 cell: point.clone(),
                 address: v[1],
                 output: Box::new([v[2]]),
-                witness: io.proving().then(|| trace().1.indices.as_ref()),
+                witness: io.proving().then(|| Arc::clone(&trace().1.indices)),
             },
         );
         Ok(Claim { point, value: v[0] })
@@ -309,7 +380,7 @@ pub struct NormalizationParameters<'a> {
     pub epsilon_variance_units: i64,
 }
 
-impl NormalizationParameters<'_> {
+impl<'a> NormalizationParameters<'a> {
     fn quotient_bound(self, width: usize, bits: usize) -> u128 {
         let min_dev = (self.epsilon_variance_units as u128).isqrt();
         // Each centered square is bounded by the sum of squares, below width * (dev + 1)^2.
@@ -319,21 +390,20 @@ impl NormalizationParameters<'_> {
         ((root << bits) * (min_dev + 1)).div_ceil(min_dev)
     }
 
-    pub(crate) fn output_bound(self, width: usize, bits: u8) -> Option<u128> {
-        if self.epsilon_variance_units <= 0 {
-            return None;
-        }
+    fn output_bounds(self, width: usize, bits: u8) -> impl Iterator<Item = u128> + 'a {
         let centered = self.quotient_bound(width, bits.into());
         let scale = 1u128 << bits;
-        self.gain
-            .iter()
-            .zip(self.bias)
-            .map(|(&gain, &bias)| {
-                (centered * u128::from(gain.unsigned_abs())).div_ceil(scale)
-                    + u128::from(bias.unsigned_abs())
-            })
-            .max()
-            .map(|bound| bound.min(1 << 31))
+        self.gain.iter().zip(self.bias).map(move |(&gain, &bias)| {
+            ((centered * u128::from(gain.unsigned_abs())).div_ceil(scale)
+                + u128::from(bias.unsigned_abs()))
+            .min(1 << 31)
+        })
+    }
+
+    pub(crate) fn output_bound(self, width: usize, bits: u8) -> Option<u128> {
+        (self.epsilon_variance_units > 0)
+            .then(|| self.output_bounds(width, bits).max())
+            .flatten()
     }
 }
 
@@ -367,9 +437,14 @@ impl<'a> Norm<'a> {
             return Err("invalid normalization parameters");
         }
         let u = Range::unsigned;
-        let rem = u(shape.width.next_power_of_two().ilog2().max(1) as usize);
+        let rem = u(shape.width.next_power_of_two().ilog2() as usize);
         let row = Shape::new(shape.rows, 1)?;
-        let ranges = [u(65), rem, rem, u(33), u(34), u(34), I32, rem, rem];
+        let gap = if shape.width.is_power_of_two() {
+            u(0)
+        } else {
+            rem
+        };
+        let ranges = [u(65), rem, gap, u(33), u(34), u(34), I32, rem, gap];
         let rows = Ranges::new(layout, row, &ranges[..p.kind.stats()])?;
         let quotient_bits = if p.kind == NormalizationKind::Rms {
             p.quotient_bound(shape.width, bits).ilog2() as usize + 2
@@ -388,6 +463,12 @@ impl<'a> Norm<'a> {
             rows,
             cells,
         })
+    }
+
+    pub(crate) fn output_bounds(&self) -> Vec<u128> {
+        self.p
+            .output_bounds(self.shape.width, self.bits as u8)
+            .collect()
     }
 
     pub(crate) fn bind(&self, t: &mut impl Transcript) {
@@ -422,16 +503,23 @@ impl<'a> Norm<'a> {
             let vrem = squares.rem_euclid(width);
             let dev = var.isqrt();
             let root = var - dev * dev;
+            let gap = |r| {
+                if shape.width.is_power_of_two() {
+                    0
+                } else {
+                    width - 1 - r
+                }
+            };
             let stats = [
                 var,
                 vrem,
-                width - 1 - vrem,
+                gap(vrem),
                 dev,
                 root,
                 2 * dev - root,
                 mean,
                 mrem,
-                width - 1 - mrem,
+                gap(mrem),
             ];
             for (column, &v) in rows.iter_mut().zip(&stats[..self.p.kind.stats()]) {
                 column.push(v);
@@ -523,14 +611,22 @@ impl<'a> Norm<'a> {
                 (
                     x - mean,
                     mix[4] * (a * x - first * (w * mean + rem))
-                        + mix[5] * first * (rem + gap - w + F::one()),
+                        + if shape.width.is_power_of_two() {
+                            F::zero()
+                        } else {
+                            mix[5] * first * (rem + gap - w + F::one())
+                        },
                 )
             } else {
                 (x, F::zero())
             };
             let moments = [
                 a * centered * centered - first * (w * (var - epsilon) + vr),
-                first * (vr + vg - w + F::one()),
+                if shape.width.is_power_of_two() {
+                    F::zero()
+                } else {
+                    first * (vr + vg - w + F::one())
+                },
                 first * (var - dev * dev - rt),
                 first * (dev + dev - rt - rg),
             ];
@@ -613,6 +709,34 @@ impl<'a> Norm<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn symmetric_activation_preserves_clipping_and_signed_inputs() {
+        let input = [i32::MIN, -4, -3, -2, -1, 0, 1, 2, 3, 4, i32::MAX];
+        let correction = [0, 0, -1, -1, 0, -1, -1, 0];
+        let table = Activation {
+            lower: -4,
+            correction: &correction,
+        };
+        let mut layout = Layout::default();
+        let activation = Activate::new(
+            &mut layout,
+            Shape::new(1, input.len()).unwrap(),
+            table,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            activation.proof,
+            ActivationProof::Clamp {
+                symmetric: true,
+                ..
+            }
+        ));
+        let trace = activation.execute(&input, &mut layout.witness()).unwrap();
+        let expected = input.map(|x| x.max(0) + correction[(x.clamp(-4, 3) + 4) as usize]);
+        assert_eq!(trace.output, expected);
+    }
 
     #[test]
     fn normalization_uses_epsilon_in_variance_units() {

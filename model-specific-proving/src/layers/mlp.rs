@@ -121,7 +121,7 @@ impl<'a> MlpPlan<'a> {
         t: impl Fn() -> &'w MlpTrace + Sync,
         io: &mut Session<'_, '_, F>,
 
-        lookups: &mut Batches<'s, 'w, F>,
+        lookups: &mut Batches<'s, F>,
     ) -> Result<Claim<F>> {
         let g = || t().multiplier.as_ref().expect("gate trace");
         let q = self.down.reverse(

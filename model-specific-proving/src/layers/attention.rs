@@ -461,7 +461,7 @@ impl<'a> AttentionPlan<'a> {
         trace: impl Fn() -> (&'w [i32], &'w AttentionTrace<F>) + Sync,
         io: &mut Session<'_, '_, F>,
 
-        lookups: &mut Batches<'s, 'w, F>,
+        lookups: &mut Batches<'s, F>,
     ) -> Result<Vec<Claim<F>>> {
         let t = || trace().1;
         let claim = self

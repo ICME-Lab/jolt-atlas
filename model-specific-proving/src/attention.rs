@@ -382,17 +382,21 @@ impl<'a> Context<'a> {
                 };
                 let pv = head.value.raw(io, requests, &y)?;
                 let codes = soft.addresses(&head.soft, io.advice());
-                let [prob, vc] =
-                    values_product(io, &soft, pv, r, col, codes.as_deref(), bound_v.as_deref())?;
-                let score = soft.reverse(
+                let (score, v_point, v_value) = soft.reverse(
                     io,
                     requests,
                     lookups,
                     &head.soft,
-                    prob,
+                    pv,
+                    r,
+                    bound_v.as_deref(),
                     codes.as_deref(),
                     2 * self.bits - shift,
                 )?;
+                let vc = Claim {
+                    point: [&v_point, col].concat(),
+                    value: v_value,
+                };
                 let q = &trace.queries[i];
                 let [q_claim, k_claim] = score_product(
                     io,
@@ -431,51 +435,6 @@ impl<'a> Context<'a> {
         }
         linear::reverse(io, requests, self.shape, self.bits, &projections, input)
     }
-}
-
-fn values_product(
-    io: &mut Channel<'_, '_>,
-    soft: &Soft<'_>,
-    raw: F,
-    row: &[F],
-    col: &[F],
-    addresses: Option<&[u32]>,
-    values: Option<&[F]>,
-) -> Result<[Claim<F>; 2]> {
-    let n = soft.shape.rows;
-    let size = n.next_power_of_two();
-    let (end, [p, v]) = io.fold(
-        raw,
-        soft.shape.row_bits(),
-        2,
-        || {
-            let mut ps = vec![F::zero(); size];
-            for (r, w) in basis(row).into_iter().take(n).enumerate() {
-                for j in 0..soft.count(r) {
-                    ps[j] += w.mul_integer(i128::from(soft.probability(addresses.unwrap(), r, j)));
-                }
-            }
-            [
-                Column::table(ps, size, 1),
-                Column::table(values.unwrap().to_vec(), size, 1),
-            ]
-        },
-        [0, 1],
-        |v| v[0] * v[1],
-    )?;
-    if end.output_claim != p * v {
-        return Err("invalid PV terminal evaluation");
-    }
-    Ok([
-        Claim {
-            point: [row, &end.challenges].concat(),
-            value: p,
-        },
-        Claim {
-            point: [&end.challenges, col].concat(),
-            value: v,
-        },
-    ])
 }
 
 fn score_product(

@@ -259,10 +259,6 @@ impl<'a> Soft<'a> {
         Some(addresses)
     }
 
-    pub fn probability(&self, addresses: &[u32], row: usize, col: usize) -> i32 {
-        self.tables.probabilities[addresses[row * self.shape.stride() + col] as usize]
-    }
-
     #[inline]
     fn at(&self, trace: &SoftTrace, address: u32, row: usize, col: usize) -> [F; 2] {
         if col >= self.count(row) {
@@ -283,10 +279,12 @@ impl<'a> Soft<'a> {
         requests: &mut Requests,
         lookups: &mut Lookups<'a>,
         trace: &SoftTrace,
-        output: Claim<F>,
+        product: F,
+        output_row: &[F],
+        values: Option<&[F]>,
         codes: Option<&[u32]>,
         bits: u32,
-    ) -> Result<Claim<F>> {
+    ) -> Result<(Claim<F>, Vec<F>, F)> {
         let vars = self.shape.bits();
         let rb = self.shape.row_bits();
         let n = self.shape.padded();
@@ -313,7 +311,7 @@ impl<'a> Soft<'a> {
         let mut weights = basis(rows);
         weights[self.shape.rows..].fill(F::zero());
         let (end, v) = io.fold(
-            output.value,
+            product,
             vars,
             3,
             || {
@@ -340,7 +338,7 @@ impl<'a> Soft<'a> {
                     numbers(2),
                     Column::source(n, |i| F::from_bool(i % stride < self.count(i / stride))),
                     Column::table((0..stride).map(|i| F::from_bool(i == 0)).collect(), n, 1),
-                    Column::table(basis(&output.point), n, 1),
+                    Column::Product(basis(output_row), values.unwrap().to_vec()),
                     Column::table(basis(spot), n, 1),
                     Column::table(weights.clone(), n, stride),
                 ]
@@ -350,8 +348,10 @@ impl<'a> Soft<'a> {
         )?;
         let point = end.challenges;
         let (r, c) = point.split_at(rb);
+        let cw = basis(c);
+        let [value] = io.values(|| [cw.iter().zip(values.unwrap()).map(|(&w, &v)| w * v).sum()])?;
         let mut prefix = vec![F::zero()];
-        for w in basis(c) {
+        for w in cw {
             prefix.push(*prefix.last().unwrap() + w);
         }
         let rw = basis(r);
@@ -372,7 +372,7 @@ impl<'a> Soft<'a> {
             over,
             mask,
             prefix[1],
-            agreement(&output.point, &point),
+            agreement(output_row, r) * value,
             agreement(spot, &point),
             row,
         ]) != end.output_claim
@@ -446,9 +446,14 @@ impl<'a> Soft<'a> {
             values
         })?;
         requests.push(shift_slot, &shift.point, shift.value);
-        Ok(Claim {
-            point,
-            value: whole[0] * F::from_u64(1 << bits) + whole[5],
-        })
+        let v_point = c.to_vec();
+        Ok((
+            Claim {
+                point,
+                value: whole[0] * F::from_u64(1 << bits) + whole[5],
+            },
+            v_point,
+            value,
+        ))
     }
 }

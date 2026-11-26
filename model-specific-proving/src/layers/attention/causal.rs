@@ -204,8 +204,9 @@ impl Causal {
         let side = diagonals[0].1.shape.width;
         if side > 1 {
             let vars = diagonals[0].1.shape.vars();
-            io.pow(vars + diagonals.len())?;
-            let mix = io.point(diagonals.len())?;
+            // Draw the mix and evaluation point after the same PoW.
+            io.pow(vars + diagonals.len() + usize::from(check_score))?;
+            let mix = io.challenge(diagonals.len())?;
             let blend = if check_score {
                 io.challenge(1)?[0]
             } else {

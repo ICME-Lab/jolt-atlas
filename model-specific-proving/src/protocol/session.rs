@@ -969,10 +969,10 @@ impl<'a, F: JoltField + 'a, C: AsMut<[Column<'a, F>]> + Send, E: Fn(&[F]) -> F +
     }
 }
 
-#[cfg(all(test, feature = "bitz"))]
+#[cfg(test)]
 #[test]
 fn lookup_and_equality_columns_match_dense_folding() {
-    type F = <crate::protocol::BitzScheme as crate::protocol::ModelPcs>::Field;
+    type F = crate::protocol::pcs::BitzField;
     use jolt_field::{Ring, Zero};
 
     let addresses: Vec<_> = (0..128).map(|i| (i * 17) % 251).collect();

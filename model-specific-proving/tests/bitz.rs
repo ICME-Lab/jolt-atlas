@@ -1,8 +1,8 @@
-#![cfg(all(feature = "bitz", feature = "safetensors-weights"))]
+#![cfg(feature = "safetensors-weights")]
 
 use std::path::Path;
 
-use model_specific_proving::{protocol::BitzScheme, weights::ModelWeights};
+use model_specific_proving::weights::ModelWeights;
 
 #[test]
 fn proves_gpt2_tiny_with_world_bitz() {
@@ -20,10 +20,10 @@ fn prove(name: &str, tokens: &[usize]) {
         .join(name);
     let weights = ModelWeights::from_safetensors(&directory, 14).unwrap();
     let model = weights.model(tokens.len()).unwrap();
-    let (mut logits, proof) = model.prove::<BitzScheme>(tokens, None, &()).unwrap();
+    let (mut logits, proof) = model.prove(tokens, None).unwrap();
     assert_eq!(logits.len(), tokens.len() * 1000);
-    model.verify(tokens, None, &logits, &proof, &()).unwrap();
+    model.verify(tokens, None, &logits, &proof).unwrap();
 
     logits[0] += 1;
-    assert!(model.verify(tokens, None, &logits, &proof, &()).is_err());
+    assert!(model.verify(tokens, None, &logits, &proof).is_err());
 }

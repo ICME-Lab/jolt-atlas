@@ -1,9 +1,9 @@
-mod field;
+pub(super) mod field;
 mod layout;
 
 use std::sync::OnceLock;
 
-use jolt_field::One;
+use jolt_field::{One, Zero};
 use world_common::{BitZParams, LinearClaim, Root, SecurityLevel, Shape};
 use world_field::{gf128::smallest_generator, F128};
 use world_pcs::{Pcs, ProverData};
@@ -20,131 +20,122 @@ const ROW_VARS: usize = 7;
 const ROWS: usize = 1 << ROW_VARS;
 const DOMAIN: &[u8] = b"atlas/model-specific/world-bitz/groups/v1";
 
-pub struct BitzScheme;
+use layout::Plan;
 
-impl ModelPcs for BitzScheme {
-    type Field = F;
-    const MIN_FIELD_BITS: u32 = 0;
-    type AdviceProverSetup = ();
-    type AdviceVerifierSetup = ();
-    type AdviceCommitments = Vec<[u8; 32]>;
-    type AdviceState = Vec<(Vec<F128>, ProverData, world_transcript::ProverState)>;
-    type AdviceOpening = (Messages<F>, Vec<WorldProof>);
-    type AdvicePlan = layout::Plan;
+type State = Vec<(Vec<F128>, ProverData, world_transcript::ProverState)>;
+pub(super) type OpeningProof = (Messages<F>, Vec<WorldProof>);
 
-    fn plan(layout: &Layout) -> Result<Self::AdvicePlan> {
-        layout::Plan::new(layout)
+pub(super) fn plan(layout: &Layout) -> Result<Plan> {
+    if F::MODULUS_BITS < layout.integer_bits {
+        return Err("field is too small for the model's integer relations");
     }
+    Plan::new(layout)
+}
 
-    fn commit(
-        layout: &Layout,
-        advice: &mut Advice,
-        plan: &Self::AdvicePlan,
-        _: &(),
-    ) -> Result<(Self::AdviceCommitments, Self::AdviceState)> {
-        let mut packed: Vec<_> = plan
-            .groups
-            .iter()
-            .map(|(_, pcs)| F128::zeroed_vec(pcs.packed_len()))
-            .collect();
-        for &slot in &layout.slots {
-            let cells = 1 << slot.cell_vars;
-            let (group, offset) = plan.slots[slot.id];
-            advice.fill_bits(slot, |i| {
-                let i = offset + i / cells * cells.max(ROWS) + i % cells;
-                let word = &mut packed[group][i / ROWS];
-                *word = F128::from(word.to_u128() | (1 << (i % ROWS)));
-            })?;
-        }
-        packed
-            .into_iter()
-            .zip(&plan.groups)
-            .map(|(packed, (_, pcs))| {
-                let mut transcript = build_prover(DOMAIN, b"" as &[u8]);
-                let (root, data) = pcs
-                    .commit(&packed, &mut transcript)
-                    .map_err(|_| "BitZ commitment failed")?;
-                Ok((root.0, (packed, data, transcript)))
-            })
-            .collect()
+pub(super) fn commit(
+    layout: &Layout,
+    advice: &mut Advice,
+    plan: &Plan,
+) -> Result<(Vec<[u8; 32]>, State)> {
+    let mut packed: Vec<_> = plan
+        .groups
+        .iter()
+        .map(|(_, pcs)| F128::zeroed_vec(pcs.packed_len()))
+        .collect();
+    for &slot in &layout.slots {
+        let cells = 1 << slot.cell_vars;
+        let (group, offset) = plan.slots[slot.id];
+        advice.fill_bits(slot, |i| {
+            let i = offset + i / cells * cells.max(ROWS) + i % cells;
+            let word = &mut packed[group][i / ROWS];
+            *word = F128::from(word.to_u128() | (1 << (i % ROWS)));
+        })?;
     }
+    packed
+        .into_iter()
+        .zip(&plan.groups)
+        .map(|(packed, (_, pcs))| {
+            let mut transcript = build_prover(DOMAIN, b"" as &[u8]);
+            let (root, data) = pcs
+                .commit(&packed, &mut transcript)
+                .map_err(|_| "BitZ commitment failed")?;
+            Ok((root.0, (packed, data, transcript)))
+        })
+        .collect()
+}
 
-    fn bind(roots: &Self::AdviceCommitments, t: &mut impl Transcript) {
-        t.append_bytes(DOMAIN);
-        t.append(&(roots.len() as u64));
-        for root in roots {
-            t.append_bytes(root);
-        }
+pub(super) fn bind(roots: &[[u8; 32]], t: &mut impl Transcript) {
+    t.append_bytes(DOMAIN);
+    t.append(&(roots.len() as u64));
+    for root in roots {
+        t.append_bytes(root);
     }
+}
 
-    fn open(
-        layout: &Layout,
-        openings: Vec<Opening<F>>,
-        _: &Self::AdviceCommitments,
-        state: Self::AdviceState,
-        plan: &Self::AdvicePlan,
-        _: &(),
-        t: &mut ProverState<Keccak>,
-    ) -> Result<Self::AdviceOpening> {
-        let mut messages = Messages::default();
-        let mut io = Session::prove(F::prover(t), &mut messages);
-        let proofs = plan
-            .queries(openings)
-            .into_iter()
-            .zip(state)
-            .zip(&plan.groups)
-            .map(
-                |((requests, (packed, data, mut transcript)), (params, pcs))| {
-                    let claim = batch(
-                        layout,
-                        requests,
-                        &plan.slots,
-                        params,
-                        Some(&packed),
-                        &mut io,
-                    )?;
-                    world_prover::BitZProver::new(*params, 8)
-                        .prove(&claim, pcs, &data, packed, &mut transcript)
-                        .map_err(|_| "BitZ opening failed")?;
-                    Ok(transcript.finish())
-                },
-            )
-            .collect::<Result<_>>()?;
-        Ok((messages, proofs))
-    }
+pub(super) fn open(
+    layout: &Layout,
+    openings: Vec<Opening<F>>,
+    state: State,
+    plan: &Plan,
+    t: &mut ProverState<Keccak>,
+) -> Result<OpeningProof> {
+    let mut messages = Messages::default();
+    let mut io = Session::prove(F::prover(t), &mut messages);
+    let proofs = plan
+        .queries(openings)
+        .into_iter()
+        .zip(state)
+        .zip(&plan.groups)
+        .map(
+            |((requests, (packed, data, mut transcript)), (params, pcs))| {
+                let claim = batch(
+                    layout,
+                    requests,
+                    &plan.slots,
+                    params,
+                    Some(&packed),
+                    &mut io,
+                )?;
+                world_prover::BitZProver::new(*params, 8)
+                    .prove(&claim, pcs, &data, packed, &mut transcript)
+                    .map_err(|_| "BitZ opening failed")?;
+                Ok(transcript.finish())
+            },
+        )
+        .collect::<Result<_>>()?;
+    Ok((messages, proofs))
+}
 
-    fn verify(
-        layout: &Layout,
-        openings: Vec<Opening<F>>,
-        roots: &Self::AdviceCommitments,
-        (messages, proofs): &Self::AdviceOpening,
-        plan: &Self::AdvicePlan,
-        _: &(),
-        t: &mut VerifierState<'_, Keccak>,
-    ) -> Result<()> {
-        if roots.len() != plan.groups.len() || proofs.len() != plan.groups.len() {
-            return Err("invalid BitZ group count");
-        }
-        let mut io = messages.read(t);
-        for (((requests, root), proof), (params, pcs)) in plan
-            .queries(openings)
-            .into_iter()
-            .zip(roots)
-            .zip(proofs)
-            .zip(&plan.groups)
-        {
-            let claim = batch(layout, requests, &plan.slots, params, None, &mut io)?;
-            let mut transcript = build_verifier(DOMAIN, b"" as &[u8], proof);
-            let root = pcs
-                .receive_commitment(Root(*root), &mut transcript)
-                .map_err(|_| "invalid BitZ commitment")?;
-            world_verifier::BitZVerifier::new(*params, 8)
-                .verify(&claim, pcs, &root, transcript)
-                .map_err(|_| "invalid BitZ opening")?;
-        }
-        io.finish()?;
-        Ok(())
+pub(super) fn verify(
+    layout: &Layout,
+    openings: Vec<Opening<F>>,
+    roots: &[[u8; 32]],
+    (messages, proofs): &OpeningProof,
+    plan: &Plan,
+    t: &mut VerifierState<'_, Keccak>,
+) -> Result<()> {
+    if roots.len() != plan.groups.len() || proofs.len() != plan.groups.len() {
+        return Err("invalid BitZ group count");
     }
+    let mut io = messages.read(t);
+    for (((requests, root), proof), (params, pcs)) in plan
+        .queries(openings)
+        .into_iter()
+        .zip(roots)
+        .zip(proofs)
+        .zip(&plan.groups)
+    {
+        let claim = batch(layout, requests, &plan.slots, params, None, &mut io)?;
+        let mut transcript = build_verifier(DOMAIN, b"" as &[u8], proof);
+        let root = pcs
+            .receive_commitment(Root(*root), &mut transcript)
+            .map_err(|_| "invalid BitZ commitment")?;
+        world_verifier::BitZVerifier::new(*params, 8)
+            .verify(&claim, pcs, &root, transcript)
+            .map_err(|_| "invalid BitZ opening")?;
+    }
+    io.finish()?;
+    Ok(())
 }
 
 struct Query {

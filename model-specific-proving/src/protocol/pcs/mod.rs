@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use jolt_field::{CanonicalEncoding, Ring, Zero};
+use jolt_field::CanonicalEncoding;
 use jolt_transcript::{
     prover_transcript, verifier_transcript, Keccak, ProverState, Transcript, VerifierState,
 };
@@ -136,7 +136,6 @@ impl Advice {
         Ok(())
     }
 
-    #[cfg(feature = "bitz")]
     fn digits(&mut self, slot: Slot) -> Result<Arc<Vec<u8>>> {
         let Kind::Bits { planes } = slot.kind else {
             return Err("invalid digit slot");
@@ -151,7 +150,6 @@ impl Advice {
         }
     }
 
-    #[cfg(feature = "bitz")]
     fn fill_bits(&mut self, slot: Slot, mut set: impl FnMut(usize)) -> Result<()> {
         match slot.kind {
             Kind::Bits { planes } => {
@@ -186,7 +184,6 @@ impl Advice {
         Ok(())
     }
 
-    #[cfg(feature = "bitz")]
     fn take_lookup(&mut self, slot: Slot) -> Result<(Arc<Addresses>, usize, u32)> {
         let Kind::Lookup { address_vars } = slot.kind else {
             return Err("not a lookup advice slot");
@@ -247,89 +244,34 @@ impl<F> Opening<F> {
     }
 }
 
-/// Commits to bit planes and lookups. Openings must enforce that stored bit planes contain bits.
-pub trait ModelPcs {
-    type Field: ProofField;
-    const MIN_FIELD_BITS: u32 = 128;
-    type AdviceProverSetup;
-    type AdviceVerifierSetup;
-    type AdviceCommitments;
-    type AdviceState;
-    type AdviceOpening;
-    type AdvicePlan;
-
-    #[doc(hidden)]
-    fn plan(layout: &Layout) -> Result<Self::AdvicePlan>;
-
-    #[doc(hidden)]
-    fn commit(
-        layout: &Layout,
-        advice: &mut Advice,
-        plan: &Self::AdvicePlan,
-        setup: &Self::AdviceProverSetup,
-    ) -> Result<(Self::AdviceCommitments, Self::AdviceState)>;
-    #[doc(hidden)]
-    fn bind(commitments: &Self::AdviceCommitments, t: &mut impl Transcript);
-    #[doc(hidden)]
-    fn open(
-        layout: &Layout,
-        requests: Vec<Opening<Self::Field>>,
-        commitments: &Self::AdviceCommitments,
-        state: Self::AdviceState,
-        plan: &Self::AdvicePlan,
-        setup: &Self::AdviceProverSetup,
-        t: &mut ProverState<Keccak>,
-    ) -> Result<Self::AdviceOpening>;
-    #[doc(hidden)]
-    fn verify(
-        layout: &Layout,
-        requests: Vec<Opening<Self::Field>>,
-        commitments: &Self::AdviceCommitments,
-        proof: &Self::AdviceOpening,
-        plan: &Self::AdvicePlan,
-        setup: &Self::AdviceVerifierSetup,
-        t: &mut VerifierState<'_, Keccak>,
-    ) -> Result<()>;
-}
-
-pub struct Proof<C: ModelPcs> {
+pub struct Proof {
     pub(crate) clipping: Vec<Vec<crate::layers::softmax::ClipSpec>>,
-    commitments: C::AdviceCommitments,
-    messages: Messages<C::Field>,
-    opening: C::AdviceOpening,
+    commitments: Vec<[u8; 32]>,
+    messages: Messages<BitzField>,
+    opening: bitz::OpeningProof,
     transcript: Vec<u8>,
 }
 
-impl<C: ModelPcs> Proof<C> {
+impl Proof {
     pub(crate) fn prove<W>(
         domain: &[u8; 32],
         layout: &Layout,
         mut witness: W,
         advice: impl FnOnce(&mut W) -> &mut Advice,
-        plan: &C::AdvicePlan,
-        setup: &C::AdviceProverSetup,
         public: impl FnOnce(&mut ProverState<Keccak>),
-        reverse: impl FnOnce(W, &mut Session<'_, '_, C::Field>) -> Result<()>,
+        reverse: impl FnOnce(W, &mut Session<'_, '_, BitzField>) -> Result<()>,
     ) -> Result<Self> {
-        let (commitments, state) =
-            <C as ModelPcs>::commit(layout, advice(&mut witness), plan, setup)?;
+        let plan = bitz::plan(layout)?;
+        let (commitments, state) = bitz::commit(layout, advice(&mut witness), &plan)?;
         let mut transcript = prover_transcript::<Keccak>(domain, b"");
         public(&mut transcript);
-        C::bind(&commitments, &mut transcript);
+        bitz::bind(&commitments, &mut transcript);
         let mut messages = Messages::default();
-        let mut io = Session::prove(C::Field::prover(&mut transcript), &mut messages);
+        let mut io = Session::prove(BitzField::prover(&mut transcript), &mut messages);
         reverse(witness, &mut io)?;
         let requests = io.finish()?;
         layout.validate(&requests)?;
-        let opening = <C as ModelPcs>::open(
-            layout,
-            requests,
-            &commitments,
-            state,
-            plan,
-            setup,
-            &mut transcript,
-        )?;
+        let opening = bitz::open(layout, requests, state, &plan, &mut transcript)?;
         Ok(Self {
             clipping: Vec::new(),
             commitments,
@@ -343,37 +285,27 @@ impl<C: ModelPcs> Proof<C> {
         &self,
         domain: &[u8; 32],
         layout: &Layout,
-        setup: &C::AdviceVerifierSetup,
         public: impl FnOnce(&mut VerifierState<'_, Keccak>),
-        reverse: impl FnOnce(&mut Session<'_, '_, C::Field>) -> Result<()>,
+        reverse: impl FnOnce(&mut Session<'_, '_, BitzField>) -> Result<()>,
     ) -> Result<()> {
-        let plan = plan::<C>(layout)?;
+        let plan = bitz::plan(layout)?;
         let mut t = verifier_transcript::<Keccak>(domain, b"", &self.transcript);
         public(&mut t);
-        C::bind(&self.commitments, &mut t);
+        bitz::bind(&self.commitments, &mut t);
         let mut io = self.messages.read(&mut t);
         reverse(&mut io)?;
         let requests = io.finish()?;
         layout.validate(&requests)?;
-        C::verify(
+        bitz::verify(
             layout,
             requests,
             &self.commitments,
             &self.opening,
             &plan,
-            setup,
             &mut t,
         )?;
         t.check_eof().map_err(|_| "unused transcript bytes")
     }
-}
-
-pub(crate) fn plan<C: ModelPcs>(layout: &Layout) -> Result<C::AdvicePlan> {
-    let bits = layout.integer_bits.max(C::MIN_FIELD_BITS);
-    if C::Field::MODULUS_BITS < bits || C::Field::from_u64(2).is_zero() {
-        return Err("field is too small for the model's integer relations");
-    }
-    C::plan(layout)
 }
 
 pub(crate) fn bind_i32(t: &mut impl Transcript, values: &[i32]) {
@@ -387,7 +319,5 @@ pub(crate) fn bind_i32(t: &mut impl Transcript, values: &[i32]) {
     }
 }
 
-#[cfg(feature = "bitz")]
 mod bitz;
-#[cfg(feature = "bitz")]
-pub use bitz::BitzScheme;
+pub(crate) use bitz::field::BitzField;

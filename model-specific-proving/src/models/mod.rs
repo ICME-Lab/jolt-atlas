@@ -13,7 +13,7 @@ use crate::{
     },
     protocol::{
         lookup::Batches,
-        pcs::{bind_i32, plan as advice_plan, Advice, Layout, ModelPcs, Proof},
+        pcs::{bind_i32, Advice, BitzField, Layout, Proof},
         range::{Ranges, I32},
         session::{Claim, ProofField, Session},
         tensor::Shape,
@@ -467,26 +467,18 @@ impl<'a> Model<'a> {
         Ok((specs, plans))
     }
 
-    pub fn prove<C: ModelPcs>(
-        &self,
-        tokens: &[usize],
-        segments: Option<&[usize]>,
-        setup: &C::AdviceProverSetup,
-    ) -> Result<(Vec<i32>, Proof<C>)> {
+    pub fn prove(&self, tokens: &[usize], segments: Option<&[usize]>) -> Result<(Vec<i32>, Proof)> {
         let input = self.input(tokens, segments)?;
         // Per-layer BitZ checkpoints added replay work with negligible peak-memory savings.
-        let mut w = self.forward::<C::Field>(&input, &self.layout, true)?;
+        let mut w = self.forward::<BitzField>(&input, &self.layout, true)?;
         let mut layout = self.layout.clone();
         let (specs, clipping) = self.prepare_clip(&mut layout, &mut w)?;
-        let prepared = advice_plan::<C>(&layout)?;
         let output = w.output().to_vec();
         let mut proof = Proof::prove(
             &self.domain(),
             &layout,
             w,
             |w| &mut w.advice,
-            &prepared,
-            setup,
             |t| {
                 self.bind(t, tokens, segments, &output);
                 bind_clips(t, &specs);
@@ -497,13 +489,12 @@ impl<'a> Model<'a> {
         Ok((output, proof))
     }
 
-    pub fn verify<C: ModelPcs>(
+    pub fn verify(
         &self,
         tokens: &[usize],
         segments: Option<&[usize]>,
         output: &[i32],
-        proof: &Proof<C>,
-        setup: &C::AdviceVerifierSetup,
+        proof: &Proof,
     ) -> Result<()> {
         let input = self.input(tokens, segments)?;
         match &self.head {
@@ -515,7 +506,6 @@ impl<'a> Model<'a> {
         proof.verify(
             &self.domain(),
             &layout,
-            setup,
             |t| {
                 self.bind(t, tokens, segments, output);
                 bind_clips(t, &proof.clipping);
@@ -674,15 +664,14 @@ impl Model<'_> {
         top_k::bind(t, cfg, candidates);
     }
 
-    pub fn prove_top_k<C: ModelPcs>(
+    pub fn prove_top_k(
         &self,
         tokens: &[usize],
         cfg: &TopKConfig,
-        setup: &C::AdviceProverSetup,
-    ) -> Result<(Vec<Vec<Candidate>>, Proof<C>)> {
+    ) -> Result<(Vec<Vec<Candidate>>, Proof)> {
         let input = self.input(tokens, None)?;
         let plan = self.top_k_plan(cfg)?;
-        let mut witness = self.forward::<C::Field>(&input, &plan.layout, false)?;
+        let mut witness = self.forward::<BitzField>(&input, &plan.layout, false)?;
         let norm = &witness.norm;
         let public = self.embeddings.tokens;
         let width = self.shape.width;
@@ -697,14 +686,11 @@ impl Model<'_> {
         )?;
         let mut layout = plan.layout.clone();
         let (specs, clipping) = self.prepare_clip(&mut layout, &mut witness)?;
-        let prepared = advice_plan::<C>(&layout)?;
         let mut proof = Proof::prove(
             &protocol_tag(b"atlas/model-specific/top-k/v3"),
             &layout,
             witness,
             |w| &mut w.advice,
-            &prepared,
-            setup,
             |t| {
                 self.bind_top_k(t, tokens, cfg, &candidates);
                 bind_clips(t, &specs);
@@ -715,13 +701,12 @@ impl Model<'_> {
         Ok((candidates, proof))
     }
 
-    pub fn verify_top_k<C: ModelPcs>(
+    pub fn verify_top_k(
         &self,
         tokens: &[usize],
         cfg: &TopKConfig,
         candidates: &[Vec<Candidate>],
-        proof: &Proof<C>,
-        setup: &C::AdviceVerifierSetup,
+        proof: &Proof,
     ) -> Result<()> {
         let input = self.input(tokens, None)?;
         let plan = self.top_k_plan(cfg)?;
@@ -731,7 +716,6 @@ impl Model<'_> {
         proof.verify(
             &protocol_tag(b"atlas/model-specific/top-k/v3"),
             &layout,
-            setup,
             |t| {
                 self.bind_top_k(t, tokens, cfg, candidates);
                 bind_clips(t, &proof.clipping);

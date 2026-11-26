@@ -601,7 +601,7 @@ impl<'a> Norm<'a> {
     }
 }
 
-#[cfg(all(test, feature = "bitz"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -623,10 +623,7 @@ mod tests {
             )
             .unwrap();
             let trace = norm
-                .execute::<<crate::protocol::BitzScheme as crate::protocol::ModelPcs>::Field>(
-                    &[1, -1],
-                    &mut layout.witness(),
-                )
+                .execute::<crate::protocol::pcs::BitzField>(&[1, -1], &mut layout.witness())
                 .unwrap();
             // The integer deviation is floor(sqrt(1 + 268)) = 16.
             assert_eq!(trace.output, [1024, -1024]);

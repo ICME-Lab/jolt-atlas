@@ -1,12 +1,10 @@
-#![cfg(feature = "bitz")]
-
 use model_specific_proving::{
     layers::{
         Activation, Attention, Mlp, NormalizationKind, NormalizationParameters, Projection,
         SoftmaxMask, SoftmaxTables,
     },
     models::{Architecture, Layer, Model, PublicEmbeddings},
-    protocol::{BitzScheme, Candidate, TopKConfig},
+    protocol::{Candidate, TopKConfig},
 };
 
 fn fixture(decoder: bool, rows: usize, layers: usize, gated: bool) -> Model<'static> {
@@ -110,12 +108,10 @@ fn fixture_with_scores(
 fn proves_two_decoder_layers_with_grouped_advice() {
     let model = fixture(true, 3, 2, false);
     let tokens = [0, 1, 2];
-    let (output, proof) = model.prove::<BitzScheme>(&tokens, None, &()).unwrap();
+    let (output, proof) = model.prove(&tokens, None).unwrap();
     assert_eq!(output.len(), 18);
-    model.verify(&tokens, None, &output, &proof, &()).unwrap();
-    assert!(model
-        .verify(&[0, 2, 2], None, &output, &proof, &())
-        .is_err());
+    model.verify(&tokens, None, &output, &proof).unwrap();
+    assert!(model.verify(&[0, 2, 2], None, &output, &proof).is_err());
 }
 
 #[test]
@@ -123,9 +119,9 @@ fn proves_causal_attention_across_lookup_tile_boundary() {
     for (rows, varied) in [(65, false), (128, false), (128, true)] {
         let model = fixture_with_scores(true, rows, 1, false, varied);
         let tokens: Vec<_> = (0..rows).map(|i| i % 6).collect();
-        let (output, proof) = model.prove::<BitzScheme>(&tokens, None, &()).unwrap();
+        let (output, proof) = model.prove(&tokens, None).unwrap();
         assert_eq!(output.len(), tokens.len() * 6);
-        model.verify(&tokens, None, &output, &proof, &()).unwrap();
+        model.verify(&tokens, None, &output, &proof).unwrap();
     }
 }
 
@@ -134,15 +130,13 @@ fn proves_encoder_with_public_segments() {
     let model = fixture(false, 3, 2, false);
     let tokens = [0, 1, 2];
     let segments = [0, 1, 0];
-    let (output, proof) = model
-        .prove::<BitzScheme>(&tokens, Some(&segments), &())
-        .unwrap();
+    let (output, proof) = model.prove(&tokens, Some(&segments)).unwrap();
     assert_eq!(model.cls(&output).unwrap().len(), 2);
     model
-        .verify(&tokens, Some(&segments), &output, &proof, &())
+        .verify(&tokens, Some(&segments), &output, &proof)
         .unwrap();
     assert!(model
-        .verify(&tokens, Some(&[0, 0, 0]), &output, &proof, &())
+        .verify(&tokens, Some(&[0, 0, 0]), &output, &proof)
         .is_err());
 }
 
@@ -150,14 +144,14 @@ fn proves_encoder_with_public_segments() {
 fn proves_top_k_and_picks_the_lower_id_on_ties() {
     let model = fixture(true, 2, 1, false);
     let tokens = [0, 1];
-    let (logits, _) = model.prove::<BitzScheme>(&tokens, None, &()).unwrap();
+    let (logits, _) = model.prove(&tokens, None).unwrap();
     let cfg = TopKConfig {
         positions: 0..2,
         k: 2,
         rows_per_block: 1,
         vocab_per_block: 4,
     };
-    let (mut candidates, proof) = model.prove_top_k::<BitzScheme>(&tokens, &cfg, &()).unwrap();
+    let (mut candidates, proof) = model.prove_top_k(&tokens, &cfg).unwrap();
     let expected: Vec<_> = logits
         .chunks_exact(6)
         .map(|row| {
@@ -173,18 +167,18 @@ fn proves_top_k_and_picks_the_lower_id_on_ties() {
         .collect();
     assert_eq!(candidates, expected);
     model
-        .verify_top_k(&tokens, &cfg, &candidates, &proof, &())
+        .verify_top_k(&tokens, &cfg, &candidates, &proof)
         .unwrap();
     candidates[0][0].logit += 1;
     assert!(model
-        .verify_top_k(&tokens, &cfg, &candidates, &proof, &())
+        .verify_top_k(&tokens, &cfg, &candidates, &proof)
         .is_err());
 }
 
 #[test]
 fn activates_gate_before_multiplying_by_up_projection() {
     let model = fixture(true, 1, 1, true);
-    let (output, proof) = model.prove::<BitzScheme>(&[0], None, &()).unwrap();
+    let (output, proof) = model.prove(&[0], None).unwrap();
     assert_eq!(output[0], -9);
-    model.verify(&[0], None, &output, &proof, &()).unwrap();
+    model.verify(&[0], None, &output, &proof).unwrap();
 }

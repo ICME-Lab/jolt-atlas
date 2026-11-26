@@ -1,6 +1,6 @@
 //! Model-specific fixed-point proofs built with the Jolt crates.
 //!
-//! Enable `bitz` to prove and verify with World BitZ.
+//! Proofs use World BitZ for polynomial commitments.
 
 pub mod layers;
 pub mod models;

@@ -7,28 +7,27 @@ edition = "2021"
 resolver = "2"
 
 [features]
-bitz = ["dep:world-common", "dep:world-field", "dep:world-pcs", "dep:world-prover", "dep:world-verifier", "dep:world-transcript", "dep:crypto-primitives", "dep:num-traits", "dep:rand_core", "dep:serde"]
-safetensors-weights = ["dep:safetensors", "dep:half", "dep:atlas-trace", "dep:libm", "dep:serde", "dep:serde_json"]
+safetensors-weights = ["dep:safetensors", "dep:half", "dep:atlas-trace", "dep:libm", "dep:serde_json"]
 
 [[bin]]
 name = "prove-model"
-required-features = ["bitz", "safetensors-weights"]
+required-features = ["safetensors-weights"]
 
 [dependencies]
-world-common = { package = "common", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
-world-field = { package = "field", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
-world-pcs = { package = "pcs", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
-world-prover = { package = "prover", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
-world-verifier = { package = "verifier", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
-world-transcript = { package = "transcript", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74", optional = true }
-crypto-primitives = { git = "https://github.com/NethermindEth/crypto-primitives.git", rev = "b744c74", optional = true }
-num-traits = { version = "0.2", optional = true }
-rand_core = { version = "0.6", optional = true }
+world-common = { package = "common", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+world-field = { package = "field", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+world-pcs = { package = "pcs", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+world-prover = { package = "prover", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+world-verifier = { package = "verifier", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+world-transcript = { package = "transcript", git = "https://github.com/worldfnd/BitZ.git", rev = "34addacd27d63b0929512bcc90fe95d256362b74" }
+crypto-primitives = { git = "https://github.com/NethermindEth/crypto-primitives.git", rev = "b744c74" }
+num-traits = { version = "0.2" }
+rand_core = { version = "0.6" }
 safetensors = { version = "0.8", optional = true }
 half = { version = "2", optional = true }
 atlas-trace = { path = "../crates/atlas-trace", optional = true }
 rayon = "1.10"
-serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 libm = { version = "0.2", optional = true }
 jolt-field = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["solinas"] }

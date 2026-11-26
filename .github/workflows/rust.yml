@@ -181,7 +181,7 @@ jobs:
       - run: cargo fmt --manifest-path model-specific-proving/Cargo.toml --check
       - run: >
           cargo nextest run --manifest-path model-specific-proving/Cargo.toml
-          --config-file .config/nextest.toml --locked --profile ci --features bitz,safetensors-weights
+          --config-file .config/nextest.toml --locked --profile ci --features safetensors-weights
 
   heavy-models:
     # Real GPT-2, BGE and Qwen2-0.5B: main, nightly, workflow_dispatch, and

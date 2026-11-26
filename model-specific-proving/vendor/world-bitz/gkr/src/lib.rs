@@ -798,7 +798,13 @@ pub fn grand_product(row_images: &[Field], bittable: &BitTable) -> (Vec<Field>, 
         bittable.shape().rows(),
         "one image per row of the table"
     );
-    bounded::build(row_images, bittable, bounded::DENSE_NODES)
+    bounded::build(row_images, bittable, bounded::DENSE_NODES, true)
+}
+
+/// Builds only the child layers the prover needs.
+pub fn grand_product_witness(row_images: &[Field], bittable: &BitTable) -> LayerWitnesses {
+    assert_eq!(row_images.len(), bittable.shape().rows());
+    bounded::build(row_images, bittable, bounded::DENSE_NODES, false).1
 }
 
 // An 8-bit table did not improve end-to-end proving time.
@@ -872,7 +878,11 @@ fn layer3(lut_layers: &LutLayers) -> Vec<Field> {
 /// Multiplies `layer` pairwise, left half against right half, until one
 /// value per group remains. Returns that output layer and every layer before
 /// it, `layer` first.
-fn fold_layers(mut layer: Vec<Field>, groups: usize) -> (Vec<Field>, Vec<Vec<Field>>) {
+fn fold_layers(
+    mut layer: Vec<Field>,
+    groups: usize,
+    include_output: bool,
+) -> (Vec<Field>, Vec<Vec<Field>>) {
     let rounds = (layer.len() / groups).checked_ilog2().unwrap_or(0);
     let mut witnesses = Vec::with_capacity(rounds as usize);
 
@@ -881,6 +891,10 @@ fn fold_layers(mut layer: Vec<Field>, groups: usize) -> (Vec<Field>, Vec<Vec<Fie
         // Node `k` multiplies node `k` of the left half and node `k` of the
         // right half below it.
         let (l, r) = layer.split_at(layer.len() / 2);
+        if !include_output && l.len() == groups {
+            witnesses.push(layer);
+            return (Vec::new(), witnesses);
+        }
         let next = l
             .par_iter()
             .zip(r)
@@ -938,7 +952,7 @@ mod tests {
         fn eval_preserves_product_across_layers(leaves in prop::collection::vec(field(), 0..12)) {
             let expected: Field = leaves.iter().product();
 
-            let (top, witnesses) = fold_layers(pad(leaves), 1);
+            let (top, witnesses) = fold_layers(pad(leaves), 1, true);
 
             prop_assert_eq!(top.iter().product::<Field>(), expected);
 
@@ -955,7 +969,7 @@ mod tests {
             let padded = pad(leaves);
             let groups = 1usize << groups_log2.min(padded.len().ilog2() as usize);
 
-            let (top, _witnesses) = fold_layers(padded.clone(), groups);
+            let (top, _witnesses) = fold_layers(padded.clone(), groups, true);
             prop_assert_eq!(top.len(), groups);
 
             for (j, &value) in top.iter().enumerate() {
@@ -1150,7 +1164,7 @@ mod tests {
         let table = table(shape, &packed);
         let dense_limit = shape.columns() * 4;
         let (expected, dense) = grand_product(&row_images, &table);
-        let (output, compact) = bounded::build(&row_images, &table, dense_limit);
+        let (output, compact) = bounded::build(&row_images, &table, dense_limit, true);
         assert_eq!(expected, output);
 
         let mut point = vec![Field::from(5u128); shape.log_columns()];
@@ -1208,7 +1222,7 @@ mod tests {
         let (shape, packed, row_images) = instance(SMALLEST, Bits::Drawn, 4);
         let table = table(shape, &packed);
         // The leaves and every layer above, built one leaf at a time.
-        let (_, layers) = fold_layers(leaves(&table, &row_images), shape.columns());
+        let (_, layers) = fold_layers(leaves(&table, &row_images), shape.columns(), true);
         let (_, witnesses) = grand_product(&row_images, &table);
         let lut_layers = witnesses.lut_layers;
         let mut bound_children = Field::zeroed_vec(lut_layers.nodes::<LAYER1>());
@@ -1275,7 +1289,7 @@ mod tests {
             let (shape, packed, row_images) = instance((log_rows, log_columns), Bits::Drawn, 3);
             let table = table(shape, &packed);
             let (expected_output, expected_layers) =
-                fold_layers(leaves(&table, &row_images), shape.columns());
+                fold_layers(leaves(&table, &row_images), shape.columns(), true);
 
             let (output, witnesses) = grand_product(&row_images, &table);
             // Both start at layer 3: the reference after its first three.

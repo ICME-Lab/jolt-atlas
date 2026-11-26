@@ -61,35 +61,38 @@ impl Pair {
     /// over adjacent entries, since `MLE[W](X, x') = w_0 + X (w_0 + w_1)`
     /// and likewise for `MLE[V]`.
     fn message(&self) -> RoundMessage {
-        fn coeffs(this: &Pair) -> (Wide256, Wide256) {
-            // Large tables are split into cache-sized chunks summed on the Rayon pool.
-            #[cfg(feature = "parallel")]
-            {
-                // An even chunk length keeps every pair inside one chunk.
-                let chunk = workload_size::<F128>() & !1;
-                if this.weights.len() > chunk {
-                    return this
-                        .weights
-                        .par_chunks(chunk)
-                        .zip(this.values.par_chunks(chunk))
-                        .map(|(w, v)| coefficients_serial(w, v))
-                        .reduce(
-                            || (Wide256::zero(), Wide256::zero()),
-                            |(a0, a2), (b0, b2)| (a0 + b0, a2 + b2),
-                        );
-                }
-            }
-            coefficients_serial(&this.weights, &this.values)
-        }
-
-        let (a0, a2) = coeffs(self);
-        [a0.reduce(), a2.reduce()]
+        message(&self.weights, &self.values)
     }
 
     fn fold(&mut self, challenge: F128) {
         fold(&mut self.weights, challenge);
         fold(&mut self.values, challenge);
     }
+}
+
+pub(super) fn message(weights: &[F128], values: &[F128]) -> RoundMessage {
+    fn coeffs(weights: &[F128], values: &[F128]) -> (Wide256, Wide256) {
+        // Large tables are split into cache-sized chunks summed on the Rayon pool.
+        #[cfg(feature = "parallel")]
+        {
+            // An even chunk length keeps every pair inside one chunk.
+            let chunk = workload_size::<F128>() & !1;
+            if weights.len() > chunk {
+                return weights
+                    .par_chunks(chunk)
+                    .zip(values.par_chunks(chunk))
+                    .map(|(w, v)| coefficients_serial(w, v))
+                    .reduce(
+                        || (Wide256::zero(), Wide256::zero()),
+                        |(a0, a2), (b0, b2)| (a0 + b0, a2 + b2),
+                    );
+            }
+        }
+        coefficients_serial(weights, values)
+    }
+
+    let (a0, a2) = coeffs(weights, values);
+    [a0.reduce(), a2.reduce()]
 }
 
 /// Runs the sumcheck over `pair`, folding it in place, and writes the
@@ -197,6 +200,15 @@ pub(crate) fn fold(table: &mut Vec<F128>, challenge: F128) {
 /// [`fold`] into a fresh table, for a table that is only borrowed.
 pub(crate) fn folded(table: &[F128], challenge: F128) -> Vec<F128> {
     let entry = |pair: &[F128]| pair[0] + challenge * (pair[0] + pair[1]);
+    #[cfg(feature = "parallel")]
+    if table.len() >= PARALLEL_FOLD_MIN {
+        return table.par_chunks_exact(2).map(entry).collect();
+    }
+    table.chunks_exact(2).map(entry).collect()
+}
+
+pub(super) fn folded_with_scale(table: &[F128], challenge: F128, scale: F128) -> Vec<F128> {
+    let entry = |pair: &[F128]| scale * (pair[0] + challenge * (pair[0] + pair[1]));
     #[cfg(feature = "parallel")]
     if table.len() >= PARALLEL_FOLD_MIN {
         return table.par_chunks_exact(2).map(entry).collect();

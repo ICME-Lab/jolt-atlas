@@ -127,6 +127,35 @@ pub(super) fn finish(
     }
 
     let read = PackedFold::new(packed, &point);
+    if rows.len() == 1 && columns.len() > 1 {
+        let scale = rows[0];
+        #[cfg(feature = "parallel")]
+        let values: Vec<_> = (0..columns.len())
+            .into_par_iter()
+            .with_min_len(4096)
+            .map(|i| read.value(i))
+            .collect();
+        #[cfg(not(feature = "parallel"))]
+        let values: Vec<_> = (0..columns.len()).map(|i| read.value(i)).collect();
+        let message = sumcheck::message(&columns, &values).map(|term| scale * term);
+        transcript.prover_message(&message);
+        transcript.grind(GRINDING_LABEL, security.grinding_bits(2));
+        let challenge = transcript.verifier_message();
+        running = advance(running, message, challenge);
+        point.push(challenge);
+        let (weights, values) = (
+            sumcheck::folded_with_scale(&columns, challenge, scale),
+            sumcheck::folded(&values, challenge),
+        );
+        let (rest, target) = sumcheck::prove(
+            &mut Pair::new(weights, values),
+            running,
+            security,
+            transcript,
+        );
+        point.extend(rest);
+        return OpeningQuery::Mle { point, target };
+    }
     let len = rows.len() * columns.len();
     let value = |i| read.value(i);
     let weight = |i: usize| rows[i & (rows.len() - 1)] * columns[i / rows.len()];

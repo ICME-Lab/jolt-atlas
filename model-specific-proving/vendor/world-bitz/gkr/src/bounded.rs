@@ -38,6 +38,7 @@ pub(super) fn build(
     row_images: &[Field],
     table: &BitTable,
     dense_nodes: usize,
+    include_output: bool,
 ) -> (Vec<Field>, LayerWitnesses) {
     let lut_layers = LutLayers::new(table.as_matrix(), row_images);
     let n = lut_layers.nodes::<LAYER2>() / 2;
@@ -58,7 +59,7 @@ pub(super) fn build(
             .map(|i| lut_layers.child(level, i))
             .collect()
     };
-    let (output, upper_nodes) = fold_layers(first, columns);
+    let (output, upper_nodes) = fold_layers(first, columns, include_output);
     (
         output,
         LayerWitnesses {

@@ -1032,19 +1032,28 @@ impl Plan {
 
             // The Atlas reductions share a transcript, but each BitZ proof uses
             // its own channel. Prepare at most one group while its predecessor opens.
-            let pipeline = (streamed && rayon::current_num_threads() > 1).then(|| {
+            // A worker waiting on Rayon must not depend on the caller's thread.
+            let pipeline = if streamed
+                && self.groups.len() > 1
+                && rayon::current_thread_index().is_none()
+                && rayon::current_num_threads() > 1
+            {
                 let (send, work) = std::sync::mpsc::sync_channel::<Opening<'_>>(0);
                 let (done, receive) = std::sync::mpsc::sync_channel(1);
-                threads.spawn(move || {
-                    let mut provers = Provers::new();
-                    for open in work {
-                        if done.send(open(&mut provers)).is_err() {
-                            break;
+                std::thread::Builder::new()
+                    .spawn_scoped(threads, move || {
+                        let mut provers = Provers::new();
+                        for open in work {
+                            if done.send(open(&mut provers)).is_err() {
+                                break;
+                            }
                         }
-                    }
-                });
-                (send, receive)
-            });
+                    })
+                    .ok()
+                    .map(|_| (send, receive))
+            } else {
+                None
+            };
             let mut provers = Provers::new();
             let mut pending = false;
             for ((((params, pcs), slots), queries), expected) in

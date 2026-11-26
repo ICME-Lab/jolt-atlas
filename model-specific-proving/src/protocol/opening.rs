@@ -545,39 +545,41 @@ fn active_columns(requests: &[Projection<'_, '_>]) -> impl Iterator<Item = usize
     (0..0).chain(points)
 }
 
-fn project_codes<'w, C: Copy>(
+fn project_codes<'w, C: Copy, T>(
     outputs: &mut [Vec<F>],
     requests: &[Projection<'_, 'w>],
     len: usize,
     read: impl Fn(usize) -> Option<u128>,
     coefficients: impl Fn(&'w [F]) -> Option<(F, C)>,
-    evaluate: impl Fn(C, u128) -> F,
+    prepare: impl Fn(C, F) -> T,
+    evaluate: impl Fn(&T, u128) -> F,
 ) {
-    let mut entries: Vec<_> = requests
+    let entries: Vec<_> = requests
         .iter()
         .filter_map(|&(q, row)| {
             let (scale, coefficients) = coefficients(q.planes)?;
-            Some((q, row, q.mix * scale, coefficients, None))
+            Some((q, row, q.mix * scale, coefficients))
         })
         .collect();
     if entries.is_empty() {
         return;
     }
+    let mut active = Vec::with_capacity(entries.len());
     for col in active_columns(requests) {
-        for (q, _, scale, _, factor) in &mut entries {
-            *factor = q
-                .cols
-                .weights
-                .get(col.wrapping_sub(q.cols.start))
-                .map(|&w| w * *scale);
+        active.clear();
+        active.extend(entries.iter().filter_map(|&(q, row, scale, coefficients)| {
+            let &weight = q.cols.weights.get(col.wrapping_sub(q.cols.start))?;
+            Some((row, prepare(coefficients, weight * scale)))
+        }));
+        if active.is_empty() {
+            continue;
         }
+
         let start = col * ROWS;
         for i in start..(start + ROWS).min(len) {
             let Some(code) = read(i) else { continue };
-            for (_, row, _, coefficients, factor) in &entries {
-                if let Some(factor) = factor {
-                    outputs[*row][i - start] += evaluate(*coefficients, code) * *factor;
-                }
+            for (row, coefficients) in &active {
+                outputs[*row][i - start] += evaluate(coefficients, code);
             }
         }
     }
@@ -616,7 +618,8 @@ fn project(queries: &[Query<'_>], sources: &Sources) -> Vec<Column<'static>> {
                             (code != 0).then_some(code)
                         },
                         |weights| range_coefficient(&weights[planes.clone()]),
-                        |shift, code| F::from_u128(code >> shift),
+                        |shift, weight| (shift, weight),
+                        |&(shift, weight), code| F::from_u128(code >> shift) * weight,
                     );
                 }
             }
@@ -627,7 +630,14 @@ fn project(queries: &[Query<'_>], sources: &Sources) -> Vec<Column<'static>> {
                     digit.addresses.len(),
                     |i| Some(((digit.addresses.at(i) >> digit.shift) & (digit.width - 1)) as u128),
                     |weights| Some((F::one(), weights)),
-                    |weights, code| weights[code as usize],
+                    |weights, column_weight| {
+                        let mut scaled = [F::zero(); 16];
+                        for (out, &weight) in scaled.iter_mut().zip(weights) {
+                            *out = weight * column_weight;
+                        }
+                        scaled
+                    },
+                    |scaled, code| scaled[code as usize],
                 );
             }
         }
@@ -637,6 +647,47 @@ fn project(queries: &[Query<'_>], sources: &Sources) -> Vec<Column<'static>> {
         .zip(points)
         .flat_map(|(values, point)| [Column::Dense(values), Column::Dense(weights(point))])
         .collect()
+}
+
+fn add_column_weights(
+    columns: &mut [Scalar],
+    weights: &[F],
+    stride: usize,
+    planes: &[F],
+    scale: F,
+) {
+    const TILE: usize = 256;
+    let mut start = 0;
+    for run in planes.chunk_by(|&a, &b| a + a == b) {
+        if !run[0].is_zero() {
+            let scale = run[0] * scale;
+            if run.len() == 1 {
+                for (dst, &value) in columns[start..].iter_mut().zip(weights) {
+                    *dst += (scale * value).0;
+                }
+            } else {
+                let mut scratch = [F::zero(); TILE];
+                for (tile, weights) in weights.chunks(TILE).enumerate() {
+                    let scratch = &mut scratch[..weights.len()];
+                    for (dst, &weight) in scratch.iter_mut().zip(weights) {
+                        *dst = scale * weight;
+                    }
+                    let mut offset = start + tile * TILE;
+                    for _ in 1..run.len() {
+                        for (dst, weight) in columns[offset..].iter_mut().zip(scratch.iter_mut()) {
+                            *dst += weight.0;
+                            *weight += *weight;
+                        }
+                        offset += stride;
+                    }
+                    for (dst, weight) in columns[offset..].iter_mut().zip(scratch.iter()) {
+                        *dst += weight.0;
+                    }
+                }
+            }
+        }
+        start += run.len() * stride;
+    }
 }
 
 impl Plan {
@@ -722,13 +773,13 @@ impl Plan {
         let mut columns = vec![Scalar::from(0u64); params.shape().columns()];
         for q in queries {
             let scale = q.mix * equality(&q.row, &end.challenges);
-            for (plane, &weight) in q.planes.iter().enumerate().filter(|(_, w)| !w.is_zero()) {
-                let scale = weight * scale;
-                let offset = q.offset + plane * q.stride + q.cols.start;
-                for (dst, value) in columns[offset..].iter_mut().zip(q.cols.weights.iter()) {
-                    *dst += (scale * *value).0;
-                }
-            }
+            add_column_weights(
+                &mut columns[q.offset + q.cols.start..],
+                &q.cols.weights,
+                q.stride,
+                q.planes,
+                scale,
+            );
         }
         let rows = weights(&end.challenges).into_iter().map(|v| v.0).collect();
         LinearClaim::new(params, rows, columns, end.output_claim.0)
@@ -1025,4 +1076,30 @@ pub(crate) fn read_proof(mut reader: impl Read + Seek) -> Result<(ProofMetadata,
         return Err("unused proof metadata");
     }
     Ok((proof, metadata))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn column_weights_match_per_plane_multiplication() {
+        let weights: Vec<_> = (0..300).map(F::from_u64).collect();
+        let planes = [0, 0, 2, 4, 8, 7, 0, 3, 6].map(F::from_u64);
+        let stride = 512;
+        let scale = -F::from_u64(11);
+
+        for (offset, weights) in [(0, weights.as_slice()), (511, &weights[7..8])] {
+            let mut actual = vec![F::one().0; stride * planes.len()];
+            let mut expected = actual.clone();
+            for (plane, &coefficient) in planes.iter().enumerate() {
+                let start = offset + plane * stride;
+                for (dst, &weight) in expected[start..].iter_mut().zip(weights) {
+                    *dst += (coefficient * scale * weight).0;
+                }
+            }
+            add_column_weights(&mut actual[offset..], weights, stride, &planes, scale);
+            assert_eq!(actual, expected);
+        }
+    }
 }

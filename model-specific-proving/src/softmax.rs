@@ -78,15 +78,6 @@ impl<'a> Soft<'a> {
         }
     }
 
-    fn table(&self) -> Table<'a> {
-        Table::Pair(
-            self.tables.probabilities,
-            self.tables.sums,
-            self.tables.limit,
-            self.stride,
-        )
-    }
-
     pub fn prepare(
         &self,
         advice: &mut Advice,
@@ -94,8 +85,8 @@ impl<'a> Soft<'a> {
         commit_scores: bool,
         compute: Option<impl Fn(usize, usize) -> i128 + Sync>,
     ) -> Result<SoftTrace> {
-        let (scores, remainders): (Option<Vec<i32>>, Option<Vec<u32>>) =
-            if let Some(compute) = compute {
+        let (scores, remainders): (Option<Vec<i32>>, Option<Vec<u32>>) = compute
+            .map(|compute| -> Result<_> {
                 let width = self.shape.cols;
                 let mask = (1i128 << bits) - 1;
                 let data: Vec<_> = (0..self.shape.rows)
@@ -113,20 +104,15 @@ impl<'a> Soft<'a> {
                         Ok(row)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let (a, b) = data.into_iter().flatten().unzip();
-                (Some(a), Some(b))
-            } else {
-                (None, None)
-            };
+                Ok(data.into_iter().flatten().unzip())
+            })
+            .transpose()?
+            .unzip();
         let last = (self.tables.sums.len() - 1) as i64;
         let n = self.shape.rows;
         let w = self.shape.stride();
         let limit = i64::from(self.tables.limit);
-        let mut stats = None;
-        let mut overflow = None;
-        let mut probabilities = None;
-        let mut addresses = None;
-        if let Some(scores) = &scores {
+        let (stats, overflow, probabilities, addresses) = if let Some(scores) = &scores {
             let rows: Vec<_> = scores
                 .par_chunks_exact(n)
                 .enumerate()
@@ -181,11 +167,11 @@ impl<'a> Soft<'a> {
                         extra[c] = d - v;
                     }
                 });
-            stats = Some(rows);
-            overflow = extra.iter().any(|&v| v != 0).then_some(extra);
-            probabilities = Some(prob);
-            addresses = Some(codes);
-        }
+            let overflow = extra.iter().any(|&v| v != 0).then_some(extra);
+            (Some(rows), overflow, Some(prob), Some(codes))
+        } else {
+            (None, None, None, None)
+        };
         let lookups = self
             .tiles
             .iter()
@@ -295,7 +281,12 @@ impl<'a> Soft<'a> {
         let last = F::from_u64((self.tables.sums.len() - 1) as u64);
         let radix = F::from_u128(self.stride);
         let limit = F::from_i32(self.tables.limit);
-        let table = self.table();
+        let table = Table::Pair(
+            self.tables.probabilities,
+            self.tables.sums,
+            self.tables.limit,
+            self.stride,
+        );
         let zero_prob = F::from_i32(self.tables.probabilities[0]);
         let zero_sum = F::from_i32(self.tables.sums[0]) + radix * (limit + F::one());
         let relation = |v: &[F; 11]| {
@@ -382,42 +373,49 @@ impl<'a> Soft<'a> {
         let [shift_slot, under_slot, over_slot] = trace.stats_slots;
         requests.push(under_slot, r, under);
         requests.push(over_slot, r, over);
-        let advice = io.advice();
         let mut whole = [F::zero(); 6];
-        for (&tile, trace_tile) in self.tiles.iter().zip(&trace.lookups) {
-            let (factor, local) = tile.restrict(r, c);
-            let values = io.values(|| {
-                let codes = codes.unwrap();
-                let advice = advice.unwrap();
-                let mut acc = [F::zero(); 6];
-                let (rp, cp) = local.split_at(tile.size.ilog2() as usize);
-                let cp = basis(cp);
-                for (i, w) in basis(rp).into_iter().enumerate() {
-                    let mut totals = [F::zero(); 6];
-                    for (j, &weight) in cp.iter().enumerate() {
-                        let address = codes[(tile.row + i) * stride + tile.col + j];
-                        let rem = F::from_u32(
-                            advice.value(trace_tile.remainder, i * tile.size + j) as u32,
-                        );
-                        let [score, overflow] = self.at(trace, address, tile.row + i, tile.col + j);
-                        let (p, t) = table.values(address as usize);
-                        for (v, b) in totals.iter_mut().zip([
-                            score,
-                            F::from_u32(address),
-                            p,
-                            t,
-                            overflow,
-                            rem,
-                        ]) {
-                            *v += weight * b;
+        let points: Vec<_> = self.tiles.iter().map(|t| t.restrict(r, c)).collect();
+        let evaluations = io.advice().map(|advice| {
+            let codes = codes.unwrap();
+            self.tiles
+                .par_iter()
+                .zip(&trace.lookups)
+                .zip(&points)
+                .map(|((&tile, trace_tile), (_, local))| {
+                    let mut acc = [F::zero(); 6];
+                    let (row, col) = local.split_at(tile.size.ilog2() as usize);
+                    let col = basis(col);
+                    for (i, w) in basis(row).into_iter().enumerate() {
+                        let mut totals = [F::zero(); 6];
+                        for (j, &weight) in col.iter().enumerate() {
+                            let address = codes[(tile.row + i) * stride + tile.col + j];
+                            let rem = F::from_u32(
+                                advice.value(trace_tile.remainder, i * tile.size + j) as u32,
+                            );
+                            let [score, overflow] =
+                                self.at(trace, address, tile.row + i, tile.col + j);
+                            let (p, t) = table.values(address as usize);
+                            for (v, b) in totals.iter_mut().zip([
+                                score,
+                                F::from_u32(address),
+                                p,
+                                t,
+                                overflow,
+                                rem,
+                            ]) {
+                                *v += weight * b;
+                            }
+                        }
+                        for (a, t) in acc.iter_mut().zip(totals) {
+                            *a += w * t;
                         }
                     }
-                    for (a, t) in acc.iter_mut().zip(totals) {
-                        *a += w * t;
-                    }
-                }
-                acc
-            })?;
+                    acc
+                })
+                .collect::<Vec<_>>()
+        });
+        for (i, (trace_tile, (factor, local))) in trace.lookups.iter().zip(points).enumerate() {
+            let values = io.values(|| evaluations.as_ref().unwrap()[i])?;
             for (a, b) in whole.iter_mut().zip(values) {
                 *a += factor * b;
             }
@@ -446,11 +444,12 @@ impl<'a> Soft<'a> {
             values
         })?;
         requests.push(shift_slot, &shift.point, shift.value);
+        let score = whole[0] * F::from_u64(1 << bits) + whole[5];
         let v_point = c.to_vec();
         Ok((
             Claim {
                 point,
-                value: whole[0] * F::from_u64(1 << bits) + whole[5],
+                value: score,
             },
             v_point,
             value,

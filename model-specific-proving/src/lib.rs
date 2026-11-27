@@ -942,7 +942,7 @@ impl Width {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 struct Slot(usize);
 #[derive(Clone, Copy, Serialize, Deserialize)]
-struct Packed(usize, usize);
+struct Packed(usize, u8);
 struct Storage {
     shape: Shape,
     width: Width,
@@ -982,6 +982,7 @@ impl Advice {
         self.layers.push(self.slots.len());
     }
     fn pack(&mut self, s: Shape, bits: usize, f: impl Fn(usize) -> i128 + Sync) -> Result<Packed> {
+        let width = u8::try_from(bits).map_err(|_| "invalid packed width")?;
         let at = self.offset;
         if let Some(file) = self.pending.as_mut().filter(|_| bits != 0) {
             let size = s.len();
@@ -1016,7 +1017,7 @@ impl Advice {
             file.write_all(&raw).map_err(|_| "write witnesses")?;
             self.offset += raw.len();
         }
-        Ok(Packed(at, bits))
+        Ok(Packed(at, width))
     }
     fn add(&mut self, entry: Storage) -> Slot {
         let id = Slot(self.slots.len());
@@ -1080,6 +1081,7 @@ impl Advice {
         Ok(())
     }
     fn get(&self, Packed(base, width): Packed, i: usize) -> u128 {
+        let width = usize::from(width);
         if width == 0 {
             return 0;
         }

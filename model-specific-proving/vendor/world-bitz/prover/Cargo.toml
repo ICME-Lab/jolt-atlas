@@ -6,7 +6,6 @@ rust-version = "1.97"
 license = "MIT OR Apache-2.0"
 
 [features]
-gkr-metal = ["gkr/metal"]
 gkr-backend = ["gkr/gkr-backend"]
 default = ["parallel"]
 parallel = ["common/parallel"]

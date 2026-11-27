@@ -168,7 +168,7 @@ jobs:
 
   model-specific-proving:
     name: Model-specific proofs
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     env:
       CARGO_BUILD_JOBS: 2
     steps:
@@ -178,6 +178,7 @@ jobs:
           components: rustfmt
           cache: false
       - uses: taiki-e/install-action@nextest
+      - run: xcrun metal --version || xcodebuild -downloadComponent metalToolchain
       - run: cargo fmt --manifest-path model-specific-proving/Cargo.toml --check
       - run: >
           cargo nextest run --manifest-path model-specific-proving/Cargo.toml

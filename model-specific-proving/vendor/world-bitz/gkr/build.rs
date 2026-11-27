@@ -10,11 +10,11 @@ fn run(args: &[&str]) {
 }
 
 fn main() {
-    if env::var_os("CARGO_FEATURE_METAL").is_none()
-        || env::var("TARGET").as_deref() != Ok("aarch64-apple-darwin")
-    {
-        return;
-    }
+    assert_eq!(
+        env::var("TARGET").as_deref(),
+        Ok("aarch64-apple-darwin"),
+        "model-specific-proving requires Apple Silicon and the Xcode Metal toolchain"
+    );
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     println!("cargo:rerun-if-changed=src/leaf.metal");
     println!("cargo:rerun-if-changed=src/metal.m");

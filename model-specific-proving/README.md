@@ -76,7 +76,9 @@ together.
 
 ## Proving with BitZ
 
-The `safetensors-weights` feature reads `config.json` and a single
+This crate requires Apple Silicon and the Xcode Metal toolchain. It uses Metal
+for the first two BitZ GKR leaf rounds on large groups. The
+`safetensors-weights` feature reads `config.json` and a single
 `model.safetensors` file containing F32, F16, or BF16 weights.
 
 ```sh
@@ -84,10 +86,6 @@ cargo run --release --manifest-path model-specific-proving/Cargo.toml \
   --features safetensors-weights --bin prove-model -- \
   models/gpt2-tiny 14 17 42
 ```
-
-On Apple Silicon, add the `bitz-metal` feature to run the first two BitZ GKR
-leaf rounds for large groups on Metal. Building the feature requires the Xcode
-Metal toolchain.
 
 The CLI proves and returns the Top-8 candidates for up to the last four
 positions of a decoder input. For an encoder, it returns the output tensor.

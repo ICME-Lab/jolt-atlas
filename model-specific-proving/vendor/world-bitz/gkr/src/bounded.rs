@@ -2,7 +2,6 @@
 
 use super::*;
 
-#[cfg(all(feature = "metal", target_os = "macos", target_arch = "aarch64"))]
 #[path = "metal.rs"]
 mod metal;
 
@@ -196,7 +195,6 @@ fn prove_relation(
                 }
                 sum.reduce()
             };
-            #[cfg(all(feature = "metal", target_os = "macos", target_arch = "aarch64"))]
             let gpu = source_lut.and_then(|(lut, level)| {
                 if level == LEAVES && side > dense_nodes {
                     metal::Leaves::new(lut, point)
@@ -216,9 +214,6 @@ fn prove_relation(
                 let projected = source_lut.filter(|_| paired.is_none()).map(|(lut, level)| {
                     packed_round::PackedRound::new(lut, level, stride, &prefix)
                 });
-                #[cfg(not(all(feature = "metal", target_os = "macos", target_arch = "aarch64")))]
-                let gpu_sum = None;
-                #[cfg(all(feature = "metal", target_os = "macos", target_arch = "aarch64"))]
                 let gpu_sum = gpu.as_ref().and_then(|leaves| match prefix.len() {
                     1 => Some(leaves.first(at_one)),
                     2 => Some(leaves.second(challenges[i + 1], at_one)),
@@ -350,10 +345,16 @@ fn prove_relation(
         #[cfg(feature = "gkr-backend")]
         if let Some(gpu) = &mut backend {
             let (low, high) = point[..i].split_at(i.min(TILE.ilog2() as usize));
-            if let Some([value, infinity]) = gpu.step(previous, sends_one(point[i]),
-                &poly::eq_table(low), &poly::eq_table(high))
-            {
-                let sums = (Wide256::mul(value, Field::ONE), Wide256::mul(infinity, Field::ONE));
+            if let Some([value, infinity]) = gpu.step(
+                previous,
+                sends_one(point[i]),
+                &poly::eq_table(low),
+                &poly::eq_table(high),
+            ) {
+                let sums = (
+                    Wide256::mul(value, Field::ONE),
+                    Wide256::mul(infinity, Field::ONE),
+                );
                 let r = send_round(ps, &mut eq_bound, sums, point[i], security);
                 challenges[i] = r;
                 previous = Some(r);
@@ -365,10 +366,10 @@ fn prove_relation(
                 left = &mut left[..2 * mid];
                 right = &mut right[..2 * mid];
                 gpu.snapshot(left, right);
-                let (l0,l1) = left.split_at_mut(mid);
-                let (r0,r1) = right.split_at_mut(mid);
-                bind(r,l0,l1,r0,r1);
-                (left,right) = (l0,r0);
+                let (l0, l1) = left.split_at_mut(mid);
+                let (r0, r1) = right.split_at_mut(mid);
+                bind(r, l0, l1, r0, r1);
+                (left, right) = (l0, r0);
             }
             backend = None;
         }

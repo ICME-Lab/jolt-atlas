@@ -4671,35 +4671,69 @@ impl<'a> Model<'a> {
         let mut norm = (!self.decoder)
             .then(|| self.normalize(&mut advice, self.norm, x))
             .transpose()?;
-        let mut file = (prove && self.layers.len() > 1 && self.shape.rows >= 128)
+        let file = (prove && self.layers.len() > 1 && self.shape.rows >= 128)
             .then(tempfile::tempfile)
             .transpose()
             .map_err(|_| "create layer file")?;
         let mut early = (file.is_some() && self.layers.len() > WINDOW && can_overlap())
             .then(|| EarlyCommit::new((rayon::current_num_threads() - 1).min(3)))
             .transpose()?;
-        let mut records = Vec::with_capacity(self.layers.len());
-        let mut hidden = Vec::new();
-        advice.cut();
-        for i in 0..self.layers.len() {
-            let x = match records.last() {
-                None => norm.as_ref().map_or(x, Normalized::values),
-                Some(Saved::OnDisk(..)) => Some(hidden.as_slice()),
-                Some(Saved::InMemory(layer)) => layer.after_mlp.values(self.decoder),
-            };
-            let mut layer = self.forward_layer(i, &mut advice, x)?;
-            let saved = if let Some(file) = file.as_mut().filter(|_| i + 1 < self.layers.len()) {
-                hidden = layer.after_mlp.take(self.decoder);
-                save_layer(file, &hidden, &layer)?
+        let (records, file) = std::thread::scope(|scope| -> Result<_> {
+            let (send, writer) = if let Some(mut file) = file {
+                let (send, jobs) = mpsc::sync_channel::<(Arc<Vec<i32>>, LayerTrace)>(0);
+                let writer = scope.spawn(move || -> Result<_> {
+                    let mut records = Vec::new();
+                    for (hidden, layer) in jobs {
+                        records.push(save_layer(&mut file, &hidden, &layer)?);
+                    }
+                    Ok((records, file))
+                });
+                (Some(send), Some(writer))
             } else {
-                Saved::InMemory(Box::new(layer))
+                (None, None)
             };
-            records.push(saved);
+            let mut records = Vec::with_capacity(self.layers.len());
+            let mut hidden: Option<Arc<Vec<i32>>> = None;
             advice.cut();
-            if let Some(early) = &mut early {
-                early.boundary(&mut advice, i + 1, self.layers.len())?;
+            let trace = (|| {
+                for i in 0..self.layers.len() {
+                    let x = if let Some(hidden) = &hidden {
+                        Some(hidden.as_slice())
+                    } else if let Some(Saved::InMemory(layer)) = records.last() {
+                        layer.after_mlp.values(self.decoder)
+                    } else {
+                        norm.as_ref().map_or(x, Normalized::values)
+                    };
+                    let mut layer = self.forward_layer(i, &mut advice, x)?;
+                    if let Some(send) = send.as_ref().filter(|_| i + 1 < self.layers.len()) {
+                        let values = Arc::new(layer.after_mlp.take(self.decoder));
+                        tracing::info_span!("atlas trace writer wait")
+                            .in_scope(|| send.send((values.clone(), layer)))
+                            .map_err(|_| "layer writer stopped")?;
+                        hidden = Some(values);
+                    } else {
+                        records.push(Saved::InMemory(Box::new(layer)));
+                    }
+                    advice.cut();
+                    if let Some(early) = &mut early {
+                        early.boundary(&mut advice, i + 1, self.layers.len())?;
+                    }
+                }
+                Ok(())
+            })();
+            drop(send);
+            if let Some(writer) = writer {
+                let (mut saved, file) = tracing::info_span!("atlas trace writer drain")
+                    .in_scope(|| writer.join())
+                    .map_err(|_| "layer writer panicked")??;
+                trace?;
+                saved.extend(records);
+                Ok((saved, Some(file)))
+            } else {
+                trace?;
+                Ok((records, None))
             }
-        }
+        })?;
         let norm = if let Some(norm) = norm.take() {
             norm
         } else {

@@ -25,25 +25,29 @@ impl Rounded {
         check_output: bool,
         witness: Option<impl Fn(usize, usize) -> i128 + Sync>,
     ) -> Result<Self> {
-        let values = witness
-            .map(|f| {
-                let scale = 1 << bits;
-                (0..shape.rows * shape.cols)
-                    .into_par_iter()
-                    .with_min_len(512)
-                    .map(|i| {
-                        let value = f(i / shape.cols, i % shape.cols);
-                        let out =
-                            i32::try_from(value >> bits).map_err(|_| "fixed-point overflow")?;
-                        Ok((out, value.rem_euclid(scale) as u32))
-                    })
-                    .collect::<Result<Vec<_>>>()
-                    .map(|values| values.into_iter().unzip())
-            })
-            .transpose()?;
-        let (values, remainder) =
-            values.map_or((None, None), |(output, rest)| (Some(output), Some(rest)));
+        let (values, remainder) = witness
+            .map(|f| Self::witness(shape, bits, f))
+            .transpose()?
+            .unzip();
         Self::record(advice, shape, bits, check_output, values, remainder)
+    }
+
+    pub fn witness(
+        shape: Shape,
+        bits: u32,
+        f: impl Fn(usize, usize) -> i128 + Sync,
+    ) -> Result<(Vec<i32>, Vec<u32>)> {
+        let scale = 1 << bits;
+        (0..shape.rows * shape.cols)
+            .into_par_iter()
+            .with_min_len(512)
+            .map(|i| {
+                let value = f(i / shape.cols, i % shape.cols);
+                let out = i32::try_from(value >> bits).map_err(|_| "fixed-point overflow")?;
+                Ok((out, value.rem_euclid(scale) as u32))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|values| values.into_iter().unzip())
     }
 
     pub fn record(

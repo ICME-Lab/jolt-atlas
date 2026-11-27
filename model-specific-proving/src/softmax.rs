@@ -21,9 +21,17 @@ pub(crate) struct Soft<'a> {
     tiles: Vec<Tile>,
 }
 
+pub(crate) struct SoftWitness {
+    scores: Vec<i32>,
+    remainders: Vec<u32>,
+    stats: Vec<[i64; 3]>,
+    overflow: Option<Vec<i64>>,
+    pub probabilities: Vec<i32>,
+    addresses: Vec<u32>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct SoftTrace {
-    pub probabilities: Option<Vec<i32>>,
     lookups: Vec<TileTrace>,
     stats: Option<Vec<[i64; 3]>>,
     overflow: Option<Vec<i64>>,
@@ -78,99 +86,113 @@ impl<'a> Soft<'a> {
         }
     }
 
-    pub fn prepare(
+    pub fn witness(
+        &self,
+        bits: u32,
+        compute: impl Fn(usize, usize) -> i128 + Sync,
+    ) -> Result<SoftWitness> {
+        let n = self.shape.rows;
+        let w = self.shape.stride();
+        let mask = (1i128 << bits) - 1;
+        let mut scores = vec![0; n * n];
+        let mut remainders = vec![0; n * n];
+        scores
+            .par_chunks_mut(n)
+            .zip(remainders.par_chunks_mut(n))
+            .enumerate()
+            .try_for_each(|(r, (scores, remainders))| -> Result<()> {
+                for c in 0..self.count(r) {
+                    let raw = compute(r, c);
+                    scores[c] = i32::try_from(raw >> bits).map_err(|_| "QK score exceeds i32")?;
+                    remainders[c] = (raw & mask) as u32;
+                }
+                Ok(())
+            })?;
+        let last = (self.tables.sums.len() - 1) as i64;
+        let limit = i64::from(self.tables.limit);
+        let rows: Vec<_> = scores
+            .par_chunks_exact(n)
+            .enumerate()
+            .map(|(r, row)| {
+                let row = &row[..self.count(r)];
+                let max = i64::from(*row.iter().max().unwrap());
+                let sum = |shift: i64, prev: bool| {
+                    row.iter()
+                        .map(|&v| {
+                            let a = (shift - i64::from(v)).min(last) - i64::from(prev);
+                            if a < 0 {
+                                limit + 1
+                            } else {
+                                i64::from(self.tables.sums[a.min(last) as usize])
+                            }
+                        })
+                        .sum::<i64>()
+                };
+                let (mut a, mut b) = (max, max + last);
+                while a < b {
+                    let mid = a + (b - a) / 2;
+                    let above = row.iter().try_fold(0i64, |total, &v| {
+                        let address = (mid - i64::from(v)).min(last) as usize;
+                        let total = total + i64::from(self.tables.sums[address]);
+                        (total <= limit).then_some(total)
+                    });
+                    if above.is_some() {
+                        b = mid;
+                    } else {
+                        a = mid + 1;
+                    }
+                }
+                [a, limit - sum(a, false), sum(a, true) - limit - 1]
+            })
+            .collect();
+        let mut extra = vec![0; n * n];
+        let mut prob = vec![0; n * n];
+        let mut codes = vec![0; self.shape.padded()];
+        extra
+            .par_chunks_mut(n)
+            .zip(prob.par_chunks_mut(n))
+            .zip(codes.par_chunks_mut(w))
+            .zip(scores.par_chunks_exact(n))
+            .zip(rows.par_iter())
+            .enumerate()
+            .for_each(|(r, ((((extra, prob), codes), scores), stat))| {
+                for c in 0..self.count(r) {
+                    let d = stat[0] - i64::from(scores[c]);
+                    let v = d.min(last);
+                    codes[c] = v as u32;
+                    prob[c] = self.tables.probabilities[v as usize];
+                    extra[c] = d - v;
+                }
+            });
+        let overflow = extra.iter().any(|&v| v != 0).then_some(extra);
+        Ok(SoftWitness {
+            scores,
+            remainders,
+            stats: rows,
+            overflow,
+            probabilities: prob,
+            addresses: codes,
+        })
+    }
+
+    pub fn record(
         &self,
         advice: &mut Advice,
         bits: u32,
         commit_scores: bool,
-        compute: Option<impl Fn(usize, usize) -> i128 + Sync>,
+        witness: Option<SoftWitness>,
     ) -> Result<SoftTrace> {
-        let (scores, remainders): (Option<Vec<i32>>, Option<Vec<u32>>) = compute
-            .map(|compute| -> Result<_> {
-                let width = self.shape.cols;
-                let mask = (1i128 << bits) - 1;
-                let data: Vec<_> = (0..self.shape.rows)
-                    .into_par_iter()
-                    .map(|r| {
-                        let active = self.count(r);
-                        let mut row = vec![(0i32, 0u32); width];
-                        for (c, value) in row[..active].iter_mut().enumerate() {
-                            let raw = compute(r, c);
-                            *value = (
-                                i32::try_from(raw >> bits).map_err(|_| "QK score exceeds i32")?,
-                                (raw & mask) as u32,
-                            );
-                        }
-                        Ok(row)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(data.into_iter().flatten().unzip())
-            })
-            .transpose()?
-            .unzip();
-        let last = (self.tables.sums.len() - 1) as i64;
         let n = self.shape.rows;
         let w = self.shape.stride();
-        let limit = i64::from(self.tables.limit);
-        let (stats, overflow, probabilities, addresses) = if let Some(scores) = &scores {
-            let rows: Vec<_> = scores
-                .par_chunks_exact(n)
-                .enumerate()
-                .map(|(r, row)| {
-                    let row = &row[..self.count(r)];
-                    let max = i64::from(*row.iter().max().unwrap());
-                    let sum = |shift: i64, prev: bool| {
-                        row.iter()
-                            .map(|&v| {
-                                let a = (shift - i64::from(v)).min(last) - i64::from(prev);
-                                if a < 0 {
-                                    limit + 1
-                                } else {
-                                    i64::from(self.tables.sums[a.min(last) as usize])
-                                }
-                            })
-                            .sum::<i64>()
-                    };
-                    let (mut a, mut b) = (max, max + last);
-                    while a < b {
-                        let mid = a + (b - a) / 2;
-                        let above = row.iter().try_fold(0i64, |total, &v| {
-                            let address = (mid - i64::from(v)).min(last) as usize;
-                            let total = total + i64::from(self.tables.sums[address]);
-                            (total <= limit).then_some(total)
-                        });
-                        if above.is_some() {
-                            b = mid;
-                        } else {
-                            a = mid + 1;
-                        }
-                    }
-                    [a, limit - sum(a, false), sum(a, true) - limit - 1]
-                })
-                .collect();
-            let mut extra = vec![0; n * n];
-            let mut prob = vec![0; n * n];
-            let mut codes = vec![0; self.shape.padded()];
-            extra
-                .par_chunks_mut(n)
-                .zip(prob.par_chunks_mut(n))
-                .zip(codes.par_chunks_mut(w))
-                .zip(scores.par_chunks_exact(n))
-                .zip(rows.par_iter())
-                .enumerate()
-                .for_each(|(r, ((((extra, prob), codes), scores), stat))| {
-                    for c in 0..self.count(r) {
-                        let d = stat[0] - i64::from(scores[c]);
-                        let v = d.min(last);
-                        codes[c] = v as u32;
-                        prob[c] = self.tables.probabilities[v as usize];
-                        extra[c] = d - v;
-                    }
-                });
-            let overflow = extra.iter().any(|&v| v != 0).then_some(extra);
-            (Some(rows), overflow, Some(prob), Some(codes))
-        } else {
-            (None, None, None, None)
+        let (scores, remainders, stats, overflow, addresses) = match witness {
+            Some(witness) => (
+                Some(witness.scores),
+                Some(witness.remainders),
+                Some(witness.stats),
+                witness.overflow,
+                Some(witness.addresses),
+            ),
+            None => (None, None, None, None, None),
         };
         let lookups = self
             .tiles
@@ -224,7 +246,6 @@ impl<'a> Soft<'a> {
             record(2, Width::Unsigned(self.slack))?,
         ];
         Ok(SoftTrace {
-            probabilities,
             lookups,
             stats,
             overflow,

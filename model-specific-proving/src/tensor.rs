@@ -141,3 +141,27 @@ pub(crate) fn dot(a: &[i32], b: &[i32], narrow: bool) -> i128 {
         .sum();
     i128::from(stripes.into_iter().sum::<i64>() + tail)
 }
+
+// The caller bounds the absolute sum of each dot product by i64::MAX.
+pub(crate) fn dot_pair(a: &[i32], b: &[i32], weights: &[i32]) -> [i128; 2] {
+    let mut a = a.chunks_exact(4);
+    let mut b = b.chunks_exact(4);
+    let mut weights = weights.chunks_exact(4);
+    let mut sums = [[0i64; 4]; 2];
+    for ((a, b), w) in a.by_ref().zip(b.by_ref()).zip(weights.by_ref()) {
+        for i in 0..4 {
+            let w = i64::from(w[i]);
+            sums[0][i] += i64::from(a[i]) * w;
+            sums[1][i] += i64::from(b[i]) * w;
+        }
+    }
+    let tails = [a.remainder(), b.remainder()];
+    std::array::from_fn(|i| {
+        let tail: i64 = tails[i]
+            .iter()
+            .zip(weights.remainder())
+            .map(|(&x, &w)| i64::from(x) * i64::from(w))
+            .sum();
+        i128::from(sums[i].into_iter().sum::<i64>() + tail)
+    })
+}

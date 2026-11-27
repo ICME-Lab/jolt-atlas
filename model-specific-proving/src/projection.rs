@@ -74,32 +74,50 @@ impl Input {
             .chunks_exact(self.width)
             .map(|r| r.iter().map(|v| u128::from(v.unsigned_abs())).sum::<u128>())
             .collect();
+        let width = self.width;
+        let bound = |row: &[i32]| {
+            row.iter()
+                .map(|x| u128::from(x.unsigned_abs()))
+                .max()
+                .unwrap_or(0)
+        };
         values
-            .par_chunks_mut(output)
-            .zip(remainders.par_chunks_mut(output))
-            .zip(input.par_chunks(self.width))
-            .try_for_each(|((values, remainders), row)| {
-                let bound = row
-                    .iter()
-                    .map(|x| u128::from(x.unsigned_abs()))
-                    .max()
-                    .unwrap_or(0);
-                for (j, (((value, rem), weight), &bias)) in values
-                    .iter_mut()
-                    .zip(remainders)
-                    .zip(projection.weights.chunks_exact(self.width))
+            .par_chunks_mut(2 * output)
+            .zip(remainders.par_chunks_mut(2 * output))
+            .zip(input.par_chunks(2 * width))
+            .try_for_each(|((values, remainders), rows)| {
+                let (first, second) = rows.split_at(width);
+                let (lo, hi) = (bound(first), bound(second));
+                let mut store = |i: usize, value: i128, bias: i32| -> Result<()> {
+                    let raw = value + (i128::from(bias) << self.bits);
+                    values[i] = i32::try_from(raw >> self.bits)
+                        .map_err(|_| "projection output exceeds i32")?;
+                    remainders[i] = raw.rem_euclid(1 << self.bits) as u32;
+                    Ok(())
+                };
+                for (j, ((weight, &bias), &bound)) in projection
+                    .weights
+                    .chunks_exact(width)
                     .zip(projection.bias)
+                    .zip(&weight_bound)
                     .enumerate()
                 {
-                    let adapt = crate::tensor::dot(
-                        row,
-                        weight,
-                        bound * weight_bound[j] <= i64::MAX as u128,
-                    );
-                    let raw = adapt + (i128::from(bias) << self.bits);
-                    *value = i32::try_from(raw >> self.bits)
-                        .map_err(|_| "projection output exceeds i32")?;
-                    *rem = raw.rem_euclid(1 << self.bits) as u32;
+                    let first_narrow = lo * bound <= i64::MAX as u128;
+                    let second_narrow = hi * bound <= i64::MAX as u128;
+                    if !second.is_empty() && first_narrow && second_narrow {
+                        let [x, y] = crate::tensor::dot_pair(first, second, weight);
+                        store(j, x, bias)?;
+                        store(output + j, y, bias)?;
+                    } else {
+                        store(j, crate::tensor::dot(first, weight, first_narrow), bias)?;
+                        if !second.is_empty() {
+                            store(
+                                output + j,
+                                crate::tensor::dot(second, weight, second_narrow),
+                                bias,
+                            )?;
+                        }
+                    }
                 }
                 Ok(())
             })?;

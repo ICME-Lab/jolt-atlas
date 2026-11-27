@@ -239,52 +239,66 @@ impl<'a> Context<'a> {
             .collect();
         let mut heads = Vec::new();
         let group = p.queries.len() / p.groups.len();
-        for (i, q) in queries.iter().enumerate() {
-            let k = &keys[i / group];
-            let v = &values[i / group];
-            let mut probability = soft.prepare(
-                advice,
-                2 * self.bits - shift,
-                commit_scores,
-                q.values().zip(k.values()).map(|(q, k)| {
-                    let use_narrow = narrow(q, k, head);
-                    move |r, c| {
-                        i128::from(factor)
-                            * crate::tensor::dot(
-                                &q[r * head..][..head],
-                                &k[c * head..][..head],
-                                use_narrow,
-                            )
+        let score_bits = 2 * self.bits - shift;
+        let compute_head = |i: usize| -> Result<_> {
+            let (Some(q), Some(k), Some(vals)) = (
+                queries[i].values(),
+                keys[i / group].values(),
+                value_columns[i / group].as_deref(),
+            ) else {
+                return Ok(None);
+            };
+            let use_narrow = narrow(q, k, head);
+            let witness = soft.witness(score_bits, |r, c| {
+                i128::from(factor)
+                    * crate::tensor::dot(&q[r * head..][..head], &k[c * head..][..head], use_narrow)
+            })?;
+            let prob = &witness.probabilities;
+            let compact = narrow(prob, vals, n);
+            let value = Rounded::witness(values[i / group].shape, self.bits, |r, c| {
+                let count = soft.count(r);
+                crate::tensor::dot(&prob[r * n..][..count], &vals[c * n..][..count], compact)
+            })?;
+            Ok(Some((witness, value)))
+        };
+        // One extra head keeps at most this many bytes of score and Softmax arrays live.
+        let soft_bytes = n * n * 20 + soft.shape.padded() * 4;
+        let batch = if input.is_some() && soft_bytes <= (32 << 20) {
+            2
+        } else {
+            1
+        };
+        for start in (0..queries.len()).step_by(batch) {
+            let mut record_head = |i: usize, computed| -> Result<()> {
+                let (witness, output, remainder) = match computed {
+                    Some((witness, (output, remainder))) => {
+                        (Some(witness), Some(output), Some(remainder))
                     }
-                }),
-            )?;
-            let value = Rounded::evaluate(
-                advice,
-                v.shape,
-                self.bits,
-                true,
-                probability
-                    .probabilities
-                    .as_deref()
-                    .zip(value_columns[i / group].as_deref())
-                    .map(|(prob, vals)| {
-                        let soft = &soft;
-                        let compact = narrow(prob, vals, n);
-                        move |r, c| {
-                            let count = soft.count(r);
-                            crate::tensor::dot(
-                                &prob[r * n..][..count],
-                                &vals[c * n..][..count],
-                                compact,
-                            )
-                        }
-                    }),
-            )?;
-            probability.probabilities = None;
-            heads.push(Head {
-                soft: probability,
-                value,
-            });
+                    None => (None, None, None),
+                };
+                let probability = soft.record(advice, score_bits, commit_scores, witness)?;
+                let value = Rounded::record(
+                    advice,
+                    values[i / group].shape,
+                    self.bits,
+                    true,
+                    output,
+                    remainder,
+                )?;
+                heads.push(Head {
+                    soft: probability,
+                    value,
+                });
+                Ok(())
+            };
+            if batch == 2 && start + 1 < queries.len() {
+                let (first, second) =
+                    rayon::join(|| compute_head(start), || compute_head(start + 1));
+                record_head(start, first?)?;
+                record_head(start + 1, second?)?;
+            } else {
+                record_head(start, compute_head(start)?)?;
+            }
         }
         let all = Shape::new(n, channels * heads.len())?;
         let joined = input.map(|_| {

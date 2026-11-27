@@ -24,7 +24,7 @@ use std::{
     io::{BufWriter, Read, Seek, SeekFrom, Take, Write},
     ops::Range,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc, Arc, OnceLock,
     },
 };
@@ -200,10 +200,7 @@ macro_rules! field_channel {
         impl FieldTranscript<F> for $stream {
             const CHALLENGE_SET: ChallengeSetSize =
                 ChallengeSetSize::from_limbs(F::CHALLENGE_SET_LIMBS);
-            fn challenge_vector(
-                &mut self,
-                n: usize,
-            ) -> std::result::Result<Vec<F>, VerificationError> {
+            fn challenge_vector(&mut self, n: usize) -> Result<Vec<F>, VerificationError> {
                 if n == 0 {
                     return Ok(Vec::new());
                 }
@@ -231,7 +228,7 @@ field_channel!(Writer);
 field_channel!(Reader<'_>);
 
 trait Mix: FieldTranscript<F> + Sized {
-    fn work(&mut self, bits: u32) -> std::result::Result<(), VerificationError>;
+    fn work(&mut self, bits: u32) -> Result<(), VerificationError>;
     fn draw(&mut self, count: usize, loss: usize) -> Result<Vec<F>> {
         let bits = jolt_sumcheck::round_pow_bits::<F, Self>(loss)
             .map_err(|_| "invalid challenge count")?;
@@ -242,13 +239,13 @@ trait Mix: FieldTranscript<F> + Sized {
 }
 
 impl Mix for Reader<'_> {
-    fn work(&mut self, bits: u32) -> std::result::Result<(), VerificationError> {
+    fn work(&mut self, bits: u32) -> Result<(), VerificationError> {
         self.check_grind(bits)
     }
 }
 
 impl Mix for Writer {
-    fn work(&mut self, bits: u32) -> std::result::Result<(), VerificationError> {
+    fn work(&mut self, bits: u32) -> Result<(), VerificationError> {
         let threads = rayon::current_num_threads();
         if bits < 15 || bits > MAX_POW_BITS || threads == 1 {
             return self.grind(bits);
@@ -298,11 +295,9 @@ struct Shape {
 impl Shape {
     fn new(rows: usize, cols: usize) -> Result<Self> {
         let limit = 1..=1 << 20;
-        if limit.contains(&rows) && limit.contains(&cols) {
-            Ok(Self { rows, cols })
-        } else {
-            Err("invalid tensor dimensions")
-        }
+        (limit.contains(&rows) && limit.contains(&cols))
+            .then_some(Self { rows, cols })
+            .ok_or("invalid tensor dimensions")
     }
     fn rows(self) -> usize {
         self.rows.next_power_of_two()
@@ -595,7 +590,7 @@ impl<T: Fn(&[F]) -> F + Sync> ProveRounds<F> for Terms<'_, T> {
     fn num_rounds(&self) -> usize {
         self.columns[0].len().ilog2() as usize
     }
-    fn finish_rounds(&mut self, r: F) -> std::result::Result<(), SumcheckError<F>> {
+    fn finish_rounds(&mut self, r: F) -> Result<(), SumcheckError<F>> {
         let n = self.columns.len();
         let size = self.columns[0].len() / 2;
         if n >= 4 && size >= 256 && size * n >= 8192 {
@@ -610,7 +605,7 @@ impl<T: Fn(&[F]) -> F + Sync> ProveRounds<F> for Terms<'_, T> {
         last: Option<F>,
         _: usize,
         sum: F,
-    ) -> std::result::Result<UnivariatePoly<F>, SumcheckError<F>> {
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
         if let Some(r) = last {
             self.finish_rounds(r)?;
         }
@@ -661,7 +656,7 @@ impl ProveRounds<F> for Products {
     fn num_rounds(&self) -> usize {
         self.1
     }
-    fn finish_rounds(&mut self, r: F) -> std::result::Result<(), SumcheckError<F>> {
+    fn finish_rounds(&mut self, r: F) -> Result<(), SumcheckError<F>> {
         for (a, b) in &mut self.0 {
             bind(a, r, false);
             bind(b, r, false);
@@ -673,7 +668,7 @@ impl ProveRounds<F> for Products {
         last: Option<F>,
         _: usize,
         sum: F,
-    ) -> std::result::Result<UnivariatePoly<F>, SumcheckError<F>> {
+    ) -> Result<UnivariatePoly<F>, SumcheckError<F>> {
         if let Some(r) = last {
             self.finish_rounds(r)?;
         }
@@ -756,10 +751,9 @@ impl<'a, 'p> Channel<'a, 'p> {
         }
     }
     fn advice(&self) -> Option<&'a Advice> {
-        if let Self::Send(_, _, x) = self {
-            Some(*x)
-        } else {
-            None
+        match self {
+            Self::Send(_, _, advice) => Some(*advice),
+            Self::Check(..) => None,
         }
     }
     fn fields(&mut self, n: usize, builder: impl FnOnce() -> Vec<F>) -> Result<Vec<F>> {
@@ -954,6 +948,7 @@ struct Storage {
     data: Packed,
     digit: Option<(usize, usize)>,
 }
+#[derive(Default)]
 struct Advice {
     pending: Option<File>,
     maps: Vec<Arc<memmap2::Mmap>>,
@@ -964,23 +959,16 @@ struct Advice {
 
 impl Advice {
     fn new(proving: bool) -> Result<Self> {
-        let pending = proving
-            .then(tempfile::tempfile)
-            .transpose()
-            .map_err(|_| "create witnesses")?;
-        Ok(Self {
-            pending,
-            maps: Vec::new(),
-            offset: 0,
-            slots: Vec::new(),
-            layers: Vec::new(),
-        })
+        let mut advice = Self::default();
+        if proving {
+            advice.pending = Some(tempfile::tempfile().map_err(|_| "create witnesses")?);
+        }
+        Ok(advice)
     }
     fn seal(&mut self) -> Result<()> {
         let mut f = self.pending.take().ok_or("missing witness file")?;
         f.write_all(&[0; 16]).map_err(|_| "finish witnesses")?;
-        // After this mapping the private file has no writable handle.
-        let map = unsafe { memmap2::Mmap::map(&f) }.map_err(|_| "map witnesses")?;
+        let map = map_private_file(f).map_err(|_| "map witnesses")?;
         self.maps.push(Arc::new(map));
         Ok(())
     }
@@ -1122,7 +1110,7 @@ type CommitRoots = HashMap<usize, Vec<Digest>>;
 type CommitJob = (usize, Advice);
 
 struct EarlyCommit {
-    phase: Arc<std::sync::atomic::AtomicU8>,
+    phase: Arc<AtomicU8>,
     send: Option<mpsc::Sender<CommitJob>>,
     worker: Option<std::thread::JoinHandle<Result<CommitRoots>>>,
 }
@@ -1138,7 +1126,7 @@ impl EarlyCommit {
             .build()
             .map_err(|_| "create initial commitment pool")?;
         let (send, jobs) = mpsc::channel::<CommitJob>();
-        let phase = Arc::new(std::sync::atomic::AtomicU8::new(Self::TRACING));
+        let phase = Arc::new(AtomicU8::new(Self::TRACING));
         let state = phase.clone();
         let worker = std::thread::Builder::new()
             .spawn(move || {
@@ -1147,7 +1135,7 @@ impl EarlyCommit {
                     let mut window = Vec::new();
                     for ids in bins(&advice.slots, (0..advice.slots.len()).collect()) {
                         let group = Group::new(&advice, ids)?;
-                        let root = match state.load(std::sync::atomic::Ordering::Relaxed) {
+                        let root = match state.load(Ordering::Relaxed) {
                             Self::TRACING => pool.install(|| group.commit(&advice))?.root,
                             Self::FINISHING => group.commit(&advice)?.root,
                             _ => return Ok(roots),
@@ -1177,7 +1165,7 @@ impl EarlyCommit {
             let view = Advice {
                 maps: advice.maps.clone(),
                 slots: advice.slots[advice.layers[first]..advice.layers[end]].to_vec(),
-                ..Advice::new(false)?
+                ..Advice::default()
             };
             self.send
                 .as_ref()
@@ -1191,8 +1179,7 @@ impl EarlyCommit {
     }
 
     fn join(&mut self, phase: u8) -> Result<CommitRoots> {
-        self.phase
-            .store(phase, std::sync::atomic::Ordering::Relaxed);
+        self.phase.store(phase, Ordering::Relaxed);
         self.send.take();
         self.worker
             .take()
@@ -1283,13 +1270,14 @@ impl Plan {
         for first in (0..layers).step_by(WINDOW).rev() {
             let last = (first + WINDOW).min(layers);
             let lo = if first == 0 { 0 } else { a.layers[first] };
-            let mut indices: Vec<_> = (lo..a.layers[last]).collect();
-            if first == 0 {
-                indices.extend(a.layers[layers]..a.slots.len());
-            }
-            let bins = bins(&a.slots, indices);
+            let tail = if first == 0 {
+                a.slots.len()
+            } else {
+                a.layers[layers]
+            };
+            let indices = (lo..a.layers[last]).chain(a.layers[layers]..tail).collect();
             let mut groups = Vec::new();
-            for ids in bins {
+            for ids in bins(&a.slots, indices) {
                 for (j, &id) in ids.iter().enumerate() {
                     plan.owners[id] = (plan.windows.len(), groups.len(), j);
                 }
@@ -1821,10 +1809,9 @@ fn finish_reads(io: &mut Channel<'_, '_>, reads: Reads<'_>, requests: &mut Reque
             batches.push(vec![r]);
         }
     }
-    for b in batches {
-        lookup_batch(io, &b, requests)?;
-    }
-    Ok(())
+    batches
+        .iter()
+        .try_for_each(|b| lookup_batch(io, b, requests))
 }
 
 fn lookup_batch(
@@ -2416,24 +2403,20 @@ impl Normalized {
             (w.values, w.quotients, w.rows) = (Some(values), Some(qs), Some(stats));
         }
         use Width::*;
-        let r = s.stride().ilog2() as u8;
-        let cell_widths = [
-            Signed(63),
-            Signed(32),
-            Unsigned(33),
-            Unsigned(33),
-            Unsigned(bits as u8),
-        ];
+        let remainder = Unsigned(s.stride().ilog2() as u8);
+        let gap = Unsigned(33);
+        let cell_widths = [Signed(63), Signed(32), gap, gap, Unsigned(bits as u8)];
+        let square_gap = Unsigned(34);
         let row_widths = [
             Unsigned(65),
-            Unsigned(r),
-            Unsigned(r),
+            remainder,
+            remainder,
             Unsigned(33),
-            Unsigned(34),
-            Unsigned(34),
+            square_gap,
+            square_gap,
             Signed(32),
-            Unsigned(r),
-            Unsigned(r),
+            remainder,
+            remainder,
         ];
         w.slots = a
             .columns(s, cell_widths, |i, j| w.cell(p, x.unwrap(), j, i + 1))?
@@ -3243,9 +3226,8 @@ impl Feed {
         let input = input.values();
         let table = ActivationTable::new(m.activation)?;
         let code = input.map(|x| {
-            (0..s.len())
-                .map(|i| s.index(i).map_or(0, |j| table.code(x[j]).0 as u32))
-                .collect::<Vec<_>>()
+            let at = |i| s.index(i).map_or(0, |j| table.code(x[j]).0 as u32);
+            (0..s.len()).map(at).collect::<Vec<_>>()
         });
         let key = Lookup::record(a, s, table.values.len(), |i| code.as_ref().unwrap()[i])?;
         let n = u8::from(!table.symmetric);
@@ -3397,27 +3379,17 @@ impl Feed {
             point: point.clone(),
             values: [index, t, F::zero()],
         });
-        if let Some((w, p)) = self.gate.as_ref().zip(m.gate) {
-            projections(
-                io,
-                r,
-                s,
-                bits,
-                &[
-                    (w, p, at(&point, g)),
-                    (&self.up, m.up, Evaluation { point, value: up }),
-                ],
-                x,
-            )
-        } else {
-            projections(
-                io,
-                r,
-                s,
-                bits,
-                &[(&self.up, m.up, Evaluation { point, value: g })],
-                x,
-            )
+        let mut prove = |claims: &[_]| projections(io, r, s, bits, claims, x);
+        let gate = self
+            .gate
+            .as_ref()
+            .zip(m.gate)
+            .map(|(w, p)| (w, p, at(&point, g)));
+        let value = if gate.is_some() { up } else { g };
+        let up = (&self.up, m.up, Evaluation { point, value });
+        match gate {
+            Some(gate) => prove(&[gate, up]),
+            None => prove(&[up]),
         }
     }
 }
@@ -3893,8 +3865,7 @@ struct TopBounds {
     row: usize,
     col: usize,
     shape: Shape,
-    lo: Slot,
-    hi: Slot,
+    gaps: [Slot; 2],
 }
 
 fn rank(x: &Candidate) -> (i64, usize) {
@@ -4029,13 +4000,12 @@ impl<'a> Top<'a> {
                     [x - lo, hi - x]
                 };
                 let w = Width::Unsigned(self.bits as u8 + 32);
-                let [lo, hi] = a.columns(shape, [w; 2], |side, i| gap(i)[side])?;
+                let gaps = a.columns(shape, [w; 2], |side, i| gap(i)[side])?;
                 shapes.push(TopBounds {
                     row,
                     col,
                     shape,
-                    lo,
-                    hi,
+                    gaps,
                 });
             }
         }
@@ -4077,8 +4047,8 @@ impl<'a> Top<'a> {
                     }
                 }
                 let [value] = io.values(|| [inner(witness.as_ref().unwrap(), &matrix)])?;
-                ask(r, b.lo, &point, value - bounds[0]);
-                ask(r, b.hi, &point, bounds[1] - value);
+                ask(r, b.gaps[0], &point, value - bounds[0]);
+                ask(r, b.gaps[1], &point, bounds[1] - value);
                 terms.push((value, matrix));
             }
             let mut weight = vec![F::zero(); self.input.stride()];
@@ -4098,10 +4068,7 @@ impl<'a> Top<'a> {
                 .chain(row)
                 .chain(term.point)
                 .collect();
-            claims.push(Evaluation {
-                point,
-                value: term.value,
-            });
+            claims.push(Evaluation { point, ..term });
         }
         Ok(claims)
     }
@@ -4138,15 +4105,15 @@ impl<W: Write + Seek> Archive<W> {
         file.write_all(&[0; 16]).map_err(|_| FILE_IO)?;
         Ok(Self(file))
     }
-    fn write(&mut self, p: Proof) -> Result<()> {
-        codec().serialize_into(&mut self.0, &p).map_err(|_| FILE_IO)
+    fn write(&mut self, value: &impl Serialize) -> Result<()> {
+        codec()
+            .serialize_into(&mut self.0, value)
+            .map_err(|_| FILE_IO)
     }
     fn end(mut self, footer: &Header) -> Result<()> {
+        let pos = self.0.stream_position().map_err(|_| FILE_IO)?;
+        self.write(footer)?;
         let out = &mut self.0;
-        let pos = out.stream_position().map_err(|_| FILE_IO)?;
-        codec()
-            .serialize_into(&mut *out, footer)
-            .map_err(|_| FILE_IO)?;
         out.rewind()
             .and_then(|_| out.write_all(&MAGIC))
             .and_then(|_| out.write_all(&pos.to_le_bytes()))
@@ -4174,9 +4141,9 @@ fn footer(mut r: impl Read + Seek) -> Result<(Header, Take<impl Read>)> {
     r.seek(SeekFrom::Start(n)).map_err(|_| FILE_IO)?;
     let mut metadata = (&mut r).take(size - n);
     let header = decode(&mut metadata)?;
-    if metadata.limit() != 0 {
-        return Err("extra proof metadata");
-    }
+    (metadata.limit() == 0)
+        .then_some(())
+        .ok_or("extra proof metadata")?;
     r.seek(SeekFrom::Start(16)).map_err(|_| FILE_IO)?;
     Ok((header, r.take(n - 16)))
 }
@@ -4252,11 +4219,7 @@ impl Residual {
         Ok(Self { norm, y, range })
     }
     fn values(&self, decoder: bool) -> Option<&[i32]> {
-        if decoder {
-            self.y.as_deref()
-        } else {
-            self.norm.values()
-        }
+        (if decoder { &self.y } else { &self.norm.values }).as_deref()
     }
     fn take(&mut self, decoder: bool) -> Vec<i32> {
         let values = if decoder {
@@ -4270,7 +4233,9 @@ impl Residual {
         &self,
         io: &mut Channel<'_, '_>,
         req: &mut Requests,
-        step: BlockInput<'_>,
+        decoder: bool,
+        p: NormalizationParameters<'_>,
+        x: Option<&[i32]>,
         mut claims: Vec<Evaluation>,
         f: impl FnOnce(
             &mut Channel<'_, '_>,
@@ -4279,7 +4244,6 @@ impl Residual {
             Evaluation,
         ) -> Result<Vec<Evaluation>>,
     ) -> Result<Vec<Evaluation>> {
-        let BlockInput { decoder, p, x } = step;
         let q = if decoder {
             claims.pop().unwrap()
         } else {
@@ -4314,11 +4278,6 @@ fn residual_add(a: &[i32], b: &[i32]) -> Result<Vec<i32>> {
         .collect()
 }
 
-struct BlockInput<'a> {
-    decoder: bool,
-    p: NormalizationParameters<'a>,
-    x: Option<&'a [i32]>,
-}
 enum Saved {
     InMemory(Box<LayerTrace>),
     OnDisk(usize, usize),
@@ -4367,6 +4326,11 @@ mod trace_array {
     }
 }
 
+fn map_private_file(file: File) -> std::io::Result<memmap2::Mmap> {
+    // The completed temporary file has a single handle, which is closed on return.
+    unsafe { memmap2::Mmap::map(&file) }
+}
+
 impl Run {
     fn read<'a, T: Deserialize<'a>>(&'a self, offset: usize) -> Result<T> {
         codec()
@@ -4411,6 +4375,13 @@ struct Statement<'a> {
     target: Target<'a>,
 }
 
+fn present<S: Transcript, T>(t: &mut S, value: Option<T>, append: impl FnOnce(&mut S, T)) {
+    t.append(&(value.is_some() as u64));
+    if let Some(value) = value {
+        append(t, value);
+    }
+}
+
 fn integers(t: &mut impl Transcript, x: &[i32]) {
     t.append(&(x.len() as u64));
     let mut bytes = [0u8; 4096];
@@ -4423,16 +4394,31 @@ fn integers(t: &mut impl Transcript, x: &[i32]) {
     }
 }
 
-impl Statement<'_> {
+impl<'a> Statement<'a> {
+    fn hidden(ids: &'a [usize], segments: Option<&'a [usize]>, output: &'a [i32]) -> Self {
+        Self {
+            ids,
+            segments,
+            target: Target::Hidden(output),
+        }
+    }
+    fn top(ids: &'a [usize], cfg: &'a TopKConfig, output: &'a [Vec<Candidate>]) -> Self {
+        Self {
+            ids,
+            segments: None,
+            target: Target::Top(cfg, output),
+        }
+    }
     fn append(&self, t: &mut impl Transcript, key: &Digest, widths: &[u8]) {
         t.append_bytes(key);
         for &i in self.ids {
             t.append(&(i as u64));
         }
-        t.append(&(self.segments.is_some() as u64));
-        for &i in self.segments.unwrap_or_default() {
-            t.append(&(i as u64));
-        }
+        present(t, self.segments, |t, segments| {
+            for &i in segments {
+                t.append(&(i as u64));
+            }
+        });
         match self.target {
             Target::Hidden(v) => {
                 t.append(&0u64);
@@ -4486,11 +4472,11 @@ impl<'a> Model<'a> {
         }
         let (decoder, norm) = match arch {
             Architecture::Encoder { embedding_norm } => (false, embedding_norm),
-            Architecture::Decoder { final_norm } if embedding.segments.is_none() => {
-                (true, final_norm)
-            }
-            _ => return Err("decoder does not use segment embeddings"),
+            Architecture::Decoder { final_norm } => (true, final_norm),
         };
+        if decoder && embedding.segments.is_some() {
+            return Err("decoder does not use segment embeddings");
+        }
         let bits = u32::from(bits);
         let gates = layers
             .iter()
@@ -4527,10 +4513,9 @@ impl<'a> Model<'a> {
             integers(t, p.weights);
             integers(t, p.bias);
         };
-        let [rows, cols] = [self.shape.rows, self.shape.cols].map(|n| n as u64);
         t.append(&[
-            rows,
-            cols,
+            self.shape.rows as u64,
+            self.shape.cols as u64,
             self.bits as u64,
             self.decoder as u64,
             self.layers.len() as u64,
@@ -4561,24 +4546,22 @@ impl<'a> Model<'a> {
             }
             integers(&mut t, a.tables.probabilities);
             integers(&mut t, a.tables.sums);
-            t.append(&(a.rotary.is_some() as u64));
-            if let Some(r) = a.rotary {
-                integers(&mut t, r.cos);
-                integers(&mut t, r.sin);
-            }
-            let head = self.head_norms.get(i).copied().flatten();
-            t.append(&(head.is_some() as u64));
-            if let Some([q, k]) = head {
-                norm(&mut t, q);
-                norm(&mut t, k);
-            }
+            present(&mut t, a.rotary, |t, r| {
+                integers(t, r.cos);
+                integers(t, r.sin);
+            });
+            present(
+                &mut t,
+                self.head_norms.get(i).copied().flatten(),
+                |t, [q, k]| {
+                    norm(t, q);
+                    norm(t, k);
+                },
+            );
             let m = l.mlp;
             tensor(&mut t, m.up);
             tensor(&mut t, m.down);
-            t.append(&(m.gate.is_some() as u64));
-            if let Some(g) = m.gate {
-                tensor(&mut t, g);
-            }
+            present(&mut t, m.gate, tensor);
             t.append(&(m.activation.lower as u64));
             integers(&mut t, m.activation.correction);
         }
@@ -4586,6 +4569,9 @@ impl<'a> Model<'a> {
     }
     pub fn is_decoder(&self) -> bool {
         self.decoder
+    }
+    fn require_decoder(&self) -> Result<()> {
+        self.decoder.then_some(()).ok_or("Top-K requires decoder")
     }
     pub fn cls<'b>(&self, output: &'b [i32]) -> Result<&'b [i32]> {
         if self.decoder || output.len() != self.shape.cells() {
@@ -4668,7 +4654,7 @@ impl<'a> Model<'a> {
         let _span = tracing::info_span!("atlas forward").entered();
         let mut advice = Advice::new(prove)?;
         let x = prove.then_some(input.as_slice());
-        let mut norm = (!self.decoder)
+        let norm = (!self.decoder)
             .then(|| self.normalize(&mut advice, self.norm, x))
             .transpose()?;
         let file = (prove && self.layers.len() > 1 && self.shape.rows >= 128)
@@ -4734,7 +4720,7 @@ impl<'a> Model<'a> {
                 Ok((records, None))
             }
         })?;
-        let norm = if let Some(norm) = norm.take() {
+        let norm = if let Some(norm) = norm {
             norm
         } else {
             let Saved::InMemory(layer) = records.last().unwrap() else {
@@ -4742,9 +4728,8 @@ impl<'a> Model<'a> {
             };
             self.normalize(&mut advice, self.norm, layer.after_mlp.values(true))?
         };
-        // The private file is complete and no writable handle is retained.
         let map = file
-            .map(|f| unsafe { memmap2::Mmap::map(&f) })
+            .map(map_private_file)
             .transpose()
             .map_err(|_| "map layer file")?;
         Ok(Run {
@@ -4769,15 +4754,9 @@ impl<'a> Model<'a> {
             return Err("decoder requires Top-K");
         }
         let mut run = self.forward(ids, segments, true)?;
-        let output = run
-            .output(run.layers.len() - 1, false)?
-            .unwrap()
-            .into_owned();
-        let stmt = Statement {
-            ids,
-            segments,
-            target: Target::Hidden(&output),
-        };
+        let last = run.layers.len() - 1;
+        let output = run.output(last, false)?.unwrap().into_owned();
+        let stmt = Statement::hidden(ids, segments, &output);
         self.write(stmt, &mut run, &[], Archive::new(file)?)?;
         Ok(output)
     }
@@ -4787,21 +4766,14 @@ impl<'a> Model<'a> {
         cfg: &TopKConfig,
         file: impl Write + Seek + Send,
     ) -> Result<Vec<Vec<Candidate>>> {
-        if !self.decoder {
-            return Err("Top-K requires decoder");
-        }
+        self.require_decoder()?;
         let file = Archive::new(file)?;
         let top = self.top(cfg)?;
         let mut run = self.forward(ids, None, true)?;
         let (result, raw) = top.select(run.norm.values().unwrap())?;
         let bounds = top.record(&mut run.advice, &result, Some(&raw))?;
         drop(raw);
-        let stmt = Statement {
-            ids,
-            segments: None,
-            target: Target::Top(cfg, &result),
-        };
-        self.write(stmt, &mut run, &bounds, file)?;
+        self.write(Statement::top(ids, cfg, &result), &mut run, &bounds, file)?;
         Ok(result)
     }
     pub fn verify_from(
@@ -4812,14 +4784,7 @@ impl<'a> Model<'a> {
         file: impl Read + Seek,
     ) -> Result<()> {
         self.cls(output)?;
-        self.verify(
-            Statement {
-                ids,
-                segments,
-                target: Target::Hidden(output),
-            },
-            file,
-        )
+        self.verify(Statement::hidden(ids, segments, output), file)
     }
     pub fn verify_top_k_from(
         &self,
@@ -4828,17 +4793,8 @@ impl<'a> Model<'a> {
         output: &[Vec<Candidate>],
         file: impl Read + Seek,
     ) -> Result<()> {
-        if !self.decoder {
-            return Err("Top-K requires decoder");
-        }
-        self.verify(
-            Statement {
-                ids,
-                segments: None,
-                target: Target::Top(cfg, output),
-            },
-            file,
-        )
+        self.require_decoder()?;
+        self.verify(Statement::top(ids, cfg, output), file)
     }
 }
 
@@ -4961,28 +4917,24 @@ impl<'a> Reverse<'a> {
                 run.norm.values()
             };
             let config = &m.layers[i];
-            let gate = BlockInput {
-                decoder: m.decoder,
-                p: config.mlp_norm,
-                x: layer.after_attention.values(m.decoder),
-            };
-            let claims = std::mem::take(&mut self.claims);
-            let forward = |io: &mut Channel<'_, '_>, r: &mut Requests, x: Option<&[i32]>, q| {
-                tracing::info_span!("atlas mlp reverse")
-                    .in_scope(|| layer.mlp.reverse(io, r, reads, config.mlp, m.shape, x, q))
-            };
-            let claims = layer
-                .after_mlp
-                .reverse(io, &mut self.requests, gate, claims, forward)?;
-            let gate = BlockInput {
-                decoder: m.decoder,
-                p: config.attention_norm,
-                x: input,
-            };
+            let claims = layer.after_mlp.reverse(
+                io,
+                &mut self.requests,
+                m.decoder,
+                config.mlp_norm,
+                layer.after_attention.values(m.decoder),
+                std::mem::take(&mut self.claims),
+                |io, r, x, q| {
+                    tracing::info_span!("atlas mlp reverse")
+                        .in_scope(|| layer.mlp.reverse(io, r, reads, config.mlp, m.shape, x, q))
+                },
+            )?;
             self.claims = layer.after_attention.reverse(
                 io,
                 &mut self.requests,
-                gate,
+                m.decoder,
+                config.attention_norm,
+                input,
                 claims,
                 |io, r, x, q| {
                     tracing::info_span!("atlas attention reverse")
@@ -5034,7 +4986,7 @@ fn open_window<W: Write + Seek>(
         chain_finished,
         |proof| {
             tracing::info_span!("atlas group complete").in_scope(|| ());
-            tracing::info_span!("atlas bitz write").in_scope(|| file.write(proof))
+            tracing::info_span!("atlas bitz write").in_scope(|| file.write(&proof))
         },
     )?;
     proof.3 = t.narg_string().to_vec();
@@ -5095,10 +5047,9 @@ impl Model<'_> {
             roots_after.push(root);
         };
         let plan = &plan;
-        let roots_ref = &roots;
         let lookup = |j| lookup_window(plan, advice, j);
         let chain_finished = AtomicBool::new(false);
-        let mut open = |j| open_window(plan, advice, roots_ref, &mut file, &chain_finished, j);
+        let mut open = |j| open_window(plan, advice, &roots, &mut file, &chain_finished, j);
         if plan.windows.len() > 1 && can_overlap() {
             std::thread::scope(|s| -> Result<()> {
                 let (submit, jobs) = mpsc::sync_channel(1);
@@ -5306,9 +5257,7 @@ pub mod weights {
 
     struct Names {
         prefix: &'static str,
-        embed: &'static str,
-        position: &'static str,
-        segment: &'static str,
+        embeddings: [&'static str; 3],
         head: &'static str,
         blocks: &'static str,
         qkv: [&'static str; 3],
@@ -5319,9 +5268,7 @@ pub mod weights {
 
     const GPT: Names = Names {
         prefix: "transformer.",
-        embed: "wte",
-        position: "wpe",
-        segment: "",
+        embeddings: ["wte", "wpe", ""],
         head: "ln_f",
         blocks: "h",
         qkv: ["attn.c_attn", "", ""],
@@ -5331,9 +5278,11 @@ pub mod weights {
     };
     const BERT: Names = Names {
         prefix: "bert.",
-        embed: "embeddings.word_embeddings",
-        position: "embeddings.position_embeddings",
-        segment: "embeddings.token_type_embeddings",
+        embeddings: [
+            "embeddings.word_embeddings",
+            "embeddings.position_embeddings",
+            "embeddings.token_type_embeddings",
+        ],
         head: "embeddings.LayerNorm",
         blocks: "encoder.layer",
         qkv: [
@@ -5347,9 +5296,7 @@ pub mod weights {
     };
     const QWEN: Names = Names {
         prefix: "model.",
-        embed: "embed_tokens",
-        position: "",
-        segment: "",
+        embeddings: ["embed_tokens", "", ""],
         head: "norm",
         blocks: "layers",
         qkv: ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj"],
@@ -5419,20 +5366,20 @@ pub mod weights {
         }
         fn affine(&self, key: &str, shape: &[usize], bias: bool, transpose: bool) -> Load<Affine> {
             let n = shape[0];
-            let w = if transpose {
-                let src = self.read(&format!("{key}.weight"), &[shape[1], n])?;
-                (0..n)
-                    .flat_map(|i| src[i..].iter().step_by(n).copied())
-                    .collect()
-            } else {
-                self.read(&format!("{key}.weight"), shape)?
-            };
-            let b = if bias {
-                self.read(&format!("{key}.bias"), &[n])?
-            } else {
-                vec![0; n]
-            };
-            Ok((w, b))
+            let source = transpose.then(|| [shape[1], n]);
+            let mut w = self.read(
+                &format!("{key}.weight"),
+                source.as_ref().map_or(shape, |s| s),
+            )?;
+            if transpose {
+                w = (0..n)
+                    .flat_map(|i| w[i..].iter().step_by(n).copied())
+                    .collect();
+            }
+            let b = bias
+                .then(|| self.read(&format!("{key}.bias"), &[n]))
+                .transpose()?;
+            Ok((w, b.unwrap_or_else(|| vec![0; n])))
         }
     }
 
@@ -5442,11 +5389,11 @@ pub mod weights {
                 return Err("unsupported fractional precision".into());
             }
             let config: Value = serde_json::from_slice(&fs::read(dir.join("config.json"))?)?;
-            let (family, names) = match config["model_type"].as_str() {
-                Some("gpt2") => (Gpt, GPT),
-                Some("bert") => (Bert, BERT),
-                Some("qwen2") => (Qwen2, QWEN),
-                Some("qwen3") => (Qwen3, QWEN),
+            let (family, names, act, epsilon_key) = match config["model_type"].as_str() {
+                Some("gpt2") => (Gpt, GPT, "gelu_new", "layer_norm_epsilon"),
+                Some("bert") => (Bert, BERT, "gelu", "layer_norm_eps"),
+                Some("qwen2") => (Qwen2, QWEN, "silu", "rms_norm_eps"),
+                Some("qwen3") => (Qwen3, QWEN, "silu", "rms_norm_eps"),
                 _ => return Err("unsupported model type".into()),
             };
             let gpt = family == Gpt;
@@ -5461,16 +5408,10 @@ pub mod weights {
             };
             let width = dim(key("n_embd", "hidden_size"))?;
             let heads = dim(key("n_head", "num_attention_heads"))?;
-            let head = if qwen {
-                dim("head_dim").unwrap_or(width / heads)
-            } else {
-                width / heads
-            };
-            let kv = if qwen {
-                dim("num_key_value_heads").unwrap_or(heads)
-            } else {
-                heads
-            };
+            let qwen_dim =
+                |key, default| qwen.then(|| dim(key).unwrap_or(default)).unwrap_or(default);
+            let head = qwen_dim("head_dim", width / heads);
+            let kv = qwen_dim("num_key_value_heads", heads);
             let limit = dim(key("n_positions", "max_position_embeddings"))?;
             let inner = dim(key("n_inner", "intermediate_size")).unwrap_or(width * 4);
             let layers = dim(key("n_layer", "num_hidden_layers"))?;
@@ -5493,11 +5434,6 @@ pub mod weights {
             {
                 return Err("unsupported transformer configuration".into());
             }
-            let (act, eps) = match family {
-                Gpt => ("gelu_new", "layer_norm_epsilon"),
-                Bert => ("gelu", "layer_norm_eps"),
-                _ => ("silu", "rms_norm_eps"),
-            };
             if config[key("activation_function", "hidden_act")]
                 .as_str()
                 .is_some_and(|x| x != act)
@@ -5506,7 +5442,7 @@ pub mod weights {
             }
             let scale = Scale::new(bits)?;
             let factor = f64::from(scale.denom_i32());
-            let eps = config[eps]
+            let eps = config[epsilon_key]
                 .as_f64()
                 .ok_or("missing normalization epsilon")?;
             let epsilon = (eps * factor * factor).round().max(1.0);
@@ -5527,36 +5463,37 @@ pub mod weights {
                 scale: factor,
             };
             let has = |name: &str| f.content.tensor(name).is_ok();
-            let prefix = if qwen || has(&format!("{}{}.weight", names.prefix, names.embed)) {
+            let [embed, position, segment] = names.embeddings;
+            let prefix = if qwen || has(&format!("{}{embed}.weight", names.prefix)) {
                 names.prefix
             } else {
                 ""
             };
             let embedding = |name, rows| f.read(&format!("{prefix}{name}.weight"), &[rows, width]);
-            let tokens = embedding(names.embed, vocab)?;
+            let tokens = embedding(embed, vocab)?;
             if family != Bert
                 && has("lm_head.weight")
                 && f.read("lm_head.weight", &[vocab, width])? != tokens
             {
                 return Err("decoder requires tied embeddings".into());
             }
-            let positions = (!qwen)
-                .then(|| embedding(names.position, limit))
-                .transpose()?;
+            let positions = (!qwen).then(|| embedding(position, limit)).transpose()?;
             let segments = (family == Bert)
-                .then(|| embedding(names.segment, dim("type_vocab_size")?))
+                .then(|| embedding(segment, dim("type_vocab_size")?))
                 .transpose()?;
             let norm = f.affine(&format!("{prefix}{}", names.head), &[width], !qwen, false)?;
             let bias = family != Qwen3 || on("attention_bias");
+            let [q_proj, k_proj, v_proj] = names.qkv;
+            let [up, down] = names.feed;
+            let [pre, post] = names.norm;
             let mut data = Vec::with_capacity(layers);
             for layer in 0..layers {
                 let stem = format!("{prefix}{}.{layer}", names.blocks);
                 let name = |k| format!("{stem}.{k}");
                 let mat = |k, n, m, b| f.affine(&name(k), &[n, m], b, gpt);
                 let norm = |k, n| f.affine(&name(k), &[n], !qwen, false);
-                let [q, k, v] = names.qkv;
                 let [q, k, v] = if gpt {
-                    let (w, b) = mat(q, width * 3, width, true)?;
+                    let (w, b) = mat(q_proj, width * 3, width, true)?;
                     std::array::from_fn(|i| {
                         let at = i * width;
                         (
@@ -5566,34 +5503,28 @@ pub mod weights {
                     })
                 } else {
                     [
-                        mat(q, heads * head, width, bias)?,
-                        mat(k, kv * head, width, bias)?,
-                        mat(v, kv * head, width, bias)?,
+                        mat(q_proj, heads * head, width, bias)?,
+                        mat(k_proj, kv * head, width, bias)?,
+                        mat(v_proj, kv * head, width, bias)?,
                     ]
                 };
-                let out = mat(
-                    names.output,
-                    width,
-                    heads * head,
-                    !qwen || family == Qwen3 && bias,
-                )?;
-                let [up, down] = names.feed;
-                let [a, b] = names.norm;
-                let qk = if family == Qwen3 {
-                    Some([
-                        norm("self_attn.q_norm", head)?,
-                        norm("self_attn.k_norm", head)?,
-                    ])
-                } else {
-                    None
-                };
+                let output_bias = !qwen || family == Qwen3 && bias;
+                let out = mat(names.output, width, heads * head, output_bias)?;
+                let qk = (family == Qwen3)
+                    .then(|| -> Load<_> {
+                        Ok([
+                            norm("self_attn.q_norm", head)?,
+                            norm("self_attn.k_norm", head)?,
+                        ])
+                    })
+                    .transpose()?;
                 data.push(LayerData {
                     attention: [q, k, v, out],
                     mlp: [
                         mat(up, inner, width, !qwen)?,
                         mat(down, width, inner, !qwen)?,
                     ],
-                    norm: [norm(a, width)?, norm(b, width)?],
+                    norm: [norm(pre, width)?, norm(post, width)?],
                     qk,
                     gate: qwen
                         .then(|| mat("mlp.gate_proj", inner, width, false))
@@ -5683,19 +5614,19 @@ pub mod weights {
                 lower: self.activation.0,
                 correction: &self.activation.1,
             };
-            let mut norms = Vec::with_capacity(self.layers.len());
-            let layers = self
+            let (layers, norms) = self
                 .layers
                 .iter()
                 .map(|l| {
                     let [q, k, v, o] = &l.attention;
+                    let [up, down] = l.mlp.each_ref().map(projection);
                     let heads = |(w, b): &'a Affine| {
                         w.chunks_exact(self.width * self.head)
                             .zip(b.chunks_exact(self.head))
                             .map(|(weights, bias)| Projection { weights, bias })
                     };
-                    norms.push(l.qk.as_ref().map(|pair| pair.each_ref().map(normalize)));
-                    Layer {
+                    let norm = l.qk.as_ref().map(|pair| pair.each_ref().map(normalize));
+                    let layer = Layer {
                         attention: Attention {
                             queries: heads(q).collect(),
                             groups: heads(k).zip(heads(v)).map(|(k, v)| [k, v]).collect(),
@@ -5706,16 +5637,17 @@ pub mod weights {
                             factor,
                         },
                         mlp: Mlp {
-                            up: projection(&l.mlp[0]),
-                            down: projection(&l.mlp[1]),
+                            up,
+                            down,
                             gate: l.gate.as_ref().map(projection),
                             activation,
                         },
                         attention_norm: normalize(&l.norm[0]),
                         mlp_norm: normalize(&l.norm[1]),
-                    }
+                    };
+                    (layer, norm)
                 })
-                .collect();
+                .unzip();
             let norm = normalize(&self.norm);
             let arch = if encoder {
                 Architecture::Encoder {

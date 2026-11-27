@@ -19,11 +19,14 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs::File,
     io::{BufWriter, Read, Seek, SeekFrom, Take, Write},
     ops::Range,
-    sync::{mpsc, Arc, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, OnceLock,
+    },
 };
 use world_common::{shape::MIN_LOG_BITS, BitZParams, LinearClaim, Root, SecurityLevel};
 use world_field::{gf128::smallest_generator, F128};
@@ -1653,6 +1656,7 @@ impl Window {
         roots: &[Digest],
         groups: Vec<Requests>,
         t: &mut Writer,
+        chain_finished: &AtomicBool,
         mut write: impl FnMut(Proof) -> Result<()>,
     ) -> Result<()> {
         let jobs = self.groups.iter().zip(roots.iter().copied()).zip(groups);
@@ -1664,26 +1668,45 @@ impl Window {
             return Ok(());
         }
         std::thread::scope(|s| {
-            let (send, open) = mpsc::sync_channel::<Opening<'_>>(0);
-            let (completed, read) = mpsc::sync_channel(1);
-            s.spawn(move || {
-                let mut cache = Cache::new();
-                for p in open {
-                    if completed.send(p.finish(&mut cache)).is_err() {
-                        break;
+            let worker = || {
+                let (send, open) = mpsc::sync_channel::<Opening<'_>>(0);
+                let (completed, read) = mpsc::sync_channel(1);
+                s.spawn(move || {
+                    let mut cache = Cache::new();
+                    for p in open {
+                        if completed.send(p.finish(&mut cache)).is_err() {
+                            break;
+                        }
                     }
+                });
+                (send, read)
+            };
+            let mut available = VecDeque::from([worker()]);
+            let mut pending =
+                VecDeque::<(mpsc::SyncSender<Opening<'_>>, mpsc::Receiver<Result<Proof>>)>::new();
+            let mut parallel = false;
+            let read = |channel: &mpsc::Receiver<Result<Proof>>| {
+                channel.recv().map_err(|_| "BitZ worker stopped")?
+            };
+            for ((g, r), q) in jobs {
+                let opening = g.prove(a, r, q, t)?;
+                if !parallel && chain_finished.load(Ordering::Relaxed) {
+                    available.push_back(worker());
+                    parallel = true;
                 }
-            });
-            let next = || read.recv().map_err(|_| "BitZ worker stopped")?;
-            for (i, ((g, r), q)) in jobs.enumerate() {
-                let pending = g.prove(a, r, q, t)?;
-                if i > 0 {
-                    write(next()?)?;
+                if available.is_empty() {
+                    let busy = pending.pop_front().unwrap();
+                    write(read(&busy.1)?)?;
+                    available.push_back(busy);
                 }
-                send.send(pending).map_err(|_| "BitZ worker stopped")?;
+                let ready = available.pop_front().unwrap();
+                ready.0.send(opening).map_err(|_| "BitZ worker stopped")?;
+                pending.push_back(ready);
             }
-            drop(send);
-            write(next()?)
+            for (_, completed) in pending {
+                write(read(&completed)?)?;
+            }
+            Ok(())
         })
     }
 }
@@ -4962,16 +4985,24 @@ fn open_window<W: Write + Seek>(
     a: &Advice,
     roots: &[Digest],
     file: &mut Archive<W>,
+    chain_finished: &AtomicBool,
     (i, key, mut proof, requests): Prepared,
 ) -> Result<(WindowProof, Digest)> {
     let _span = tracing::info_span!("atlas open").entered();
     let tag = protocol_tag(OPENING);
     let mut t = prover_transcript::<Keccak>(&tag, &key);
     let window = &plan.windows[i];
-    window.prove(a, &roots[window.roots.clone()], requests, &mut t, |proof| {
-        tracing::info_span!("atlas group complete").in_scope(|| ());
-        tracing::info_span!("atlas bitz write").in_scope(|| file.write(proof))
-    })?;
+    window.prove(
+        a,
+        &roots[window.roots.clone()],
+        requests,
+        &mut t,
+        chain_finished,
+        |proof| {
+            tracing::info_span!("atlas group complete").in_scope(|| ());
+            tracing::info_span!("atlas bitz write").in_scope(|| file.write(proof))
+        },
+    )?;
     proof.3 = t.narg_string().to_vec();
     Ok((proof, t.verifier_message_as(32, digest)))
 }
@@ -5032,7 +5063,8 @@ impl Model<'_> {
         let plan = &plan;
         let roots_ref = &roots;
         let lookup = |j| lookup_window(plan, advice, j);
-        let mut open = |j| open_window(plan, advice, roots_ref, &mut file, j);
+        let chain_finished = AtomicBool::new(false);
+        let mut open = |j| open_window(plan, advice, roots_ref, &mut file, &chain_finished, j);
         if plan.windows.len() > 1 && can_overlap() {
             std::thread::scope(|s| -> Result<()> {
                 let (submit, jobs) = mpsc::sync_channel(1);
@@ -5056,6 +5088,9 @@ impl Model<'_> {
                 });
                 for i in 0..plan.windows.len() {
                     let job = reverse.window(&mut io, plan, i)?;
+                    if i + 1 == plan.windows.len() {
+                        chain_finished.store(true, Ordering::Relaxed);
+                    }
                     for result in done.try_iter() {
                         append(&mut io, result?);
                     }

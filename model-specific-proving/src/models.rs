@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    advice::{Advice, Requests, Slot},
+    advice::{Advice, Buckets, Requests, Slot},
     attention,
     channel::{Channel, Messages, Result},
     field::F,
@@ -197,6 +197,15 @@ impl std::ops::Deref for BlockRef<'_> {
     }
 }
 
+type WindowFlush<'a, 'm> =
+    dyn FnMut(&mut Channel<'_, '_>, &mut Requests, usize, Lookups<'m>) -> Result<()> + 'a;
+
+const WINDOW_LAYERS: usize = 4;
+
+fn bitz_window_tag() -> [u8; 32] {
+    jolt_transcript::protocol_tag(b"atlas/bitz-window/v1")
+}
+
 enum Output<'a> {
     All(&'a [i32]),
     Top(&'a TopKConfig, &'a [Vec<Candidate>]),
@@ -327,6 +336,7 @@ impl<'a> Model<'a> {
             .then(tempfile::tempfile)
             .transpose()
             .map_err(|_| "could not create trace file")?;
+        advice.cut();
         let mut last = None;
         for (i, p) in self.layers.iter().enumerate() {
             let ctx = self.context(i);
@@ -388,6 +398,7 @@ impl<'a> Model<'a> {
             } else {
                 Saved::InMemory(Box::new(block))
             };
+            advice.cut();
             blocks.push(saved);
             x = match blocks.last().unwrap() {
                 Saved::InMemory(block) => block.output(pre),
@@ -408,13 +419,14 @@ impl<'a> Model<'a> {
         })
     }
 
-    fn reverse(
-        &self,
+    fn reverse<'m>(
+        &'m self,
         io: &mut Channel<'_, '_>,
         requests: &mut Requests,
         input: &[i32],
         run: &Run,
         mut claims: Vec<Claim<F>>,
+        flush: &mut WindowFlush<'_, 'm>,
     ) -> Result<()> {
         let pre = self.decoder.is_some();
         let (shape, bits) = (self.shape, self.bits);
@@ -427,8 +439,10 @@ impl<'a> Model<'a> {
                 .reverse(io, requests, shape, bits, self.norm, input, claims, &[])
         };
         if pre {
-            let last = run.layer_output(run.blocks.len() - 1, true)?;
-            claims = vec![reduce_end_norm(io, requests, last.as_deref(), &claims)?];
+            let last = tracing::info_span!("atlas last output")
+                .in_scope(|| run.layer_output(run.blocks.len() - 1, true))?;
+            claims = vec![tracing::info_span!("atlas final norm")
+                .in_scope(|| reduce_end_norm(io, requests, last.as_deref(), &claims))?];
         }
         let mut norm_output = if pre {
             None
@@ -437,7 +451,8 @@ impl<'a> Model<'a> {
         };
         let mut prefetched = None;
         for i in (0..run.blocks.len()).rev() {
-            let b = run.block(i, prefetched.take(), norm_output.take())?;
+            let b = tracing::info_span!("atlas load layer")
+                .in_scope(|| run.block(i, prefetched.take(), norm_output.take()))?;
             prefetched = std::thread::scope(|scope| -> Result<Option<Block>> {
                 let next = match i.checked_sub(1).and_then(|i| run.blocks.get(i)) {
                     Some(Saved::OnDisk { body, .. }) => Some(scope.spawn(|| run.read(*body))),
@@ -476,16 +491,18 @@ impl<'a> Model<'a> {
                     )?
                 };
                 let (skip, mlp) = b.after_mlp.split(io, requests, shape, output, h)?;
-                let mut mlp = b.mlp.reverse(
-                    io,
-                    requests,
-                    &mut lookups,
-                    p.mlp,
-                    shape,
-                    bits,
-                    mlp,
-                    if pre { b.m.values() } else { h },
-                )?;
+                let mut mlp = tracing::info_span!("atlas mlp reverse").in_scope(|| {
+                    b.mlp.reverse(
+                        io,
+                        requests,
+                        &mut lookups,
+                        p.mlp,
+                        shape,
+                        bits,
+                        mlp,
+                        if pre { b.m.values() } else { h },
+                    )
+                })?;
                 let mid = if pre {
                     b.m.reverse(io, requests, shape, bits, p.mlp_norm, h, &mlp, &[skip])?
                 } else {
@@ -502,14 +519,17 @@ impl<'a> Model<'a> {
                     )?
                 };
                 let (skip, att) = b.after_attention.split(io, requests, shape, mid, x)?;
-                let mut from_att = self.context(i).reverse(
-                    io,
-                    requests,
-                    &mut lookups,
-                    &b.attention,
-                    att,
-                    if pre { b.a.values() } else { x },
-                )?;
+                let mut from_att =
+                    tracing::info_span!("atlas attention reverse").in_scope(|| {
+                        self.context(i).reverse(
+                            io,
+                            requests,
+                            &mut lookups,
+                            &b.attention,
+                            att,
+                            if pre { b.a.values() } else { x },
+                        )
+                    })?;
                 claims = if pre {
                     vec![b.a.reverse(
                         io,
@@ -531,6 +551,9 @@ impl<'a> Model<'a> {
                 next.map(|job| job.join().map_err(|_| "layer prefetch failed")?)
                     .transpose()
             })?;
+            if i != 0 && i % WINDOW_LAYERS == 0 {
+                flush(io, requests, i, std::mem::take(&mut lookups))?;
+            }
         }
         if !pre {
             claims = vec![reduce_end_norm(io, requests, Some(input), &claims)?];
@@ -541,7 +564,8 @@ impl<'a> Model<'a> {
         {
             return Err("invalid public embedding evaluation");
         }
-        tracing::info_span!("atlas lookup").in_scope(|| lookups.finish(io, requests))
+        tracing::info_span!("atlas chain end").in_scope(|| ());
+        flush(io, requests, 0, lookups)
     }
 
     fn bind_model(&self, t: &mut impl Transcript) {
@@ -731,10 +755,10 @@ impl<'a> Model<'a> {
                 evaluations.push(one);
                 Ok(())
             },
-            move |io, requests| {
+            move |io, requests, flush| {
                 let hidden = run.output(self.decoder.is_some());
                 let claims = self.output_claims(io, requests, logits.as_ref(), expected, hidden)?;
-                self.reverse(io, requests, &input, &run, claims)
+                self.reverse(io, requests, &input, &run, claims, flush)
             },
         )?;
         Ok((
@@ -765,9 +789,9 @@ impl<'a> Model<'a> {
             Output::All(output),
             &proof.header,
             |i| proof.evaluation(i),
-            |io, requests| {
+            |io, requests, flush| {
                 let claims = self.output_claims(io, requests, logits.as_ref(), output, None)?;
-                self.reverse(io, requests, &input, &run, claims)
+                self.reverse(io, requests, &input, &run, claims, flush)
             },
         )
     }
@@ -795,7 +819,7 @@ impl<'a> Model<'a> {
         &self,
         tokens: &[usize],
         cfg: &TopKConfig,
-        emit: impl FnMut(crate::bitz::Proof) -> Result<()>,
+        emit: impl FnMut(crate::bitz::Proof) -> Result<()> + Send,
     ) -> Result<(Vec<Vec<Candidate>>, Header)> {
         if self.decoder.is_none() {
             return Err("Top-K requires decoder");
@@ -813,9 +837,10 @@ impl<'a> Model<'a> {
             None,
             Output::Top(cfg, &results),
             emit,
-            move |io, requests| {
-                let claims = top.reverse(io, requests, &rank, expected, run.output(true))?;
-                self.reverse(io, requests, &input, &run, claims)
+            move |io, requests, flush| {
+                let claims = tracing::info_span!("atlas top reverse")
+                    .in_scope(|| top.reverse(io, requests, &rank, expected, run.output(true)))?;
+                self.reverse(io, requests, &input, &run, claims, flush)
             },
         )?;
         Ok((results, proof))
@@ -855,40 +880,158 @@ impl<'a> Model<'a> {
             Output::Top(cfg, results),
             proof,
             read,
-            |io, requests| {
+            |io, requests, flush| {
                 let claims = top.reverse(io, requests, &rank, results, None)?;
-                self.reverse(io, requests, &input, &run, claims)
+                self.reverse(io, requests, &input, &run, claims, flush)
             },
         )
     }
 
-    fn prove_with(
-        &self,
+    fn prove_with<'m>(
+        &'m self,
         advice: &mut Advice,
         tokens: &[usize],
         segments: Option<&[usize]>,
         expected: Output<'_>,
-        emit: impl FnMut(crate::bitz::Proof) -> Result<()>,
-        work: impl FnOnce(&mut Channel<'_, '_>, &mut Requests) -> Result<()>,
+        emit: impl FnMut(crate::bitz::Proof) -> Result<()> + Send,
+        work: impl FnOnce(&mut Channel<'_, '_>, &mut Requests, &mut WindowFlush<'_, 'm>) -> Result<()>,
     ) -> Result<Header> {
-        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v4");
+        let tag = jolt_transcript::protocol_tag(b"atlas/window-bitz/v1");
         let mut transcript = prover_transcript::<Keccak>(&tag, b"");
         self.bind(&mut transcript, tokens, segments, expected);
         let widths = advice.widths();
         transcript.append_bytes(&widths);
-        let plan = advice.buckets()?;
-        let roots = tracing::info_span!("atlas commit")
-            .in_scope(|| plan.commit(advice, &mut transcript))?;
+        let width = WINDOW_LAYERS;
+        transcript.append(&(width as u64));
+        let plan = advice.windows(width)?;
+        let owners = Buckets::owners(&plan, widths.len());
+        let roots = tracing::info_span!("atlas commit").in_scope(|| -> Result<Vec<_>> {
+            advice.seal()?;
+            let mut roots = Vec::new();
+            for window in &plan {
+                roots.extend(window.commit(advice, &mut transcript)?);
+            }
+            Ok(roots)
+        })?;
         let mut state = Messages::default();
         let mut requests = Requests(Vec::new());
-        tracing::info_span!("atlas reduce").in_scope(|| {
-            work(
-                &mut Channel::Send(&mut transcript, &mut state, advice),
-                &mut requests,
-            )
+        let windows = plan.len();
+        let advice = &*advice;
+        type Job<'a> = (usize, [u8; 32], Lookups<'a>, Requests);
+        type Ready = (usize, crate::channel::Window, [u8; 32], Requests);
+        type Done = (crate::channel::Window, [u8; 32]);
+
+        let prepare = |(w, seed, lookups, mut local): Job<'m>| -> Result<Ready> {
+            let (proof, digest, lookup) = tracing::info_span!("atlas lookup")
+                .in_scope(|| crate::channel::Window::prove(seed, lookups, advice))?;
+            local.0.extend(lookup.0);
+            Ok((w, proof, digest, local))
+        };
+        let mut emit = emit;
+        let plan = &plan;
+        let window_roots = &roots;
+        let open = move |(w, mut proof, digest, local): Ready| -> Result<Done> {
+            let mut bitz = prover_transcript::<Keccak>(&bitz_window_tag(), &digest);
+            let start: usize = plan[..w].iter().map(Buckets::len).sum();
+            tracing::info_span!("atlas open").in_scope(|| {
+                plan[w].prove(
+                    advice,
+                    &window_roots[start..start + plan[w].len()],
+                    local,
+                    &mut bitz,
+                    |proof| {
+                        tracing::info_span!("atlas group complete").in_scope(|| ());
+                        tracing::info_span!("atlas bitz write").in_scope(|| emit(proof))
+                    },
+                )
+            })?;
+            proof.bitz = bitz.narg_string().to_vec();
+            Ok((
+                proof,
+                bitz.verifier_message_as(32, |v| v.try_into().unwrap()),
+            ))
+        };
+        let mut digests = Vec::with_capacity(windows);
+        let mut record = |io: &mut Channel<'_, '_>, (proof, digest): Done| {
+            io.push_window(proof);
+            digests.push(digest);
+        };
+        let mut index = 0;
+        let mut io = Channel::Send(&mut transcript, &mut state, advice);
+        let mut job = |io: &mut Channel<'_, '_>,
+                       requests: &mut Requests,
+                       layer,
+                       lookups|
+         -> Result<Job<'m>> {
+            let part = plan.get(index).ok_or("extra Lookup window")?;
+            let seed = io.window_seed(layer, (layer + width).min(self.layers.len()));
+            let local = part.take(requests, &owners, index);
+            let next = (index, seed, lookups, local);
+            index += 1;
+            Ok(next)
+        };
+        tracing::info_span!("atlas reduce").in_scope(|| -> Result<()> {
+            // A caller running inside Rayon must be available for work scheduled in its pool.
+            if windows == 1
+                || rayon::current_thread_index().is_some()
+                || rayon::current_num_threads() == 1
+            {
+                let mut open = open;
+                return work(
+                    &mut io,
+                    &mut requests,
+                    &mut |io, requests, layer, lookups| {
+                        let ready = prepare(job(io, requests, layer, lookups)?)?;
+                        record(io, open(ready)?);
+                        Ok(())
+                    },
+                );
+            }
+            std::thread::scope(|scope| -> Result<()> {
+                let (submit, jobs) = std::sync::mpsc::sync_channel::<Job<'m>>(1);
+                let (send, done) = std::sync::mpsc::channel::<Result<Done>>();
+                scope.spawn(move || {
+                    let mut open = open;
+                    for job in jobs {
+                        let opened = prepare(job).and_then(&mut open);
+                        let failed = opened.is_err();
+                        if send.send(opened).is_err() || failed {
+                            break;
+                        }
+                    }
+                });
+                let result = work(
+                    &mut io,
+                    &mut requests,
+                    &mut |io, requests, layer, lookups| {
+                        while let Ok(result) = done.try_recv() {
+                            record(io, result?);
+                        }
+                        let next = job(io, requests, layer, lookups)?;
+                        if tracing::info_span!("atlas pipeline backpressure")
+                            .in_scope(|| submit.send(next))
+                            .is_err()
+                        {
+                            return match done.recv() {
+                                Ok(Err(error)) => Err(error),
+                                _ => Err("Lookup pipeline stopped"),
+                            };
+                        }
+                        Ok(())
+                    },
+                );
+                drop(submit);
+                result?;
+                for result in done {
+                    record(&mut io, result?);
+                }
+                Ok(())
+            })
         })?;
-        tracing::info_span!("atlas open")
-            .in_scope(|| plan.prove(advice, &roots, requests, &mut transcript, emit))?;
+        if index != windows || digests.len() != windows || !requests.0.is_empty() {
+            return Err("unfinished window requests");
+        }
+        io.bind_windows(&digests);
         Ok(Header {
             state,
             widths,
@@ -897,28 +1040,70 @@ impl<'a> Model<'a> {
         })
     }
 
-    fn verify_with<'p>(
-        &self,
+    fn verify_with<'m, 'p>(
+        &'m self,
         advice: &mut Advice,
         tokens: &[usize],
         segments: Option<&[usize]>,
         expected: Output<'_>,
         proof: &'p Header,
         read: impl FnMut(usize) -> Result<Cow<'p, crate::bitz::Proof>>,
-        work: impl FnOnce(&mut Channel<'_, '_>, &mut Requests) -> Result<()>,
+        work: impl FnOnce(&mut Channel<'_, '_>, &mut Requests, &mut WindowFlush<'_, 'm>) -> Result<()>,
     ) -> Result<()> {
-        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v4");
+        let tag = jolt_transcript::protocol_tag(b"atlas/window-bitz/v1");
         let mut transcript = verifier_transcript::<Keccak>(&tag, b"", &proof.transcript);
         self.bind(&mut transcript, tokens, segments, expected);
         advice.bind_widths(&proof.widths)?;
         transcript.append_bytes(&proof.widths);
-        let plan = advice.buckets()?;
-        plan.bind(&proof.roots, &mut transcript)?;
+        let width = WINDOW_LAYERS;
+        transcript.append(&(width as u64));
+        let plan = advice.windows(width)?;
+        if plan.iter().map(Buckets::len).sum::<usize>() != proof.roots.len() {
+            return Err("wrong number of BitZ roots");
+        }
+        let mut root = 0;
+        for part in &plan {
+            part.bind(&proof.roots[root..root + part.len()], &mut transcript)?;
+            root += part.len();
+        }
+        let owners = Buckets::owners(&plan, proof.widths.len());
         let mut io = Channel::checking(&mut transcript, &proof.state);
         let mut requests = Requests(Vec::new());
-        work(&mut io, &mut requests)?;
+        let mut digests = Vec::new();
+        let mut read = read;
+        let mut index = 0;
+        let mut root = 0;
+        let advice = &*advice;
+        let mut flush =
+            |io: &mut Channel<'_, '_>, req: &mut Requests, layer, lookups| -> Result<()> {
+                let part = plan.get(index).ok_or("extra Lookup window")?;
+                let seed = io.window_seed(layer, (layer + width).min(self.layers.len()));
+                let mut local = part.take(req, &owners, index);
+                let window = io.take_window()?;
+                let (digest, lookup) = window.verify(seed, lookups)?;
+                local.0.extend(lookup.0);
+                let mut bitz =
+                    verifier_transcript::<Keccak>(&bitz_window_tag(), &digest, &window.bitz);
+                part.verify(
+                    advice,
+                    local,
+                    &proof.roots[root..root + part.len()],
+                    &mut bitz,
+                    |i| read(root + i),
+                )?;
+                digests.push(bitz.verifier_message_as(32, |v| v.try_into().unwrap()));
+                bitz.check_eof()
+                    .map_err(|_| "extra BitZ window transcript bytes")?;
+                root += part.len();
+                index += 1;
+                Ok(())
+            };
+        work(&mut io, &mut requests, &mut flush)?;
+        if index != plan.len() || !requests.0.is_empty() {
+            return Err("unfinished window requests");
+        }
+        io.bind_windows(&digests);
         io.finish()?;
-        plan.verify(advice, requests, &proof.roots, &mut transcript, read)?;
         transcript.check_eof().map_err(|_| "extra transcript bytes")
     }
 
@@ -926,7 +1111,7 @@ impl<'a> Model<'a> {
         &self,
         tokens: &[usize],
         cfg: &TopKConfig,
-        mut out: impl Write + Seek,
+        mut out: impl Write + Seek + Send,
     ) -> Result<Vec<Vec<Candidate>>> {
         if out
             .seek(SeekFrom::End(0))
@@ -1005,7 +1190,7 @@ fn integers(t: &mut impl Transcript, x: &[i32]) {
     }
 }
 
-const MAGIC: &[u8; 8] = b"ATLASMP4";
+const MAGIC: &[u8; 8] = b"ATLASBW1";
 
 fn decode<T: serde::de::DeserializeOwned>(data: &mut std::io::Take<impl Read>) -> Result<T> {
     codec()

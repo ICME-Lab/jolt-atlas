@@ -18,6 +18,7 @@ pub(crate) struct Advice {
     mapped: Option<memmap2::Mmap>,
     columns: Vec<Record>,
     cursor: u64,
+    cuts: Vec<usize>,
 }
 
 struct Record {
@@ -71,6 +72,7 @@ impl Advice {
             mapped: None,
             columns: Vec::new(),
             cursor: 0,
+            cuts: Vec::new(),
         })
     }
 
@@ -204,14 +206,33 @@ impl Advice {
         Ok(())
     }
 
-    pub fn buckets(&self) -> Result<Buckets> {
+    pub fn cut(&mut self) {
+        self.cuts.push(self.columns.len());
+    }
+
+    pub fn windows(&self, width: usize) -> Result<Vec<Buckets>> {
+        let layers = self.cuts.len() - 1;
+        (0..layers.div_ceil(width))
+            .rev()
+            .map(|i| {
+                let start = if i == 0 { 0 } else { self.cuts[i * width] };
+                let end = self.cuts[((i + 1) * width).min(layers)];
+                let extra = if i == 0 {
+                    self.cuts[layers]..self.columns.len()
+                } else {
+                    0..0
+                };
+                self.pack_groups((start..end).chain(extra))
+            })
+            .collect()
+    }
+
+    fn pack_groups(&self, indices: impl Iterator<Item = usize>) -> Result<Buckets> {
         const MAX: usize = 32 << 23;
         let mut sizes = Vec::<(usize, Vec<usize>)>::new();
-        let mut amounts: Vec<_> = self
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
+        let mut amounts: Vec<_> = indices
+            .map(|i| {
+                let c = &self.columns[i];
                 let n = (1 << c.kind.vars.max(9)) * c.kind.width.bits();
                 (i, n)
             })
@@ -235,7 +256,7 @@ impl Advice {
         Ok(Buckets(groups))
     }
 
-    fn seal(&mut self) -> Result<()> {
+    pub fn seal(&mut self) -> Result<()> {
         let mut file = self.file.take().ok_or("missing prover advice")?;
         file.write_all(&[0; 16])
             .map_err(|_| "could not finish advice file")?;
@@ -275,10 +296,9 @@ impl Advice {
 impl Buckets {
     pub fn commit(
         &self,
-        advice: &mut Advice,
+        advice: &Advice,
         channel: &mut ProverState<Keccak>,
     ) -> Result<Vec<[u8; 32]>> {
-        advice.seal()?;
         self.0
             .iter()
             .map(|(group, ids)| {
@@ -287,6 +307,30 @@ impl Buckets {
                 Ok(root)
             })
             .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn take(&self, all: &mut Requests, owners: &[usize], window: usize) -> Requests {
+        let (local, rest) = std::mem::take(&mut all.0)
+            .into_iter()
+            .partition(|(Slot(i), _, _)| owners.get(*i) == Some(&window));
+        all.0 = rest;
+        Requests(local)
+    }
+
+    pub fn owners(windows: &[Self], count: usize) -> Vec<usize> {
+        let mut owners = vec![usize::MAX; count];
+        for (w, buckets) in windows.iter().enumerate() {
+            for (_, ids) in &buckets.0 {
+                for &i in ids {
+                    owners[i] = w;
+                }
+            }
+        }
+        owners
     }
 
     pub fn bind(&self, roots: &[[u8; 32]], channel: &mut VerifierState<'_, Keccak>) -> Result<()> {
@@ -301,7 +345,7 @@ impl Buckets {
 
     pub fn prove(
         &self,
-        advice: &mut Advice,
+        advice: &Advice,
         roots: &[[u8; 32]],
         requests: Requests,
         channel: &mut ProverState<Keccak>,
@@ -375,15 +419,19 @@ impl Buckets {
     }
 
     fn distribute(&self, count: usize, requests: Requests) -> Result<Vec<Vec<Query>>> {
-        let mut position = vec![(0, 0); count];
+        let mut position = vec![None; count];
         for (part, (_, ids)) in self.0.iter().enumerate() {
             for (slot, &index) in ids.iter().enumerate() {
-                position[index] = (part, slot);
+                position[index] = Some((part, slot));
             }
         }
         let mut parts: Vec<Vec<Query>> = (0..self.0.len()).map(|_| Vec::new()).collect();
         for (Slot(id), claim, planes) in requests.0 {
-            let &(part, slot) = position.get(id).ok_or("invalid advice slot")?;
+            let (part, slot) = position
+                .get(id)
+                .copied()
+                .flatten()
+                .ok_or("invalid advice slot")?;
             parts[part].push(Query {
                 slot,
                 claim,
@@ -430,8 +478,9 @@ mod tests {
         let roots = |advice: &mut Advice| {
             let tag = protocol_tag(b"lookup-columns");
             let mut transcript = prover_transcript::<Keccak>(&tag, b"");
+            advice.seal().unwrap();
             advice
-                .buckets()
+                .pack_groups(0..advice.columns.len())
                 .unwrap()
                 .commit(advice, &mut transcript)
                 .unwrap()

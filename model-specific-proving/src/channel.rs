@@ -23,6 +23,7 @@ pub(crate) struct Messages {
     fields: Vec<F>,
     rounds: Vec<SingleSumcheckProof<F>>,
     branches: Vec<Branch>,
+    windows: Vec<Window>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -32,6 +33,60 @@ pub(crate) struct Branch {
     bytes: Vec<u8>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Window {
+    fields: Vec<F>,
+    rounds: Vec<SingleSumcheckProof<F>>,
+    branches: Vec<Branch>,
+    bytes: Vec<u8>,
+    pub bitz: Vec<u8>,
+}
+
+impl Window {
+    pub fn prove(
+        seed: [u8; 32],
+        lookups: crate::lookup::Lookups<'_>,
+        advice: &Advice,
+    ) -> Result<(Self, [u8; 32], crate::advice::Requests)> {
+        let tag = protocol_tag(b"atlas/lookup-window/v1");
+        let mut t = prover_transcript::<Keccak>(&tag, &seed);
+        let mut state = Messages::default();
+        let mut requests = crate::advice::Requests(Vec::new());
+        lookups.finish(
+            &mut Channel::Send(&mut t, &mut state, advice),
+            &mut requests,
+        )?;
+        let digest = t.verifier_message_as(32, |v| v.try_into().unwrap());
+        Ok((
+            Self {
+                fields: state.fields,
+                rounds: state.rounds,
+                branches: state.branches,
+                bytes: t.narg_string().to_vec(),
+                bitz: Vec::new(),
+            },
+            digest,
+            requests,
+        ))
+    }
+
+    pub fn verify(
+        &self,
+        seed: [u8; 32],
+        lookups: crate::lookup::Lookups<'_>,
+    ) -> Result<([u8; 32], crate::advice::Requests)> {
+        let tag = protocol_tag(b"atlas/lookup-window/v1");
+        let mut t = verifier_transcript::<Keccak>(&tag, &seed, &self.bytes);
+        let mut io = Channel::Check(&mut t, &self.fields, &self.rounds, &self.branches, &[]);
+        let mut requests = crate::advice::Requests(Vec::new());
+        lookups.finish(&mut io, &mut requests)?;
+        io.finish()?;
+        let digest = t.verifier_message_as(32, |v| v.try_into().unwrap());
+        t.check_eof().map_err(|_| "extra window transcript bytes")?;
+        Ok((digest, requests))
+    }
+}
+
 pub(crate) enum Channel<'a, 'proof> {
     Send(&'a mut ProverState<Keccak>, &'a mut Messages, &'a Advice),
     Check(
@@ -39,6 +94,7 @@ pub(crate) enum Channel<'a, 'proof> {
         &'proof [F],
         &'proof [SingleSumcheckProof<F>],
         &'proof [Branch],
+        &'proof [Window],
     ),
 }
 
@@ -49,6 +105,7 @@ impl<'a, 'p> Channel<'a, 'p> {
             &messages.fields,
             &messages.rounds,
             &messages.branches,
+            &messages.windows,
         )
     }
 
@@ -95,7 +152,7 @@ impl<'a, 'p> Channel<'a, 'p> {
                     })
                     .collect())
             }
-            Self::Check(parent, _, _, branches) => {
+            Self::Check(parent, _, _, branches, _) => {
                 let (children, rest) = branches
                     .split_at_checked(count)
                     .ok_or("missing proof branches")?;
@@ -108,7 +165,7 @@ impl<'a, 'p> Channel<'a, 'p> {
                         let mut child = verifier_transcript::<Keccak>(&tag, &seed, &branch.bytes);
                         child.append(&[count as u64, i as u64]);
                         let mut io =
-                            Channel::Check(&mut child, &branch.fields, &branch.rounds, &[]);
+                            Channel::Check(&mut child, &branch.fields, &branch.rounds, &[], &[]);
                         let value = work(i, &mut io)?;
                         io.finish()?;
                         parent.append(&child.verifier_message_as(32, block));
@@ -122,6 +179,45 @@ impl<'a, 'p> Channel<'a, 'p> {
         }
     }
 
+    pub fn window_seed(&mut self, first: usize, last: usize) -> [u8; 32] {
+        let seed =
+            |t: &mut ProverState<Keccak>| t.verifier_message_as(32, |v| v.try_into().unwrap());
+        match self {
+            Self::Send(t, ..) => {
+                t.append(&[first as u64, last as u64]);
+                seed(*t)
+            }
+            Self::Check(t, ..) => {
+                t.append(&[first as u64, last as u64]);
+                t.verifier_message_as(32, |v| v.try_into().unwrap())
+            }
+        }
+    }
+
+    pub fn take_window(&mut self) -> Result<&'p Window> {
+        let Self::Check(_, _, _, _, windows) = self else {
+            return Err("invalid window reader");
+        };
+        let (window, next) = windows.split_first().ok_or("missing Lookup window")?;
+        *windows = next;
+        Ok(window)
+    }
+
+    pub fn push_window(&mut self, proof: Window) {
+        if let Self::Send(_, state, _) = self {
+            state.windows.push(proof);
+        }
+    }
+
+    pub fn bind_windows(&mut self, roots: &[[u8; 32]]) {
+        for root in roots {
+            match self {
+                Self::Send(t, ..) => t.append(root),
+                Self::Check(t, ..) => t.append(root),
+            }
+        }
+    }
+
     pub fn advice(&self) -> Option<&'a Advice> {
         match self {
             Self::Send(_, _, advice) => Some(*advice),
@@ -130,7 +226,7 @@ impl<'a, 'p> Channel<'a, 'p> {
     }
 
     pub fn finish(self) -> Result<()> {
-        if matches!(self, Self::Check(_, fields, rounds, branches) if !fields.is_empty() || !rounds.is_empty() || !branches.is_empty())
+        if matches!(self, Self::Check(_, fields, rounds, branches, windows) if !windows.is_empty() || !fields.is_empty() || !rounds.is_empty() || !branches.is_empty())
         {
             return Err("extra proof messages");
         }
@@ -213,7 +309,7 @@ impl<'a, 'p> Channel<'a, 'p> {
                 data.rounds.push(proof);
                 (end, Some(terminal(witness)))
             }
-            Self::Check(t, _, proofs, _) => {
+            Self::Check(t, _, proofs, _, _) => {
                 let (proof, next) = proofs.split_first().ok_or("missing Sumcheck rounds")?;
                 *proofs = next;
                 (

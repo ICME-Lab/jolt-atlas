@@ -132,7 +132,7 @@ impl Block {
 
 struct Run {
     blocks: Vec<Saved>,
-    trace: Option<std::cell::RefCell<std::fs::File>>,
+    trace: Option<memmap2::Mmap>,
     norm: Normalized,
 }
 
@@ -159,11 +159,16 @@ impl Run {
         }
     }
 
-    fn block(&self, index: usize, norm_output: Option<Cow<'_, [i32]>>) -> Result<BlockRef<'_>> {
+    fn block(
+        &self,
+        index: usize,
+        prefetched: Option<Block>,
+        norm_output: Option<Cow<'_, [i32]>>,
+    ) -> Result<BlockRef<'_>> {
         match &self.blocks[index] {
             Saved::InMemory(b) => Ok(BlockRef::Borrowed(b)),
             Saved::OnDisk { body, .. } => {
-                let mut block: Block = self.read(*body)?;
+                let mut block = prefetched.map_or_else(|| self.read(*body), Ok)?;
                 if let Some(output) = norm_output {
                     block.m.trace.as_mut().unwrap().result = output.into_owned();
                 }
@@ -172,11 +177,8 @@ impl Run {
         }
     }
     fn read<T: serde::de::DeserializeOwned>(&self, offset: u64) -> Result<T> {
-        let mut file = self.trace.as_ref().unwrap().borrow_mut();
-        file.seek(SeekFrom::Start(offset))
-            .map_err(|_| "could not locate layer record")?;
         codec()
-            .deserialize_from(std::io::BufReader::new(&mut *file))
+            .deserialize_from(&self.trace.as_ref().unwrap()[offset as usize..])
             .map_err(|_| "could not read layer record")
     }
 }
@@ -397,7 +399,11 @@ impl<'a> Model<'a> {
         }
         Ok(Run {
             blocks,
-            trace: trace.map(std::cell::RefCell::new),
+            trace: trace
+                // The private trace file is complete and will only be read from here.
+                .map(|file| unsafe { memmap2::Mmap::map(&file) })
+                .transpose()
+                .map_err(|_| "could not map layer trace")?,
             norm: norm.unwrap(),
         })
     }
@@ -429,93 +435,102 @@ impl<'a> Model<'a> {
         } else {
             run.layer_output(run.blocks.len() - 1, false)?
         };
+        let mut prefetched = None;
         for i in (0..run.blocks.len()).rev() {
-            let b = run.block(i, norm_output.take())?;
-            let p = &self.layers[i];
-            let previous = i
-                .checked_sub(1)
-                .map(|j| run.layer_output(j, pre))
-                .transpose()?
-                .flatten();
-            let x = if i > 0 {
-                previous.as_deref()
-            } else if pre {
-                Some(input)
-            } else {
-                run.norm.values()
-            };
-            let h = if pre {
-                b.after_attention.values.as_deref()
-            } else {
-                b.a.values()
-            };
-            let output = if pre {
-                claims.pop().unwrap()
-            } else {
-                b.m.reverse(
+            let b = run.block(i, prefetched.take(), norm_output.take())?;
+            prefetched = std::thread::scope(|scope| -> Result<Option<Block>> {
+                let next = match i.checked_sub(1).and_then(|i| run.blocks.get(i)) {
+                    Some(Saved::OnDisk { body, .. }) => Some(scope.spawn(|| run.read(*body))),
+                    _ => None,
+                };
+                let p = &self.layers[i];
+                let previous = i
+                    .checked_sub(1)
+                    .map(|j| run.layer_output(j, pre))
+                    .transpose()?
+                    .flatten();
+                let x = if i > 0 {
+                    previous.as_deref()
+                } else if pre {
+                    Some(input)
+                } else {
+                    run.norm.values()
+                };
+                let h = if pre {
+                    b.after_attention.values.as_deref()
+                } else {
+                    b.a.values()
+                };
+                let output = if pre {
+                    claims.pop().unwrap()
+                } else {
+                    b.m.reverse(
+                        io,
+                        requests,
+                        shape,
+                        bits,
+                        p.mlp_norm,
+                        b.after_mlp.values.as_deref(),
+                        &claims,
+                        &[],
+                    )?
+                };
+                let (skip, mlp) = b.after_mlp.split(io, requests, shape, output, h)?;
+                let mut mlp = b.mlp.reverse(
                     io,
                     requests,
+                    &mut lookups,
+                    p.mlp,
                     shape,
                     bits,
-                    p.mlp_norm,
-                    b.after_mlp.values.as_deref(),
-                    &claims,
-                    &[],
-                )?
-            };
-            let (skip, mlp) = b.after_mlp.split(io, requests, shape, output, h)?;
-            let mut mlp = b.mlp.reverse(
-                io,
-                requests,
-                &mut lookups,
-                p.mlp,
-                shape,
-                bits,
-                mlp,
-                if pre { b.m.values() } else { h },
-            )?;
-            let mid = if pre {
-                b.m.reverse(io, requests, shape, bits, p.mlp_norm, h, &mlp, &[skip])?
-            } else {
-                mlp.push(skip);
-                b.a.reverse(
+                    mlp,
+                    if pre { b.m.values() } else { h },
+                )?;
+                let mid = if pre {
+                    b.m.reverse(io, requests, shape, bits, p.mlp_norm, h, &mlp, &[skip])?
+                } else {
+                    mlp.push(skip);
+                    b.a.reverse(
+                        io,
+                        requests,
+                        shape,
+                        bits,
+                        p.attention_norm,
+                        b.after_attention.values.as_deref(),
+                        &mlp,
+                        &[],
+                    )?
+                };
+                let (skip, att) = b.after_attention.split(io, requests, shape, mid, x)?;
+                let mut from_att = self.context(i).reverse(
                     io,
                     requests,
-                    shape,
-                    bits,
-                    p.attention_norm,
-                    b.after_attention.values.as_deref(),
-                    &mlp,
-                    &[],
-                )?
-            };
-            let (skip, att) = b.after_attention.split(io, requests, shape, mid, x)?;
-            let mut from_att = self.context(i).reverse(
-                io,
-                requests,
-                &mut lookups,
-                &b.attention,
-                att,
-                if pre { b.a.values() } else { x },
-            )?;
-            claims = if pre {
-                vec![b.a.reverse(
-                    io,
-                    requests,
-                    shape,
-                    bits,
-                    p.attention_norm,
-                    x,
-                    &from_att,
-                    &[skip],
-                )?]
-            } else {
-                from_att.push(skip);
-                from_att
-            };
-            if !pre {
-                norm_output = previous;
-            }
+                    &mut lookups,
+                    &b.attention,
+                    att,
+                    if pre { b.a.values() } else { x },
+                )?;
+                claims = if pre {
+                    vec![b.a.reverse(
+                        io,
+                        requests,
+                        shape,
+                        bits,
+                        p.attention_norm,
+                        x,
+                        &from_att,
+                        &[skip],
+                    )?]
+                } else {
+                    from_att.push(skip);
+                    from_att
+                };
+                if !pre {
+                    norm_output = previous;
+                }
+                next.map(|job| job.join().map_err(|_| "layer prefetch failed")?)
+                    .transpose()
+            })?;
         }
         if !pre {
             claims = vec![reduce_end_norm(io, requests, Some(input), &claims)?];
@@ -856,7 +871,7 @@ impl<'a> Model<'a> {
         emit: impl FnMut(crate::bitz::Proof) -> Result<()>,
         work: impl FnOnce(&mut Channel<'_, '_>, &mut Requests) -> Result<()>,
     ) -> Result<Header> {
-        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v3");
+        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v4");
         let mut transcript = prover_transcript::<Keccak>(&tag, b"");
         self.bind(&mut transcript, tokens, segments, expected);
         let widths = advice.widths();
@@ -892,7 +907,7 @@ impl<'a> Model<'a> {
         read: impl FnMut(usize) -> Result<Cow<'p, crate::bitz::Proof>>,
         work: impl FnOnce(&mut Channel<'_, '_>, &mut Requests) -> Result<()>,
     ) -> Result<()> {
-        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v3");
+        let tag = jolt_transcript::protocol_tag(b"atlas/fixed-point-transformer/v4");
         let mut transcript = verifier_transcript::<Keccak>(&tag, b"", &proof.transcript);
         self.bind(&mut transcript, tokens, segments, expected);
         advice.bind_widths(&proof.widths)?;
@@ -990,7 +1005,7 @@ fn integers(t: &mut impl Transcript, x: &[i32]) {
     }
 }
 
-const MAGIC: &[u8; 8] = b"ATLASMP3";
+const MAGIC: &[u8; 8] = b"ATLASMP4";
 
 fn decode<T: serde::de::DeserializeOwned>(data: &mut std::io::Take<impl Read>) -> Result<T> {
     codec()

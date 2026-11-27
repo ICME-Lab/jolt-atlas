@@ -347,60 +347,80 @@ impl<'a> Context<'a> {
                 .as_ref()
                 .map(|v| eval_rows(v, channels, col, self.shape.rows));
             let mut k_claims = Vec::new();
-            for i in g * group..(g + 1) * group {
-                let head = &trace.heads[i];
-                let [y] = io.values(|| {
-                    [head
-                        .value
-                        .shape
-                        .eval(head.value.values.as_ref().unwrap(), &point)]
+            let indices: Vec<_> = (g * group..(g + 1) * group).collect();
+            for indices in indices.chunks(2) {
+                let ys = io.fields(indices.len(), || {
+                    indices
+                        .iter()
+                        .map(|&i| {
+                            let value = &trace.heads[i].value;
+                            value.shape.eval(value.values.as_ref().unwrap(), &point)
+                        })
+                        .collect()
                 })?;
-                value += weights[i] * y;
-                let y = Claim {
-                    point: point.clone(),
-                    value: y,
-                };
-                let pv = head.value.raw(io, requests, &y)?;
-                let codes = soft.addresses(&head.soft, io.advice());
-                let (score, v_point, v_value) = soft.reverse(
-                    io,
-                    requests,
-                    lookups,
-                    &head.soft,
-                    pv,
-                    r,
-                    bound_v.as_deref(),
-                    codes.as_deref(),
-                    2 * self.bits - shift,
-                )?;
-                let vc = Claim {
-                    point: [&v_point, col].concat(),
-                    value: v_value,
-                };
-                let q = &trace.queries[i];
-                let [q_claim, k_claim] = score_product(
-                    io,
-                    &soft,
-                    q.transformed.shape,
-                    &score.point,
-                    score.value,
-                    p.factor >> shift,
-                    q.values().zip(key.values()),
-                )?;
-                let query_claims = q.reverse(
-                    io,
-                    requests,
-                    self,
-                    self.head_norms.map(|n| n[0]),
-                    vec![q_claim],
-                )?;
-                projections.extend(
-                    query_claims
-                        .into_iter()
-                        .map(|claim| (&q.transformed, p.queries[i], claim)),
-                );
-                k_claims.push(k_claim);
-                projections.push((v, p.groups[g][1], vc));
+                for ((&i, y), (query_claims, k_claim, vc, local, reads)) in indices
+                    .iter()
+                    .zip(ys.iter().copied())
+                    .zip(
+                        io.parallel(b"atlas/attention-heads/v1", indices.len(), |j, io| {
+                            let i = indices[j];
+                            let y = ys[j];
+                            let head = &trace.heads[i];
+                            let mut local = Requests(Vec::new());
+                            let mut reads = Lookups::default();
+                            let y = Claim {
+                                point: point.clone(),
+                                value: y,
+                            };
+                            let pv = head.value.raw(io, &mut local, &y)?;
+                            let codes = soft.addresses(&head.soft, io.advice());
+                            let (score, v_point, v_value) = soft.reverse(
+                                io,
+                                &mut local,
+                                &mut reads,
+                                &head.soft,
+                                pv,
+                                r,
+                                bound_v.as_deref(),
+                                codes.as_deref(),
+                                2 * self.bits - shift,
+                            )?;
+                            let vc = Claim {
+                                point: [&v_point, col].concat(),
+                                value: v_value,
+                            };
+                            let q = &trace.queries[i];
+                            let [q_claim, k_claim] = score_product(
+                                io,
+                                &soft,
+                                q.transformed.shape,
+                                &score.point,
+                                score.value,
+                                p.factor >> shift,
+                                q.values().zip(key.values()),
+                            )?;
+                            let query_claims = q.reverse(
+                                io,
+                                &mut local,
+                                self,
+                                self.head_norms.map(|n| n[0]),
+                                vec![q_claim],
+                            )?;
+                            Ok((query_claims, k_claim, vc, local, reads))
+                        })?,
+                    )
+                {
+                    value += weights[i] * y;
+                    requests.0.extend(local.0);
+                    lookups.extend(reads);
+                    projections.extend(
+                        query_claims
+                            .into_iter()
+                            .map(|claim| (&trace.queries[i].transformed, p.queries[i], claim)),
+                    );
+                    k_claims.push(k_claim);
+                    projections.push((v, p.groups[g][1], vc));
+                }
             }
             let key_claims =
                 key.reverse(io, requests, self, self.head_norms.map(|n| n[1]), k_claims)?;

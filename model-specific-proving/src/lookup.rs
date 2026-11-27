@@ -107,23 +107,32 @@ impl<'a> Lookups<'a> {
         address: F,
         outputs: (F, F),
     ) {
-        let i = self
-            .0
-            .iter()
-            .position(|(t, n, _)| t.same(table) && *n == lookup.vars);
-        let reads = match i {
-            Some(i) => &mut self.0[i].2,
-            None => {
-                self.0.push((table, lookup.vars, Vec::new()));
-                &mut self.0.last_mut().unwrap().2
-            }
-        };
-        reads.push(Read {
+        self.bucket(table, lookup.vars).push(Read {
             lookup: lookup.clone(),
             point,
             address,
             outputs,
         });
+    }
+
+    fn bucket(&mut self, table: Table<'a>, vars: usize) -> &mut Vec<Read> {
+        let i = self
+            .0
+            .iter()
+            .position(|(t, n, _)| t.same(table) && *n == vars);
+        match i {
+            Some(i) => &mut self.0[i].2,
+            None => {
+                self.0.push((table, vars, Vec::new()));
+                &mut self.0.last_mut().unwrap().2
+            }
+        }
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        for (table, vars, reads) in other.0 {
+            self.bucket(table, vars).extend(reads);
+        }
     }
 
     pub fn finish(self, io: &mut Channel<'_, '_>, requests: &mut Requests) -> Result<()> {
@@ -239,8 +248,20 @@ impl<'a> Lookups<'a> {
             .iter()
             .map(|&(_, shift, width)| basis(&at.challenges[b - shift - width..b - shift]))
             .collect();
-        for ((read, mix), partial) in reads.chunks(batch).zip(mix.chunks(batch)).zip(parts) {
-            Self::link(io, requests, vars, read, mix, &weights, partial)?;
+        let jobs: Vec<_> = reads
+            .chunks(batch)
+            .zip(mix.chunks(batch))
+            .zip(parts)
+            .collect();
+        for jobs in jobs.chunks(2) {
+            for local in io.parallel(b"atlas/lookup-links/v1", jobs.len(), |i, child| {
+                let ((read, mix), partial) = jobs[i];
+                let mut local = Requests(Vec::new());
+                Self::link(child, &mut local, vars, read, mix, &weights, partial)?;
+                Ok(local)
+            })? {
+                requests.0.extend(local.0);
+            }
         }
         Ok(())
     }

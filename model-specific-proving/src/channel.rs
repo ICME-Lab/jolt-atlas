@@ -9,7 +9,11 @@ use jolt_sumcheck::single::{
     prove_single, verify_single, SingleFormat, SingleInstance, SingleReduction, SingleSumcheckProof,
 };
 use jolt_sumcheck::ProveRounds;
-use jolt_transcript::{Keccak, ProverState, Transcript, VerifierState};
+use jolt_transcript::{
+    protocol_tag, prover_transcript, verifier_transcript, Keccak, ProverState, Transcript,
+    VerifierState,
+};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub type Result<T> = std::result::Result<T, &'static str>;
@@ -18,6 +22,14 @@ pub type Result<T> = std::result::Result<T, &'static str>;
 pub(crate) struct Messages {
     fields: Vec<F>,
     rounds: Vec<SingleSumcheckProof<F>>,
+    branches: Vec<Branch>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Branch {
+    fields: Vec<F>,
+    rounds: Vec<SingleSumcheckProof<F>>,
+    bytes: Vec<u8>,
 }
 
 pub(crate) enum Channel<'a, 'proof> {
@@ -26,12 +38,88 @@ pub(crate) enum Channel<'a, 'proof> {
         &'a mut VerifierState<'proof, Keccak>,
         &'proof [F],
         &'proof [SingleSumcheckProof<F>],
+        &'proof [Branch],
     ),
 }
 
 impl<'a, 'p> Channel<'a, 'p> {
     pub fn checking(transcript: &'a mut VerifierState<'p, Keccak>, messages: &'p Messages) -> Self {
-        Self::Check(transcript, &messages.fields, &messages.rounds)
+        Self::Check(
+            transcript,
+            &messages.fields,
+            &messages.rounds,
+            &messages.branches,
+        )
+    }
+
+    pub fn parallel<T: Send>(
+        &mut self,
+        domain: &[u8],
+        count: usize,
+        work: impl Fn(usize, &mut Channel<'_, '_>) -> Result<T> + Sync,
+    ) -> Result<Vec<T>> {
+        if count == 1 {
+            return Ok(vec![work(0, self)?]);
+        }
+        let tag = protocol_tag(domain);
+        let block = |bytes: &[u8]| <[u8; 32]>::try_from(bytes).unwrap();
+        match self {
+            Self::Send(parent, data, advice) => {
+                let seed = parent.verifier_message_as(32, block);
+                let advice = *advice;
+                let children = (0..count)
+                    .into_par_iter()
+                    .map(|i| {
+                        let mut child = prover_transcript::<Keccak>(&tag, &seed);
+                        child.append(&[count as u64, i as u64]);
+                        let mut messages = Messages::default();
+                        let value = work(i, &mut Channel::Send(&mut child, &mut messages, advice))?;
+                        let digest = child.verifier_message_as(32, block);
+                        let branch = Branch {
+                            fields: messages.fields,
+                            rounds: messages.rounds,
+                            bytes: child.narg_string().to_vec(),
+                        };
+                        if !messages.branches.is_empty() {
+                            return Err("nested parallel proof");
+                        }
+                        Ok((value, branch, digest))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(children
+                    .into_iter()
+                    .map(|(value, branch, digest)| {
+                        parent.append(&digest);
+                        data.branches.push(branch);
+                        value
+                    })
+                    .collect())
+            }
+            Self::Check(parent, _, _, branches) => {
+                let (children, rest) = branches
+                    .split_at_checked(count)
+                    .ok_or("missing proof branches")?;
+                *branches = rest;
+                let seed = parent.verifier_message_as(32, block);
+                children
+                    .iter()
+                    .enumerate()
+                    .map(|(i, branch)| {
+                        let mut child = verifier_transcript::<Keccak>(&tag, &seed, &branch.bytes);
+                        child.append(&[count as u64, i as u64]);
+                        let mut io =
+                            Channel::Check(&mut child, &branch.fields, &branch.rounds, &[]);
+                        let value = work(i, &mut io)?;
+                        io.finish()?;
+                        parent.append(&child.verifier_message_as(32, block));
+                        child
+                            .check_eof()
+                            .map_err(|_| "extra branch transcript bytes")?;
+                        Ok(value)
+                    })
+                    .collect()
+            }
+        }
     }
 
     pub fn advice(&self) -> Option<&'a Advice> {
@@ -42,7 +130,7 @@ impl<'a, 'p> Channel<'a, 'p> {
     }
 
     pub fn finish(self) -> Result<()> {
-        if matches!(self, Self::Check(_, fields, rounds) if !fields.is_empty() || !rounds.is_empty())
+        if matches!(self, Self::Check(_, fields, rounds, branches) if !fields.is_empty() || !rounds.is_empty() || !branches.is_empty())
         {
             return Err("extra proof messages");
         }
@@ -52,7 +140,7 @@ impl<'a, 'p> Channel<'a, 'p> {
     pub fn sample(&mut self, count: usize, loss: usize) -> Result<Vec<F>> {
         match self {
             Self::Send(t, _, _) => t.mix(count, loss),
-            Self::Check(t, _, _) => t.mix(count, loss),
+            Self::Check(t, ..) => t.mix(count, loss),
         }
     }
 
@@ -125,7 +213,7 @@ impl<'a, 'p> Channel<'a, 'p> {
                 data.rounds.push(proof);
                 (end, Some(terminal(witness)))
             }
-            Self::Check(t, _, proofs) => {
+            Self::Check(t, _, proofs, _) => {
                 let (proof, next) = proofs.split_first().ok_or("missing Sumcheck rounds")?;
                 *proofs = next;
                 (
@@ -145,7 +233,7 @@ impl<'a, 'p> Channel<'a, 'p> {
                 data.fields.extend_from_slice(&values);
                 Ok(values)
             }
-            Self::Check(t, fields, _) => {
+            Self::Check(t, fields, ..) => {
                 let (result, next) = fields
                     .split_at_checked(count)
                     .ok_or("missing field values")?;
@@ -182,5 +270,42 @@ impl<'a, 'p> Channel<'a, 'p> {
             point: end.challenges,
             value: v,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_reordered_parallel_branches() {
+        fn work(index: usize, io: &mut Channel<'_, '_>) -> Result<F> {
+            let expected = io.sample(2, 2)?[index];
+            let [actual] = io.values(|| [expected])?;
+            if actual != expected {
+                return Err("incorrect branch evaluation");
+            }
+            Ok(actual)
+        }
+
+        let tag = protocol_tag(b"atlas/parallel-test");
+        let domain = b"atlas/test-branches";
+        let advice = Advice::new(false).unwrap();
+        let mut messages = Messages::default();
+        let mut prover = prover_transcript::<Keccak>(&tag, b"");
+        Channel::Send(&mut prover, &mut messages, &advice)
+            .parallel(domain, 2, work)
+            .unwrap();
+
+        let verify = |messages: &Messages| -> Result<()> {
+            let mut transcript = verifier_transcript::<Keccak>(&tag, b"", prover.narg_string());
+            let mut io = Channel::checking(&mut transcript, messages);
+            io.parallel(domain, 2, work)?;
+            io.finish()?;
+            transcript.check_eof().map_err(|_| "extra transcript bytes")
+        };
+        assert!(verify(&messages).is_ok());
+        messages.branches.swap(0, 1);
+        assert!(verify(&messages).is_err());
     }
 }

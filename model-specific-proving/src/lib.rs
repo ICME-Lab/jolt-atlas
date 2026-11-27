@@ -1,5 +1,6 @@
 //! Fixed-point Transformer execution and Sumcheck proofs.
 use bincode::Options;
+mod metal;
 use jolt_field::{CanonicalBytes, CanonicalEncoding, Field, One, Ring, Zero};
 use jolt_poly::UnivariatePoly;
 use jolt_sumcheck::{
@@ -2000,6 +2001,9 @@ fn project(x: &[i32], s: Shape, bits: u32, p: Projection<'_>) -> Result<(Vec<i32
     if x.len() != s.cells() {
         return Err("invalid projection input");
     }
+    if let Some(witness) = metal::project(x, s, bits, p) {
+        return Ok(witness);
+    }
     let n = shape.cols;
     let rows = p.weights.chunks_exact(s.cols);
     let bound: Vec<u128> = rows
@@ -3543,8 +3547,31 @@ impl<'a> AttentionPlan<'a> {
         {
             return Err("invalid Attention widths");
         }
+        let specs = || {
+            p.queries
+                .iter()
+                .copied()
+                .chain(p.groups.iter().map(|g| g[0]))
+                .chain(p.groups.iter().map(|g| g[1]))
+        };
+        let mut grouped = x
+            .and_then(|x| metal::grouped(x, self.shape, self.bits, specs()))
+            .map(Vec::into_iter);
+        let mut apply = |a: &mut Advice, proj| {
+            if let Some(witness) = grouped.as_mut().and_then(Iterator::next) {
+                Rounded::record(
+                    a,
+                    projection_shape(self.shape, proj)?,
+                    self.bits,
+                    true,
+                    Some(witness),
+                )
+            } else {
+                Rounded::apply(a, self.shape, self.bits, proj, x, true)
+            }
+        };
         let mut head = |proj, norm: Option<NormalizationParameters<'a>>| {
-            let projection = Rounded::apply(a, self.shape, self.bits, proj, x, true)?;
+            let projection = apply(a, proj)?;
             let y = projection.values();
             let norm = norm
                 .map(|p| Normalized::record(a, projection.shape, self.bits, p, y))
@@ -3573,7 +3600,7 @@ impl<'a> AttentionPlan<'a> {
         let values = p
             .groups
             .iter()
-            .map(|[_, v]| Rounded::apply(a, self.shape, self.bits, *v, x, true))
+            .map(|[_, v]| apply(a, *v))
             .collect::<Result<Vec<_>>>()?;
         let transpose: Vec<_> = values
             .iter()

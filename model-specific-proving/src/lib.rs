@@ -1921,6 +1921,7 @@ fn project(x: &[i32], s: Shape, bits: u32, p: Projection<'_>) -> Result<(Vec<i32
 #[derive(Serialize, Deserialize)]
 struct Rounded {
     shape: Shape,
+    #[serde(with = "trace_array")]
     output: Option<Vec<i32>>,
     range: Option<Slot>,
     rem: Slot,
@@ -2184,8 +2185,11 @@ pub struct NormalizationParameters<'a> {
 struct Normalized {
     shape: Shape,
     bits: u32,
+    #[serde(with = "trace_array")]
     values: Option<Vec<i32>>,
+    #[serde(with = "trace_array")]
     quotients: Option<Vec<i64>>,
+    #[serde(with = "trace_array")]
     rows: Option<Vec<[i128; 9]>>,
     slots: Vec<Slot>,
 }
@@ -2585,7 +2589,9 @@ struct TileTrace {
 #[derive(Serialize, Deserialize)]
 struct SoftTrace {
     tiles: Vec<TileTrace>,
+    #[serde(with = "trace_array")]
     rows: Option<Vec<[i64; 3]>>,
+    #[serde(with = "trace_array")]
     excess: Option<Vec<i64>>,
     stats: [Slot; 3],
 }
@@ -2672,7 +2678,9 @@ impl<'a> Softmax<'a> {
                     let good = row
                         .iter()
                         .try_fold(0, |sum, &v| {
-                            let sum = sum + entry((mid - i64::from(v)).min(last));
+                            // The search starts at the maximum score in this row.
+                            let address = (mid - i64::from(v)).min(last) as usize;
+                            let sum = sum + i64::from(self.tables.sums[address]);
                             (sum <= limit).then_some(sum)
                         })
                         .is_some();
@@ -2997,6 +3005,7 @@ struct Feed {
     up: Rounded,
     gate: Option<Rounded>,
     product: Option<Rounded>,
+    #[serde(with = "trace_array")]
     activated: Option<Vec<i32>>,
     key: Lookup,
     slots: Vec<Slot>,
@@ -3308,8 +3317,18 @@ struct AttentionTrace {
     keys: Vec<HeadInput>,
     values: Vec<Rounded>,
     heads: Vec<Head>,
-    joined: Option<Vec<i32>>,
     output: Rounded,
+}
+
+fn join_heads(shape: Shape, heads: &[Head], channels: usize) -> Option<Vec<i32>> {
+    heads.first()?.product.values()?;
+    let mut joined = Vec::with_capacity(shape.cells());
+    for row in 0..shape.rows {
+        for head in heads {
+            joined.extend_from_slice(&head.product.values().unwrap()[row * channels..][..channels]);
+        }
+    }
+    Some(joined)
 }
 
 impl HeadInput {
@@ -3497,22 +3516,13 @@ impl<'a> AttentionPlan<'a> {
             }
         }
         let shape = Shape::new(n, channels * heads.len())?;
-        let joined = x.map(|_| {
-            let mut v = Vec::with_capacity(shape.cells());
-            for row in 0..n {
-                for h in &heads {
-                    v.extend_from_slice(&h.product.values().unwrap()[row * channels..][..channels]);
-                }
-            }
-            v
-        });
+        let joined = join_heads(shape, &heads, channels);
         let output = Rounded::apply(a, shape, self.bits, p.output, joined.as_deref(), true)?;
         Ok(AttentionTrace {
             queries,
             keys,
             values,
             heads,
-            joined,
             output,
         })
     }
@@ -3531,15 +3541,17 @@ impl<'a> AttentionPlan<'a> {
         let per = w.heads.len() / w.keys.len();
         let soft = Softmax::new(shape.rows, p.mask, p.tables)?;
         let (factor, bits) = self.factors();
+        let joined = join_heads(shape, &w.heads, c);
         let q = projections(
             io,
             r,
             shape,
             self.bits,
             &[(&w.output, p.output, out)],
-            w.joined.as_deref(),
+            joined.as_deref(),
         )?
         .remove(0);
+        drop(joined);
         let (row, col) = shape.point(&q.point);
         let (head, col) = col.split_at(col.len() - c.ilog2() as usize);
         let point = [row, col].concat();
@@ -4050,6 +4062,7 @@ pub struct Model<'a> {
 #[derive(Serialize, Deserialize)]
 struct Residual {
     norm: Normalized,
+    #[serde(with = "trace_array")]
     y: Option<Vec<i32>>,
     range: Slot,
 }
@@ -4163,16 +4176,55 @@ struct Run {
     map: Option<memmap2::Mmap>,
 }
 
+mod trace_array {
+    use bytemuck::{allocation::pod_collect_to_vec, cast_slice, Pod};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_bytes::Bytes;
+
+    // Layer traces are temporary files read by the same process.
+    pub(super) fn bytes<T: Pod>(values: &[T]) -> &Bytes {
+        Bytes::new(cast_slice(values))
+    }
+
+    pub(super) fn values<T: Pod>(bytes: &Bytes) -> Option<Vec<T>> {
+        bytes
+            .len()
+            .is_multiple_of(size_of::<T>())
+            .then(|| pod_collect_to_vec(bytes.as_ref()))
+    }
+
+    pub(super) fn serialize<T: Pod, S: Serializer>(
+        values: &Option<Vec<T>>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        values.as_deref().map(bytes).serialize(s)
+    }
+
+    pub(super) fn deserialize<'de, T: Pod, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Vec<T>>, D::Error> {
+        Option::<&Bytes>::deserialize(d)?
+            .map(|bytes| {
+                values(bytes).ok_or_else(|| serde::de::Error::custom("invalid trace array length"))
+            })
+            .transpose()
+    }
+}
+
 impl Run {
-    fn read<T: serde::de::DeserializeOwned>(&self, offset: usize) -> Result<T> {
+    fn read<'a, T: Deserialize<'a>>(&'a self, offset: usize) -> Result<T> {
         codec()
-            .deserialize_from(&self.map.as_ref().unwrap()[offset..])
+            .allow_trailing_bytes()
+            .deserialize(&self.map.as_ref().unwrap()[offset..])
             .map_err(|_| "read layer trace")
     }
     fn output(&self, i: usize, decoder: bool) -> Result<Option<Cow<'_, [i32]>>> {
         match &self.layers[i] {
             Saved::InMemory(v) => Ok(v.after_mlp.values(decoder).map(Cow::Borrowed)),
-            Saved::OnDisk(at, _) => self.read(*at).map(|v| Some(Cow::Owned(v))),
+            Saved::OnDisk(at, _) => trace_array::values(self.read(*at)?)
+                .map(Cow::Owned)
+                .map(Some)
+                .ok_or("invalid layer output length"),
         }
     }
 }
@@ -4182,7 +4234,7 @@ fn save_layer(file: &mut File, hidden: &[i32], layer: &LayerTrace) -> Result<Sav
     let mut out = BufWriter::new(file);
     let output = out.stream_position().map_err(|_| "seek layer file")? as usize;
     codec()
-        .serialize_into(&mut out, hidden)
+        .serialize_into(&mut out, trace_array::bytes(hidden))
         .map_err(|_| "write layer output")?;
     let record = out.stream_position().map_err(|_| "seek layer file")? as usize;
     codec()

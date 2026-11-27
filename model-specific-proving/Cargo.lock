@@ -725,6 +725,7 @@ version = "0.1.0"
 dependencies = [
  "atlas-trace",
  "bincode",
+ "bytemuck",
  "common",
  "crypto-primitives",
  "field",

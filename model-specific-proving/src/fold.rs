@@ -4,10 +4,10 @@ use jolt_sumcheck::{ProveRounds, SumcheckError};
 use rayon::prelude::*;
 
 pub(crate) enum Column<'a, F> {
-    Source(usize, Box<dyn Fn(usize) -> F + Sync + 'a>),
+    Source(usize, Box<dyn Fn(usize) -> F + Sync + Send + 'a>),
     Selector {
         len: usize,
-        read: Box<dyn Fn(usize) -> usize + Sync + 'a>,
+        read: Box<dyn Fn(usize) -> usize + Sync + Send + 'a>,
         radix: usize,
         values: Vec<F>,
     },
@@ -20,14 +20,14 @@ pub(crate) enum Column<'a, F> {
 }
 
 impl<'a, F: Field> Column<'a, F> {
-    pub(crate) fn source(len: usize, read: impl Fn(usize) -> F + Sync + 'a) -> Self {
+    pub(crate) fn source(len: usize, read: impl Fn(usize) -> F + Sync + Send + 'a) -> Self {
         Self::Source(len, Box::new(read))
     }
 
     pub(crate) fn selector(
         len: usize,
         values: &[F],
-        read: impl Fn(usize) -> usize + Sync + 'a,
+        read: impl Fn(usize) -> usize + Sync + Send + 'a,
     ) -> Self {
         Self::Selector {
             len,
@@ -219,8 +219,15 @@ impl<F: Field, G: Fn(&[F]) -> F + Sync> ProveRounds<F> for Fold<'_, F, G> {
     }
 
     fn finish_rounds(&mut self, point: F) -> Result<(), SumcheckError<F>> {
-        for column in &mut self.columns {
-            column.bind(point);
+        let half = self.columns[0].len() / 2;
+        if self.columns.len() >= 4 && half >= 256 && half * self.columns.len() >= 8192 {
+            self.columns
+                .par_iter_mut()
+                .for_each(|column| column.bind(point));
+        } else {
+            self.columns
+                .iter_mut()
+                .for_each(|column| column.bind(point));
         }
         Ok(())
     }

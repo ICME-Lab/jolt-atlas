@@ -41,6 +41,9 @@ jolt-poly = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38c
 jolt-sumcheck = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["prover"] }
 jolt-transcript = { git = "https://github.com/ClankPan/jolt.git", rev = "5022101f9a38cff9c9b26289f0c27b124d0602d0", default-features = false, features = ["transcript-keccak", "prover-grinding"] }
 
+[build-dependencies]
+cc = "1"
+
 [profile.test]
 opt-level = 3
 lto = "off"

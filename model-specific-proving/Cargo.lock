@@ -726,6 +726,7 @@ dependencies = [
  "atlas-trace",
  "bincode",
  "bytemuck",
+ "cc",
  "common",
  "crypto-primitives",
  "field",

@@ -953,8 +953,7 @@ struct Storage {
 }
 struct Advice {
     pending: Option<File>,
-    maps: Vec<Option<Arc<memmap2::Mmap>>>,
-    shard: u32,
+    maps: Vec<Arc<memmap2::Mmap>>,
     offset: usize,
     slots: Vec<Storage>,
     layers: Vec<usize>,
@@ -968,8 +967,7 @@ impl Advice {
             .map_err(|_| "create witnesses")?;
         Ok(Self {
             pending,
-            maps: vec![None],
-            shard: 0,
+            maps: Vec::new(),
             offset: 0,
             slots: Vec::new(),
             layers: Vec::new(),
@@ -980,7 +978,7 @@ impl Advice {
         f.write_all(&[0; 16]).map_err(|_| "finish witnesses")?;
         // After this mapping the private file has no writable handle.
         let map = unsafe { memmap2::Mmap::map(&f) }.map_err(|_| "map witnesses")?;
-        self.maps[self.shard as usize] = Some(Arc::new(map));
+        self.maps.push(Arc::new(map));
         Ok(())
     }
     fn cut(&mut self) {
@@ -1022,7 +1020,8 @@ impl Advice {
             file.write_all(&raw).map_err(|_| "write witnesses")?;
             self.offset += raw.len();
         }
-        Ok(Packed(at, width, self.shard))
+        let shard = u32::try_from(self.maps.len()).map_err(|_| "too many witness shards")?;
+        Ok(Packed(at, width, shard))
     }
     fn add(&mut self, entry: Storage) -> Slot {
         let id = Slot(self.slots.len());
@@ -1056,6 +1055,18 @@ impl Advice {
             data,
             digit: None,
         }))
+    }
+    fn columns<const N: usize>(
+        &mut self,
+        s: Shape,
+        widths: [Width; N],
+        f: impl Fn(usize, usize) -> i128 + Sync,
+    ) -> Result<[Slot; N]> {
+        let mut slots = [Slot(0); N];
+        for (i, (slot, width)) in slots.iter_mut().zip(widths).enumerate() {
+            *slot = self.column(s, width, |j| f(i, j))?;
+        }
+        Ok(slots)
     }
     fn digit(&mut self, s: Shape, data: Packed, shift: usize, bits: usize) -> Slot {
         self.add(Storage {
@@ -1091,7 +1102,7 @@ impl Advice {
             return 0;
         }
         let bit = i * width;
-        let bytes = &self.maps[shard as usize].as_ref().unwrap()[base + bit / 8..][..16];
+        let bytes = &self.maps[shard as usize][base + bit / 8..][..16];
         (u128::from_le_bytes(bytes.try_into().unwrap()) >> (bit % 8)) & ((1 << width) - 1)
     }
     fn read(&self, Slot(id): Slot, i: usize) -> u128 {
@@ -1108,7 +1119,6 @@ type CommitRoots = HashMap<usize, Vec<Digest>>;
 type CommitJob = (usize, Advice);
 
 struct EarlyCommit {
-    first: Option<(File, usize)>,
     phase: Arc<std::sync::atomic::AtomicU8>,
     send: Option<mpsc::Sender<CommitJob>>,
     worker: Option<std::thread::JoinHandle<Result<CommitRoots>>>,
@@ -1147,7 +1157,6 @@ impl EarlyCommit {
             })
             .map_err(|_| "start initial commitment worker")?;
         Ok(Self {
-            first: None,
             phase,
             send: Some(send),
             worker: Some(worker),
@@ -1158,12 +1167,10 @@ impl EarlyCommit {
         if end % WINDOW != 0 && end != total {
             return Ok(());
         }
-        if end == WINDOW {
-            // Final normalization and Top-K belong to the first window.
-            self.first = Some((advice.pending.take().unwrap(), advice.offset));
-        } else {
-            let first = ((end - 1) / WINDOW) * WINDOW;
-            advice.seal()?;
+        advice.seal()?;
+        let first = ((end - 1) / WINDOW) * WINDOW;
+        // The first window is committed after the final normalization and Top-K.
+        if first != 0 {
             let view = Advice {
                 maps: advice.maps.clone(),
                 slots: advice.slots[advice.layers[first]..advice.layers[end]].to_vec(),
@@ -1175,24 +1182,14 @@ impl EarlyCommit {
                 .send((first, view))
                 .map_err(|_| "initial commitment worker stopped")?;
         }
-        if end == total {
-            let (file, offset) = self.first.take().unwrap();
-            advice.pending = Some(file);
-            advice.offset = offset;
-            advice.shard = 0;
-        } else {
-            advice.pending = Some(tempfile::tempfile().map_err(|_| "create witness shard")?);
-            advice.offset = 0;
-            advice.shard =
-                u32::try_from(advice.maps.len()).map_err(|_| "too many witness shards")?;
-            advice.maps.push(None);
-        }
+        advice.pending = Some(tempfile::tempfile().map_err(|_| "create witness shard")?);
+        advice.offset = 0;
         Ok(())
     }
 
-    fn finish(mut self) -> Result<CommitRoots> {
+    fn join(&mut self, phase: u8) -> Result<CommitRoots> {
         self.phase
-            .store(Self::FINISHING, std::sync::atomic::Ordering::Relaxed);
+            .store(phase, std::sync::atomic::Ordering::Relaxed);
         self.send.take();
         self.worker
             .take()
@@ -1204,11 +1201,8 @@ impl EarlyCommit {
 
 impl Drop for EarlyCommit {
     fn drop(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            self.phase
-                .store(Self::CANCELLED, std::sync::atomic::Ordering::Relaxed);
-            self.send.take();
-            let _ = worker.join();
+        if self.worker.is_some() {
+            let _ = self.join(Self::CANCELLED);
         }
     }
 }
@@ -2400,21 +2394,14 @@ impl Normalized {
         }
         use Width::*;
         let r = s.stride().ilog2() as u8;
-        for (i, width) in [
+        let cell_widths = [
             Signed(63),
             Signed(32),
             Unsigned(33),
             Unsigned(33),
             Unsigned(bits as u8),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let slot = a.column(s, width, |j| w.cell(p, x.unwrap(), j, i + 1))?;
-            w.slots.push(slot);
-        }
-        let rows = Shape::new(s.rows, 1)?;
-        let widths = [
+        ];
+        let row_widths = [
             Unsigned(65),
             Unsigned(r),
             Unsigned(r),
@@ -2425,10 +2412,13 @@ impl Normalized {
             Unsigned(r),
             Unsigned(r),
         ];
-        for (i, width) in widths.into_iter().enumerate() {
-            w.slots
-                .push(a.column(rows, width, |j| w.rows.as_ref().unwrap()[j][i])?);
-        }
+        w.slots = a
+            .columns(s, cell_widths, |i, j| w.cell(p, x.unwrap(), j, i + 1))?
+            .into_iter()
+            .chain(a.columns(Shape::new(s.rows, 1)?, row_widths, |i, j| {
+                w.rows.as_ref().unwrap()[j][i]
+            })?)
+            .collect();
         Ok(w)
     }
     fn values(&self) -> Option<&[i32]> {
@@ -2899,12 +2889,12 @@ impl<'a> Softmax<'a> {
             });
         }
         let shape = Shape::new(n, 1)?;
-        let mut col = |i: usize, w| a.column(shape, w, |j| i128::from(value().rows[j][i]));
-        let stats = [
-            col(0, Width::Signed(34))?,
-            col(1, Width::Unsigned(self.slack))?,
-            col(2, Width::Unsigned(self.slack))?,
+        let widths = [
+            Width::Signed(34),
+            Width::Unsigned(self.slack),
+            Width::Unsigned(self.slack),
         ];
+        let stats = a.columns(shape, widths, |i, j| i128::from(value().rows[j][i]))?;
         let (rows, excess) = w.map_or((None, None), |w| (Some(w.rows), w.excess));
         Ok(SoftTrace {
             tiles,
@@ -3236,15 +3226,12 @@ impl Feed {
         });
         let key = Lookup::record(a, s, table.values.len(), |i| code.as_ref().unwrap()[i])?;
         let n = u8::from(!table.symmetric);
-        let slots = [1, 32 * n, 33 * n, 33]
-            .into_iter()
-            .enumerate()
-            .map(|(i, w)| {
-                a.column(s, Width::Unsigned(w), |j| {
-                    i128::from(table.code(input.unwrap()[j]).1[i])
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let widths = [1, 32 * n, 33 * n, 33].map(Width::Unsigned);
+        let slots = a
+            .columns(s, widths, |i, j| {
+                i128::from(table.code(input.unwrap()[j]).1[i])
+            })?
+            .to_vec();
         let activated = input
             .map(|x| {
                 x.iter()
@@ -3556,9 +3543,10 @@ impl<'a> AttentionPlan<'a> {
         };
         let mut grouped = x
             .and_then(|x| metal::grouped(x, self.shape, self.bits, specs()))
-            .map(Vec::into_iter);
+            .unwrap_or_default()
+            .into_iter();
         let mut apply = |a: &mut Advice, proj| {
-            if let Some(witness) = grouped.as_mut().and_then(Iterator::next) {
+            if let Some(witness) = grouped.next() {
                 Rounded::record(
                     a,
                     projection_shape(self.shape, proj)?,
@@ -4018,8 +4006,7 @@ impl<'a> Top<'a> {
                     [x - lo, hi - x]
                 };
                 let w = Width::Unsigned(self.bits as u8 + 32);
-                let lo = a.column(shape, w, |i| gap(i)[0])?;
-                let hi = a.column(shape, w, |i| gap(i)[1])?;
+                let [lo, hi] = a.columns(shape, [w; 2], |side, i| gap(i)[side])?;
                 shapes.push(TopBounds {
                     row,
                     col,
@@ -5008,7 +4995,7 @@ impl Model<'_> {
             let mut early = run
                 .early
                 .take()
-                .map(EarlyCommit::finish)
+                .map(|mut worker| worker.join(EarlyCommit::FINISHING))
                 .transpose()?
                 .unwrap_or_default();
             for w in &plan.windows {

@@ -2,15 +2,19 @@
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
-static void dispatch(id<MTLComputeCommandEncoder> e, NSUInteger n) {
+static void dispatch(id<MTLComputeCommandEncoder> e, NSArray<id<MTLBuffer>> *buffers,
+                     const uint32_t *args, NSUInteger arg_count, NSUInteger n) {
+    for (NSUInteger i = 0; i < buffers.count; ++i) [e setBuffer:buffers[i] offset:0 atIndex:i];
+    [e setBytes:args length:arg_count * sizeof(*args) atIndex:buffers.count];
     [e dispatchThreads:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
 }
 
 bool atlas_metal_projection(const void *library, size_t library_size, const int32_t *input,
                            const int32_t *weights, const int32_t *bias,
-                           uint32_t rows, uint32_t inner, uint32_t cols, uint32_t bits,
-                           uint32_t xd, uint32_t wd, int32_t *output, uint32_t *remainder) {
+                           const uint32_t *dims, int32_t *output, uint32_t *remainder) {
     @autoreleasepool {
+        uint32_t rows = dims[0], inner = dims[1], cols = dims[2], bits = dims[3];
+        uint32_t xd = dims[4], wd = dims[5];
         static dispatch_once_t once;
         static id<MTLDevice> dev;
         static id<MTLCommandQueue> queue;
@@ -46,16 +50,9 @@ bool atlas_metal_projection(const void *library, size_t library_size, const int3
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
         if (!enc) return false;
         [enc setComputePipelineState:split];
-        uint32_t params[] = {(uint32_t)xlen, xd};
-        [enc setBuffer:x offset:0 atIndex:0];
-        [enc setBuffer:xp offset:0 atIndex:1];
-        [enc setBytes:params length:sizeof(params) atIndex:2];
-        dispatch(enc, xlen);
-        params[0] = (uint32_t)wlen; params[1] = wd;
-        [enc setBuffer:w offset:0 atIndex:0];
-        [enc setBuffer:wp offset:0 atIndex:1];
-        [enc setBytes:params length:sizeof(params) atIndex:2];
-        dispatch(enc, wlen);
+        uint32_t xargs[] = {(uint32_t)xlen, xd}, wargs[] = {(uint32_t)wlen, wd};
+        dispatch(enc, @[x, xp], xargs, 2, xlen);
+        dispatch(enc, @[w, wp], wargs, 2, wlen);
         [enc endEncoding];
 
         MPSMatrixDescriptor *ad = [MPSMatrixDescriptor matrixDescriptorWithRows:rows columns:inner
@@ -68,6 +65,7 @@ bool atlas_metal_projection(const void *library, size_t library_size, const int3
             transposeLeft:NO transposeRight:YES resultRows:rows resultColumns:cols
             interiorColumns:inner alpha:1.0 beta:0.0];
         MPSMatrix *c = [[MPSMatrix alloc] initWithBuffer:partial descriptor:cd];
+        NSArray<id<MTLBuffer>> *buffers = @[partial, sum, b, out, rem, failure];
         for (uint32_t j=0; j<xd; j++) {
             MPSMatrix *a = [[MPSMatrix alloc] initWithBuffer:xp offset:j*xlen*4 descriptor:ad];
             for (uint32_t k=0; k<wd; k++) {
@@ -76,16 +74,9 @@ bool atlas_metal_projection(const void *library, size_t library_size, const int3
                 enc = [cmd computeCommandEncoder];
                 if (!enc) return false;
                 [enc setComputePipelineState:accumulate];
-                [enc setBuffer:partial offset:0 atIndex:0];
-                [enc setBuffer:sum offset:0 atIndex:1];
-                [enc setBuffer:b offset:0 atIndex:2];
-                [enc setBuffer:out offset:0 atIndex:3];
-                [enc setBuffer:rem offset:0 atIndex:4];
-                [enc setBuffer:failure offset:0 atIndex:5];
                 uint32_t flags = (j==0 && k==0) | ((j+1==xd && k+1==wd) << 1);
                 uint32_t config[] = {7*(j+k), cols, bits, flags};
-                [enc setBytes:config length:sizeof(config) atIndex:6];
-                dispatch(enc, olen);
+                dispatch(enc, buffers, config, 4, olen);
                 [enc endEncoding];
             }
         }

@@ -11,12 +11,7 @@ unsafe extern "C" {
         input: *const i32,
         weights: *const i32,
         bias: *const i32,
-        rows: u32,
-        inner: u32,
-        cols: u32,
-        bits: u32,
-        xd: u32,
-        wd: u32,
+        dims: *const u32,
         output: *mut i32,
         remainder: *mut u32,
     ) -> bool;
@@ -65,6 +60,14 @@ pub(super) fn project(x: &[i32], s: Shape, bits: u32, p: Projection<'_>) -> Opti
         return None;
     }
     let (mut output, mut remainder) = (vec![0; shape.cells()], vec![0; shape.cells()]);
+    let dims = [
+        s.rows as u32,
+        s.cols as u32,
+        shape.cols as u32,
+        bits,
+        xd,
+        wd,
+    ];
     // All input and output buffers have the stated dimensions and live through the synchronous call.
     let ok = unsafe {
         atlas_metal_projection(
@@ -73,12 +76,7 @@ pub(super) fn project(x: &[i32], s: Shape, bits: u32, p: Projection<'_>) -> Opti
             x.as_ptr(),
             p.weights.as_ptr(),
             p.bias.as_ptr(),
-            s.rows as u32,
-            s.cols as u32,
-            shape.cols as u32,
-            bits,
-            xd,
-            wd,
+            dims.as_ptr(),
             output.as_mut_ptr(),
             remainder.as_mut_ptr(),
         )
@@ -96,18 +94,15 @@ pub(super) fn grouped<'a>(
     if !supported(s, cols, bits) {
         return None;
     }
-    let mut start = 0;
     let mut ranges = Vec::new();
-    for p in specs.clone() {
-        projection_shape(s, p).ok()?;
-        ranges.push(start..start + p.bias.len());
-        start += p.bias.len();
+    let mut weights = Vec::with_capacity(s.cols * cols);
+    let mut bias = Vec::with_capacity(cols);
+    for projection in specs {
+        projection_shape(s, projection).ok()?;
+        ranges.push(bias.len()..bias.len() + projection.bias.len());
+        weights.extend_from_slice(projection.weights);
+        bias.extend_from_slice(projection.bias);
     }
-    let weights: Vec<_> = specs
-        .clone()
-        .flat_map(|p| p.weights.iter().copied())
-        .collect();
-    let bias: Vec<_> = specs.flat_map(|p| p.bias.iter().copied()).collect();
     let (values, remainders) = project(
         x,
         s,
@@ -117,20 +112,15 @@ pub(super) fn grouped<'a>(
             bias: &bias,
         },
     )?;
+    fn slice<T: Copy>(data: &[T], cols: usize, range: std::ops::Range<usize>) -> Vec<T> {
+        data.chunks_exact(cols)
+            .flat_map(|row| row[range.clone()].iter().copied())
+            .collect()
+    }
     Some(
         ranges
             .into_par_iter()
-            .map(|range| {
-                let output = values
-                    .chunks_exact(cols)
-                    .flat_map(|row| row[range.clone()].iter().copied())
-                    .collect();
-                let remainder = remainders
-                    .chunks_exact(cols)
-                    .flat_map(|row| row[range.clone()].iter().copied())
-                    .collect();
-                (output, remainder)
-            })
+            .map(|r| (slice(&values, cols, r.clone()), slice(&remainders, cols, r)))
             .collect(),
     )
 }

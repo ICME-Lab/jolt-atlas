@@ -378,6 +378,7 @@ impl<'a> Model<'a> {
                 after_mlp,
             };
             let saved = if let Some(file) = trace.as_mut().filter(|_| i + 1 < self.layers.len()) {
+                let _write = tracing::info_span!("atlas trace layer write").entered();
                 let offset = file
                     .stream_position()
                     .map_err(|_| "could not locate layer trace")?;
@@ -989,11 +990,20 @@ impl<'a> Model<'a> {
             }
             std::thread::scope(|scope| -> Result<()> {
                 let (submit, jobs) = std::sync::mpsc::sync_channel::<Job<'m>>(1);
+                // While BitZ consumes one window, Lookup can prepare one more.
+                let (handoff, ready) = std::sync::mpsc::sync_channel::<Result<Ready>>(0);
                 let (send, done) = std::sync::mpsc::channel::<Result<Done>>();
                 scope.spawn(move || {
-                    let mut open = open;
                     for job in jobs {
-                        let opened = prepare(job).and_then(&mut open);
+                        if handoff.send(prepare(job)).is_err() {
+                            break;
+                        }
+                    }
+                });
+                scope.spawn(move || {
+                    let mut open = open;
+                    for prepared in ready {
+                        let opened = prepared.and_then(&mut open);
                         let failed = opened.is_err();
                         if send.send(opened).is_err() || failed {
                             break;

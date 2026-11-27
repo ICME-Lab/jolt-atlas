@@ -66,7 +66,7 @@ requests for witness data such as remainders and one-hot vectors.
 
 ## Implementation size
 
-The crate has about 7,000 lines of Rust source excluding tests and vendored dependencies, including
+The crate has about 5,500 lines of Rust source excluding tests and vendored dependencies, including
 model execution, model definitions, and proof generation and verification.
 The existing Atlas codebase has about 84,000 lines of
 Rust across its broader ONNX pipeline and supporting code. The direct approach

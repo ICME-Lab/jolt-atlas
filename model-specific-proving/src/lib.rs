@@ -1714,12 +1714,12 @@ impl Table<'_> {
     }
     fn same(self, b: Self) -> bool {
         match (self, b) {
-            (Self::Activation(a), Self::Activation(b)) => std::ptr::eq(a, b),
+            (Self::Activation(a), Self::Activation(b)) => a == b,
             (Self::Soft(a, r), Self::Soft(b, s)) => {
                 r == s
                     && a.limit == b.limit
-                    && std::ptr::eq(a.probabilities, b.probabilities)
-                    && std::ptr::eq(a.sums, b.sums)
+                    && a.probabilities == b.probabilities
+                    && a.sums == b.sums
             }
             _ => false,
         }
@@ -2729,6 +2729,7 @@ impl<'a> Softmax<'a> {
             || !(1..i32::MAX).contains(&t.limit)
             || t.sums.iter().any(|&v| v < 0)
             || t.sums.windows(2).any(|p| p[0] < p[1])
+            || t.sums[size - 2] != t.sums[size - 1]
             || rows as u128 * t.sums[size - 1] as u128 > t.limit as u128
         {
             return Err("invalid Softmax table");
@@ -2943,7 +2944,7 @@ impl<'a> Softmax<'a> {
             let score = w.rows.as_ref().unwrap()[r][0] - i64::from(code) - overflow;
             (F::from_i64(score), F::from_i64(overflow))
         };
-        let draw = io.draw(s.vars() + s.row_bits() + 3)?;
+        let draw = io.draw(s.vars() + s.row_bits() + 4)?;
         let (spot, extra) = draw.split_at(s.vars());
         let (stat, a) = extra.split_at(s.row_bits());
         let limit = F::from_i32(self.tables.limit);
@@ -2958,7 +2959,7 @@ impl<'a> Softmax<'a> {
             };
             let clamp = a[0] * overflow * (last - i) + (one - mask) * (a[1] * i + a[2] * overflow);
             let sums = first * (below - limit - radix * (above + limit + one)) + t + mask * zero_t;
-            pv * (p + mask * zero_p) + spot * clamp + stat * sums
+            pv * (p + mask * zero_p) + spot * clamp + a[3] * stat * sums
         };
         let mut stats = basis(stat);
         stats[s.rows..].fill(F::zero());
@@ -3132,6 +3133,18 @@ struct Feed {
 
 impl<'a> ActivationTable<'a> {
     fn new(p: Activation<'a>) -> Result<Self> {
+        // Each entry covers one integer, except the clamped endpoints.
+        // The last entry also covers i32::MAX.
+        if p.correction.iter().enumerate().any(|(i, &c)| {
+            let upper = if i + 1 == p.correction.len() {
+                i64::from(i32::MAX)
+            } else {
+                (i64::from(p.lower) + i as i64).min(i64::from(i32::MAX))
+            };
+            upper.max(0) + i64::from(c) > i64::from(i32::MAX)
+        }) {
+            return Err("activation exceeds i32");
+        }
         let half = p.correction.len() / 2;
         let low = i64::from(p.lower);
         let symmetric = half > 1
@@ -4074,10 +4087,10 @@ impl<'a> Top<'a> {
     }
 }
 
-const MAGIC: [u8; 8] = *b"ATLASBW1";
+const MAGIC: [u8; 8] = *b"ATLASBW2";
 const WIRE: &str = "invalid proof record";
 const FILE_IO: &str = "proof file operation failed";
-const TRANSFORMER: &[u8] = b"atlas/window-bitz/v1";
+const TRANSFORMER: &[u8] = b"atlas/window-bitz/v2";
 const LOOKUP: &[u8] = b"atlas/lookup-window/v1";
 const OPENING: &[u8] = b"atlas/bitz-window/v1";
 
@@ -4129,7 +4142,7 @@ fn decode<T: serde::de::DeserializeOwned>(r: &mut Take<impl Read>) -> Result<T> 
         .map_err(|_| WIRE)
 }
 
-fn footer(mut r: impl Read + Seek) -> Result<(Header, Take<impl Read>)> {
+fn footer(mut r: impl Read + Seek, advice: &mut Advice) -> Result<(Header, Take<impl Read>)> {
     let size = r.seek(SeekFrom::End(0)).map_err(|_| FILE_IO)?;
     r.rewind().map_err(|_| FILE_IO)?;
     let mut header = [0; 16];
@@ -4137,6 +4150,28 @@ fn footer(mut r: impl Read + Seek) -> Result<(Header, Take<impl Read>)> {
     let n = u64::from_le_bytes(header[8..].try_into().unwrap());
     if header[..8] != MAGIC || !(16..=size).contains(&n) {
         return Err(WIRE);
+    }
+    r.seek(SeekFrom::Start(n)).map_err(|_| FILE_IO)?;
+    let mut count = [0; 8];
+    r.read_exact(&mut count).map_err(|_| WIRE)?;
+    if u64::from_le_bytes(count) != advice.slots.len() as u64 {
+        return Err("wrong number of witness widths");
+    }
+    let mut widths = vec![0; advice.slots.len()];
+    r.read_exact(&mut widths).map_err(|_| WIRE)?;
+    advice.check_widths(&widths)?;
+    Plan::new(advice)?;
+    // Metadata contains field messages and round transcripts, not PCS payloads.
+    // Bound it by the public witness count and variable count before decoding.
+    let bound = advice
+        .slots
+        .iter()
+        .try_fold(1u64 << 20, |n, s| {
+            n.checked_add((s.shape.vars() as u64 + 1) * (1 << 16))
+        })
+        .ok_or(WIRE)?;
+    if size - n > bound {
+        return Err("proof metadata exceeds model limit");
     }
     r.seek(SeekFrom::Start(n)).map_err(|_| FILE_IO)?;
     let mut metadata = (&mut r).take(size - n);
@@ -4444,6 +4479,9 @@ impl<'a> Statement<'a> {
 }
 
 impl<'a> Model<'a> {
+    pub fn vocab_size(&self) -> usize {
+        self.embedding.tokens.len() / self.shape.cols
+    }
     pub fn new(
         rows: usize,
         bits: u8,
@@ -4498,6 +4536,16 @@ impl<'a> Model<'a> {
             norm,
             key: [0; 32],
         };
+        for layer in &model.layers {
+            if Shape::new(rows, layer.mlp.up.bias.len())?.vars() > 28
+                || Shape::new(rows, layer.attention.output.bias.len())?.vars() > 28
+                || Shape::new(rows, rows)?.vars() > 28
+            {
+                return Err("sequence length exceeds BitZ witness column limit");
+            }
+            ActivationTable::new(layer.mlp.activation)?;
+            Softmax::new(rows, layer.attention.mask, layer.attention.tables)?;
+        }
         model.key = model.hash();
         Ok(model)
     }
@@ -5117,13 +5165,12 @@ impl Model<'_> {
         })
     }
     fn verify(&self, stmt: Statement<'_>, file: impl Read + Seek) -> Result<()> {
-        let (header, mut proofs) = footer(file)?;
         let mut run = self.forward(stmt.ids, stmt.segments, false)?;
         let bounds = match stmt.target {
             Target::Top(cfg, out) => self.top(cfg)?.record(&mut run.advice, out, None)?,
             _ => Vec::new(),
         };
-        run.advice.check_widths(&header.widths)?;
+        let (header, mut proofs) = footer(file, &mut run.advice)?;
         let plan = Plan::new(&run.advice)?;
         if header.roots.len() != plan.roots {
             return Err("invalid number of commitments");
@@ -5408,12 +5455,29 @@ pub mod weights {
             };
             let width = dim(key("n_embd", "hidden_size"))?;
             let heads = dim(key("n_head", "num_attention_heads"))?;
-            let qwen_dim =
-                |key, default| qwen.then(|| dim(key).unwrap_or(default)).unwrap_or(default);
-            let head = qwen_dim("head_dim", width / heads);
-            let kv = qwen_dim("num_key_value_heads", heads);
+            let optional_dim = |key: &str, default| -> Load<usize> {
+                if config.get(key).is_none() {
+                    Ok(default)
+                } else {
+                    dim(key)
+                }
+            };
+            let head = if qwen {
+                optional_dim("head_dim", width / heads)?
+            } else {
+                width / heads
+            };
+            let kv = if qwen {
+                optional_dim("num_key_value_heads", heads)?
+            } else {
+                heads
+            };
             let limit = dim(key("n_positions", "max_position_embeddings"))?;
-            let inner = dim(key("n_inner", "intermediate_size")).unwrap_or(width * 4);
+            let inner = if gpt && config["n_inner"].is_null() {
+                width * 4
+            } else {
+                optional_dim(key("n_inner", "intermediate_size"), width * 4)?
+            };
             let layers = dim(key("n_layer", "num_hidden_layers"))?;
             let vocab = dim("vocab_size")?;
             let on = |name| config[name].as_bool() == Some(true);
@@ -5422,10 +5486,23 @@ pub mod weights {
                     !on("scale_attn_by_inverse_layer_idx")
                         && config["scale_attn_weights"].as_bool() != Some(false)
                 }
-                Bert => config["position_embedding_type"]
-                    .as_str()
-                    .is_none_or(|x| x == "absolute"),
-                _ => config["rope_scaling"].is_null() && !on("use_sliding_window"),
+                Bert => {
+                    !on("is_decoder")
+                        && !on("add_cross_attention")
+                        && config["position_embedding_type"]
+                            .as_str()
+                            .is_none_or(|x| x == "absolute")
+                }
+                _ => {
+                    config["rope_scaling"].is_null()
+                        && !on("use_sliding_window")
+                        && config.get("layer_types").is_none_or(|v| {
+                            v.as_array().is_some_and(|types| {
+                                types.len() == layers
+                                    && types.iter().all(|t| t.as_str() == Some("full_attention"))
+                            })
+                        })
+                }
             };
             if !valid
                 || !head.is_power_of_two()
@@ -5471,6 +5548,9 @@ pub mod weights {
             };
             let embedding = |name, rows| f.read(&format!("{prefix}{name}.weight"), &[rows, width]);
             let tokens = embedding(embed, vocab)?;
+            if family != Bert && config["tie_word_embeddings"].as_bool() == Some(false) {
+                return Err("decoder requires tied embeddings".into());
+            }
             if family != Bert
                 && has("lm_head.weight")
                 && f.read("lm_head.weight", &[vocab, width])? != tokens

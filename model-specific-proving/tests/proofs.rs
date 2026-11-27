@@ -80,7 +80,7 @@ fn fixture_with_scores(
                 },
                 activation: Activation {
                     lower: -2,
-                    correction: if gated { &[0; 4] } else { &[1, 2, 3, 4] },
+                    correction: if gated { &[0; 4] } else { &[1, 2, 3, 0] },
                 },
             },
             attention_norm: norm,

@@ -210,3 +210,59 @@ fn normalization_preserves_pending_input_claims() {
         assert_eq!(shape.eval(&x, &result.point), result.value);
     }
 }
+
+#[test]
+fn rejects_unsafe_custom_tables() {
+    assert!(ActivationTable::new(Activation {
+        lower: -2,
+        correction: &[0, 0, 0, 1],
+    })
+    .is_err());
+    assert!(ActivationTable::new(Activation {
+        lower: i32::MAX - 2,
+        correction: &[0, 0, 1, 0],
+    })
+    .is_err());
+    assert!(ActivationTable::new(Activation {
+        lower: -2,
+        correction: &[1, 2, 3, 0],
+    })
+    .is_ok());
+    assert!(Softmax::new(
+        2,
+        SoftmaxMask::Full,
+        SoftmaxTables {
+            probabilities: &[4, 3, 2, 1],
+            sums: &[4, 3, 2, 1],
+            limit: 8,
+        }
+    )
+    .is_err());
+}
+
+#[test]
+fn lookup_identity_uses_table_contents() {
+    let a = vec![1, 2, 3, 0];
+    let b = a.clone();
+    assert!(Table::Activation(&a).same(Table::Activation(&b)));
+    assert!(!Table::Activation(&a).same(Table::Activation(&[1, 2, 2, 0])));
+}
+
+#[test]
+fn independent_coefficient_separates_softmax_residual() {
+    let error = F::from_u64(7);
+    // The old equation accepts equal nonzero residuals for every row point.
+    assert_eq!(error - error, F::zero());
+    let residual = |rho: F| error - rho * error;
+    assert_ne!(residual(F::from_u64(2)), F::zero());
+    assert_ne!(residual(F::from_u64(2)), residual(F::from_u64(3)));
+}
+
+#[test]
+fn rejects_footer_width_count_before_decoding() {
+    let mut proof = Vec::from(MAGIC);
+    proof.extend_from_slice(&16u64.to_le_bytes());
+    proof.extend_from_slice(&u64::MAX.to_le_bytes());
+    let mut advice = Advice::new(false).unwrap();
+    assert!(footer(std::io::Cursor::new(proof), &mut advice).is_err());
+}

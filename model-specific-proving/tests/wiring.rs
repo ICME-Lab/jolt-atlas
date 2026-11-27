@@ -43,3 +43,42 @@ fn proves_bert_with_post_normalization() {
         .verify_from(&tokens, Some(&segments), &output, proof)
         .unwrap();
 }
+
+#[test]
+fn rejects_unsupported_checkpoint_settings() {
+    for (name, key, value) in [
+        ("qwen3-tiny", "head_dim", serde_json::json!(0)),
+        ("qwen3-tiny", "num_key_value_heads", serde_json::json!(0)),
+        (
+            "qwen3-tiny",
+            "tie_word_embeddings",
+            serde_json::json!(false),
+        ),
+        (
+            "qwen3-tiny",
+            "layer_types",
+            serde_json::json!(["sliding_attention"]),
+        ),
+        ("bge-tiny", "is_decoder", serde_json::json!(true)),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let source = model(name);
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(source.join("config.json")).unwrap()).unwrap();
+        config[key] = value;
+        std::fs::write(
+            dir.path().join("config.json"),
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .unwrap();
+        std::fs::copy(
+            source.join("model.safetensors"),
+            dir.path().join("model.safetensors"),
+        )
+        .unwrap();
+        assert!(
+            ModelWeights::from_safetensors(dir.path(), 14).is_err(),
+            "{name}: {key}"
+        );
+    }
+}

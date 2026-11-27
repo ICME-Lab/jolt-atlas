@@ -9,12 +9,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tokens: Vec<usize> = ids.iter().map(|id| id.parse()).collect::<Result<_, _>>()?;
     let weights = ModelWeights::from_safetensors(Path::new(model), bits.parse()?)?;
     let model = weights.model(tokens.len())?;
+    let vocab = model.vocab_size();
     let mut proof = tempfile::tempfile()?;
     let mut stdout = std::io::stdout().lock();
     if model.is_decoder() {
         let cfg = TopKConfig {
             positions: tokens.len().saturating_sub(4)..tokens.len(),
-            k: 8,
+            k: 8.min(vocab),
             rows_per_block: 4,
             vocab_per_block: 1 << 14,
         };

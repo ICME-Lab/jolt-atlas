@@ -69,6 +69,42 @@ pub struct Committed {
     channel: world_transcript::ProverState,
 }
 
+fn pack(
+    output: &mut [&mut [F128]],
+    first: usize,
+    len: usize,
+    read: &(impl Fn(usize) -> Result<u128> + Sync),
+) -> Result<()> {
+    if len >= 128 {
+        let mid = len / 2;
+        let (mut left, mut right): (Vec<_>, Vec<_>) = output
+            .iter_mut()
+            .map(|plane| plane.split_at_mut(mid))
+            .unzip();
+        let (left, right) = rayon::join(
+            || pack(&mut left, first, mid, read),
+            || pack(&mut right, first + mid, len - mid, read),
+        );
+        left?;
+        return right;
+    }
+    for index in 0..len {
+        let mut planes = [0u128; 65];
+        let start = (first + index) * 128;
+        for row in 0..128 {
+            let mut value = read(start + row)?;
+            while value != 0 {
+                planes[value.trailing_zeros() as usize] |= 1 << row;
+                value &= value - 1;
+            }
+        }
+        for (plane, &value) in output.iter_mut().zip(&planes) {
+            plane[index] = F128::from(value);
+        }
+    }
+    Ok(())
+}
+
 impl Group {
     pub fn new(columns: &[RangeColumn]) -> Result<Self> {
         if columns.is_empty()
@@ -129,30 +165,20 @@ impl Group {
                 let width = placement.range.width.bits();
                 let offset = placement.range.width.offset();
                 let cells = 1 << placement.range.vars;
-                for col in 0..placement.columns {
-                    for group in 0..WORDS {
-                        let mut planes = [0u128; 65];
-                        let start = col * ROWS + group * 128;
-                        for index in start..(start + 128).min(cells) {
-                            let value = source(slot, index)
-                                .checked_add(offset)
-                                .ok_or("range overflow")?;
-                            if !(0..1i128 << width).contains(&value) {
-                                return Err("integer outside committed range");
-                            }
-                            let mut value = value as u128;
-                            while value != 0 {
-                                planes[value.trailing_zeros() as usize] |= 1 << (index - start);
-                                value &= value - 1;
-                            }
-                        }
-                        for (bit, &encoded) in planes[..width].iter().enumerate() {
-                            let pos = (bit * placement.columns + col) * WORDS + group;
-                            output[pos] = F128::from(encoded);
-                        }
+                let words = placement.columns * WORDS;
+                let mut planes: Vec<_> = output.chunks_exact_mut(words).collect();
+                pack(&mut planes, 0, words, &|index| {
+                    if index >= cells {
+                        return Ok(0);
                     }
-                }
-                Ok(())
+                    let value = source(slot, index)
+                        .checked_add(offset)
+                        .ok_or("range overflow")?;
+                    if !(0..1i128 << width).contains(&value) {
+                        return Err("integer outside committed range");
+                    }
+                    Ok(value as u128)
+                })
             })?;
         let mut channel = build_prover(DOMAIN, b"");
         let (root, data) = self
@@ -253,26 +279,38 @@ impl Group {
                     values[..count].fill(q.scale);
                     return (basis(&q.row), values);
                 }
-                let mut coefficients = [F::zero(); 65];
-                for (col, &weight) in q.column.iter().enumerate() {
-                    let w = weight * q.scale;
-                    if q.binary {
-                        for (out, &x) in coefficients.iter_mut().zip(&q.planes) {
-                            *out = w * x;
-                        }
-                    }
-                    for (row, v) in values[..count].iter_mut().enumerate() {
-                        let x = (source(q.slot, col * ROWS + row) + layout.offset()) as u128;
+                let project = |first, out: &mut [F]| {
+                    let mut coefficients = [F::zero(); 65];
+                    for (col, &weight) in q.column.iter().enumerate() {
+                        let w = weight * q.scale;
                         if q.binary {
-                            let mut bits = x;
-                            while bits != 0 {
-                                *v += coefficients[bits.trailing_zeros() as usize];
-                                bits &= bits - 1;
+                            for (out, &x) in coefficients.iter_mut().zip(&q.planes) {
+                                *out = w * x;
                             }
-                        } else {
-                            *v += w.mul_integer(x as i128);
+                        }
+                        for (row, v) in out.iter_mut().enumerate() {
+                            let x = (source(q.slot, col * ROWS + first + row) + layout.offset())
+                                as u128;
+                            if q.binary {
+                                let mut bits = x;
+                                while bits != 0 {
+                                    *v += coefficients[bits.trailing_zeros() as usize];
+                                    bits &= bits - 1;
+                                }
+                            } else {
+                                *v += w.mul_integer(x as i128);
+                            }
                         }
                     }
+                };
+                if queries.len() < rayon::current_num_threads() && q.column.len() * count >= 32_768
+                {
+                    values[..count]
+                        .par_chunks_mut(128)
+                        .enumerate()
+                        .for_each(|(i, out)| project(i * 128, out));
+                } else {
+                    project(0, &mut values[..count]);
                 }
                 (basis(&q.row), values)
             })

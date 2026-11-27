@@ -942,7 +942,8 @@ impl Width {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 struct Slot(usize);
 #[derive(Clone, Copy, Serialize, Deserialize)]
-struct Packed(usize, u8);
+struct Packed(usize, u8, u32);
+#[derive(Clone)]
 struct Storage {
     shape: Shape,
     width: Width,
@@ -951,7 +952,8 @@ struct Storage {
 }
 struct Advice {
     pending: Option<File>,
-    map: Option<memmap2::Mmap>,
+    maps: Vec<Option<Arc<memmap2::Mmap>>>,
+    shard: u32,
     offset: usize,
     slots: Vec<Storage>,
     layers: Vec<usize>,
@@ -965,7 +967,8 @@ impl Advice {
             .map_err(|_| "create witnesses")?;
         Ok(Self {
             pending,
-            map: None,
+            maps: vec![None],
+            shard: 0,
             offset: 0,
             slots: Vec::new(),
             layers: Vec::new(),
@@ -975,7 +978,8 @@ impl Advice {
         let mut f = self.pending.take().ok_or("missing witness file")?;
         f.write_all(&[0; 16]).map_err(|_| "finish witnesses")?;
         // After this mapping the private file has no writable handle.
-        self.map = Some(unsafe { memmap2::Mmap::map(&f) }.map_err(|_| "map witnesses")?);
+        let map = unsafe { memmap2::Mmap::map(&f) }.map_err(|_| "map witnesses")?;
+        self.maps[self.shard as usize] = Some(Arc::new(map));
         Ok(())
     }
     fn cut(&mut self) {
@@ -1017,7 +1021,7 @@ impl Advice {
             file.write_all(&raw).map_err(|_| "write witnesses")?;
             self.offset += raw.len();
         }
-        Ok(Packed(at, width))
+        Ok(Packed(at, width, self.shard))
     }
     fn add(&mut self, entry: Storage) -> Slot {
         let id = Slot(self.slots.len());
@@ -1080,13 +1084,13 @@ impl Advice {
         }
         Ok(())
     }
-    fn get(&self, Packed(base, width): Packed, i: usize) -> u128 {
+    fn get(&self, Packed(base, width, shard): Packed, i: usize) -> u128 {
         let width = usize::from(width);
         if width == 0 {
             return 0;
         }
         let bit = i * width;
-        let bytes = &self.map.as_ref().unwrap()[base + bit / 8..][..16];
+        let bytes = &self.maps[shard as usize].as_ref().unwrap()[base + bit / 8..][..16];
         (u128::from_le_bytes(bytes.try_into().unwrap()) >> (bit % 8)) & ((1 << width) - 1)
     }
     fn read(&self, Slot(id): Slot, i: usize) -> u128 {
@@ -1095,6 +1099,115 @@ impl Advice {
         match s.digit {
             Some((shift, mask)) => 1 << ((v as usize >> shift) & mask),
             None => v,
+        }
+    }
+}
+
+type CommitRoots = HashMap<usize, Vec<Digest>>;
+type CommitJob = (usize, Advice);
+
+struct EarlyCommit {
+    first: Option<(File, usize)>,
+    phase: Arc<std::sync::atomic::AtomicU8>,
+    send: Option<mpsc::Sender<CommitJob>>,
+    worker: Option<std::thread::JoinHandle<Result<CommitRoots>>>,
+}
+
+impl EarlyCommit {
+    const TRACING: u8 = 0;
+    const FINISHING: u8 = 1;
+    const CANCELLED: u8 = 2;
+
+    fn new(threads: usize) -> Result<Self> {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .map_err(|_| "create initial commitment pool")?;
+        let (send, jobs) = mpsc::channel::<CommitJob>();
+        let phase = Arc::new(std::sync::atomic::AtomicU8::new(Self::TRACING));
+        let state = phase.clone();
+        let worker = std::thread::Builder::new()
+            .spawn(move || {
+                let mut roots = HashMap::new();
+                for (first, advice) in jobs {
+                    let mut window = Vec::new();
+                    for ids in bins(&advice.slots, (0..advice.slots.len()).collect()) {
+                        let group = Group::new(&advice, ids)?;
+                        let root = match state.load(std::sync::atomic::Ordering::Relaxed) {
+                            Self::TRACING => pool.install(|| group.commit(&advice))?.root,
+                            Self::FINISHING => group.commit(&advice)?.root,
+                            _ => return Ok(roots),
+                        };
+                        window.push(root);
+                    }
+                    roots.insert(first, window);
+                }
+                Ok(roots)
+            })
+            .map_err(|_| "start initial commitment worker")?;
+        Ok(Self {
+            first: None,
+            phase,
+            send: Some(send),
+            worker: Some(worker),
+        })
+    }
+
+    fn boundary(&mut self, advice: &mut Advice, end: usize, total: usize) -> Result<()> {
+        if end % WINDOW != 0 && end != total {
+            return Ok(());
+        }
+        if end == WINDOW {
+            // Final normalization and Top-K belong to the first window.
+            self.first = Some((advice.pending.take().unwrap(), advice.offset));
+        } else {
+            let first = ((end - 1) / WINDOW) * WINDOW;
+            advice.seal()?;
+            let view = Advice {
+                maps: advice.maps.clone(),
+                slots: advice.slots[advice.layers[first]..advice.layers[end]].to_vec(),
+                ..Advice::new(false)?
+            };
+            self.send
+                .as_ref()
+                .unwrap()
+                .send((first, view))
+                .map_err(|_| "initial commitment worker stopped")?;
+        }
+        if end == total {
+            let (file, offset) = self.first.take().unwrap();
+            advice.pending = Some(file);
+            advice.offset = offset;
+            advice.shard = 0;
+        } else {
+            advice.pending = Some(tempfile::tempfile().map_err(|_| "create witness shard")?);
+            advice.offset = 0;
+            advice.shard =
+                u32::try_from(advice.maps.len()).map_err(|_| "too many witness shards")?;
+            advice.maps.push(None);
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<CommitRoots> {
+        self.phase
+            .store(Self::FINISHING, std::sync::atomic::Ordering::Relaxed);
+        self.send.take();
+        self.worker
+            .take()
+            .unwrap()
+            .join()
+            .map_err(|_| "initial commitment worker panicked")?
+    }
+}
+
+impl Drop for EarlyCommit {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            self.phase
+                .store(Self::CANCELLED, std::sync::atomic::Ordering::Relaxed);
+            self.send.take();
+            let _ = worker.join();
         }
     }
 }
@@ -1142,6 +1255,25 @@ struct Plan {
     roots: usize,
 }
 
+fn bins(slots: &[Storage], mut indices: Vec<usize>) -> Vec<Vec<usize>> {
+    let size = |i: usize| {
+        let slot = &slots[i];
+        (1usize << slot.shape.vars().max(ROW_BITS)) * slot.width.bits()
+    };
+    indices.sort_unstable_by_key(|&i| (std::cmp::Reverse(size(i)), i));
+    let mut bins = Vec::<(usize, Vec<usize>)>::new();
+    for i in indices {
+        let cost = size(i);
+        if let Some((total, ids)) = bins.iter_mut().find(|(n, _)| *n + cost <= MAX_GROUP) {
+            *total += cost;
+            ids.push(i);
+        } else {
+            bins.push((cost, vec![i]));
+        }
+    }
+    bins.into_iter().map(|(_, ids)| ids).collect()
+}
+
 impl Plan {
     fn new(a: &Advice) -> Result<Self> {
         let mut plan = Self {
@@ -1157,23 +1289,9 @@ impl Plan {
             if first == 0 {
                 indices.extend(a.layers[layers]..a.slots.len());
             }
-            let size = |i: usize| {
-                let slot = &a.slots[i];
-                (1usize << slot.shape.vars().max(ROW_BITS)) * slot.width.bits()
-            };
-            indices.sort_unstable_by_key(|&i| (std::cmp::Reverse(size(i)), i));
-            let mut bins = Vec::<(usize, Vec<usize>)>::new();
-            for i in indices {
-                let cost = size(i);
-                if let Some((total, ids)) = bins.iter_mut().find(|(n, _)| *n + cost <= MAX_GROUP) {
-                    *total += cost;
-                    ids.push(i);
-                } else {
-                    bins.push((cost, vec![i]));
-                }
-            }
+            let bins = bins(&a.slots, indices);
             let mut groups = Vec::new();
-            for (_, ids) in bins {
+            for ids in bins {
                 for (j, &id) in ids.iter().enumerate() {
                     plan.owners[id] = (plan.windows.len(), groups.len(), j);
                 }
@@ -4170,6 +4288,7 @@ enum Saved {
 }
 struct Run {
     advice: Advice,
+    early: Option<EarlyCommit>,
     input: Vec<i32>,
     norm: Normalized,
     layers: Vec<Saved>,
@@ -4519,6 +4638,9 @@ impl<'a> Model<'a> {
             .then(tempfile::tempfile)
             .transpose()
             .map_err(|_| "create layer file")?;
+        let mut early = (file.is_some() && self.layers.len() > WINDOW && can_overlap())
+            .then(|| EarlyCommit::new((rayon::current_num_threads() - 1).min(3)))
+            .transpose()?;
         let mut records = Vec::with_capacity(self.layers.len());
         let mut hidden = Vec::new();
         advice.cut();
@@ -4537,6 +4659,9 @@ impl<'a> Model<'a> {
             };
             records.push(saved);
             advice.cut();
+            if let Some(early) = &mut early {
+                early.boundary(&mut advice, i + 1, self.layers.len())?;
+            }
         }
         let norm = if let Some(norm) = norm.take() {
             norm
@@ -4553,6 +4678,7 @@ impl<'a> Model<'a> {
             .map_err(|_| "map layer file")?;
         Ok(Run {
             advice,
+            early,
             input,
             norm,
             layers: records,
@@ -4852,11 +4978,27 @@ impl Model<'_> {
         let mut roots = Vec::with_capacity(plan.roots);
         tracing::info_span!("atlas commit").in_scope(|| {
             run.advice.seal()?;
+            let mut early = run
+                .early
+                .take()
+                .map(EarlyCommit::finish)
+                .transpose()?
+                .unwrap_or_default();
             for w in &plan.windows {
-                for g in &w.groups {
-                    let r = g.commit(&run.advice)?.root;
-                    t.append_bytes(&r);
-                    roots.push(r);
+                let window = if let Some(roots) = early.remove(&w.layers.start) {
+                    if roots.len() != w.groups.len() {
+                        return Err("wrong number of initial commitments");
+                    }
+                    roots
+                } else {
+                    w.groups
+                        .iter()
+                        .map(|g| g.commit(&run.advice).map(|c| c.root))
+                        .collect::<Result<Vec<_>>>()?
+                };
+                for root in window {
+                    t.append_bytes(&root);
+                    roots.push(root);
                 }
             }
             Ok(())

@@ -3,7 +3,7 @@
 use jolt_field::{CanonicalBytes, CanonicalEncoding, Field, Ring};
 use jolt_transcript::{
     ChallengeSetSize, Encoding, FieldTranscript, Keccak, ProverState, ProverTranscript,
-    VerificationError, VerifierState, VerifierTranscript, MAX_CHALLENGE_BYTES, MAX_POW_BITS,
+    VerificationError, VerifierState, VerifierTranscript, MAX_CHALLENGE_BYTES,
 };
 use num_traits::Zero;
 
@@ -236,50 +236,7 @@ pub(crate) trait Mixing<E: Field>: FieldTranscript<E> + Sized {
 
 impl Mixing<F> for ProverState<Keccak> {
     fn grind_mix(&mut self, bits: u32) -> Result<(), VerificationError> {
-        use rayon::prelude::*;
-
-        if !(15..=MAX_POW_BITS).contains(&bits) || rayon::current_num_threads() == 1 {
-            return self.grind(bits);
-        }
-        let _search = tracing::info_span!("atlas parallel mixing PoW").entered();
-        let oracle = self.verifier_message_oracle();
-        let mask = (1u64 << bits) - 1;
-        let accepts = |check: &[u8]| u64::from_le_bytes(check.try_into().unwrap()) & mask == 0;
-        let last = u64::MAX >> (MAX_POW_BITS - bits);
-        const CHUNK: u64 = 2048;
-        let chunks = (rayon::current_num_threads() as u64).next_power_of_two();
-        let step = CHUNK * chunks;
-        let nonce = (0..=last)
-            .step_by(step as usize)
-            .find_map(|start| {
-                (0..chunks.min((last - start) / CHUNK + 1))
-                    .into_par_iter()
-                    .find_map_first(|chunk| {
-                        let first = start + chunk * CHUNK;
-                        let mut check = [0; 8];
-                        (first..=first.saturating_add(CHUNK - 1).min(last)).find(|nonce| {
-                            oracle(&nonce.to_le_bytes(), &mut check);
-                            accepts(&check)
-                        })
-                    })
-            })
-            .ok_or(VerificationError)?;
-        // Keep the first valid nonce and the same wire encoding as Jolt.
-        self.prover_message_with(
-            &nonce,
-            |nonce| nonce.to_le_bytes(),
-            |&nonce, out| {
-                let mut word = nonce;
-                while word >= 128 {
-                    out.push(word as u8 | 128);
-                    word >>= 7;
-                }
-                out.push(word as u8);
-            },
-        );
-        self.verifier_message_as(8, |check| {
-            accepts(check).then_some(()).ok_or(VerificationError)
-        })
+        self.grind(bits)
     }
 }
 
@@ -293,28 +250,6 @@ impl Mixing<F> for VerifierState<'_, Keccak> {
 mod tests {
     use super::*;
     use crypto_primitives::LiftElement;
-
-    #[test]
-    fn parallel_grind_matches_jolt() {
-        use jolt_transcript::prover_transcript;
-
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .unwrap()
-            .install(|| {
-                for bits in [14, 15, 17] {
-                    let mut serial = prover_transcript::<Keccak>(&[31; 32], b"");
-                    let mut parallel = prover_transcript::<Keccak>(&[31; 32], b"");
-                    serial.grind(bits).unwrap();
-                    parallel.grind_mix(bits).unwrap();
-                    assert_eq!(serial.narg_string(), parallel.narg_string());
-                    let serial: Vec<F> = serial.challenge_vector(4).unwrap();
-                    let parallel: Vec<F> = parallel.challenge_vector(4).unwrap();
-                    assert_eq!(serial, parallel);
-                }
-            });
-    }
 
     #[test]
     fn field_operations_match_world_on_carries_and_boundaries() {

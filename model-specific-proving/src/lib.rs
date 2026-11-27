@@ -1630,14 +1630,19 @@ struct Lookup {
 }
 
 impl Lookup {
-    fn record(a: &mut Advice, s: Shape, size: usize, codes: Option<Vec<u32>>) -> Result<Self> {
+    fn record(
+        a: &mut Advice,
+        s: Shape,
+        size: usize,
+        code: impl Fn(usize) -> u32 + Sync,
+    ) -> Result<Self> {
         if size < 2 || !size.is_power_of_two() {
             return Err("invalid lookup size");
         }
         let bits = size.ilog2() as usize;
         let chunk = if (17..=24).contains(&bits) { 3 } else { 4 };
         let shape = Shape::new(s.rows(), s.stride())?;
-        let packed = a.pack(shape, bits, |i| i128::from(codes.as_ref().unwrap()[i]))?;
+        let packed = a.pack(shape, bits, |i| i128::from(code(i)))?;
         let digits = (0..bits)
             .step_by(chunk)
             .map(|shift| {
@@ -2743,15 +2748,10 @@ impl<'a> Softmax<'a> {
                 let (r, c) = tile.at(j);
                 (r < n && c < n).then_some(r * n + c)
             };
-            let addresses = w.as_ref().map(|w| {
-                (0..shape.len())
-                    .map(|i| {
-                        let (r, c) = tile.at(i);
-                        w.address[r * stride + c]
-                    })
-                    .collect()
-            });
-            let key = Lookup::record(a, shape, self.tables.sums.len(), addresses)?;
+            let key = Lookup::record(a, shape, self.tables.sums.len(), |i| {
+                let (r, c) = tile.at(i);
+                value().address[r * stride + c]
+            })?;
             let excess = a.column(shape, Width::Unsigned(34), |i| {
                 i128::from(
                     live(i)
@@ -3110,9 +3110,9 @@ impl Feed {
         let code = input.map(|x| {
             (0..s.len())
                 .map(|i| s.index(i).map_or(0, |j| table.code(x[j]).0 as u32))
-                .collect()
+                .collect::<Vec<_>>()
         });
-        let key = Lookup::record(a, s, table.values.len(), code)?;
+        let key = Lookup::record(a, s, table.values.len(), |i| code.as_ref().unwrap()[i])?;
         let n = u8::from(!table.symmetric);
         let slots = [1, 32 * n, 33 * n, 33]
             .into_iter()

@@ -1,7 +1,7 @@
 use bincode::Options;
 use std::{
     borrow::Cow,
-    io::{Read, Seek, SeekFrom, Write},
+    io::{BufWriter, Read, Seek, SeekFrom, Write},
 };
 
 use crate::{
@@ -1130,6 +1130,7 @@ impl<'a> Model<'a> {
         {
             return Err("proof destination is not empty");
         }
+        let mut out = BufWriter::with_capacity(256 * 1024, out);
         out.write_all(&[0; 16])
             .map_err(|_| "could not initialize proof file")?;
         let (result, header) = self.prove_top_k_with(tokens, cfg, |one| {
@@ -1137,6 +1138,7 @@ impl<'a> Model<'a> {
                 .serialize_into(&mut out, &one)
                 .map_err(|_| "could not write BitZ proof")
         })?;
+        let _metadata = tracing::info_span!("atlas proof metadata").entered();
         let end = out
             .stream_position()
             .map_err(|_| "could not locate proof metadata")?;

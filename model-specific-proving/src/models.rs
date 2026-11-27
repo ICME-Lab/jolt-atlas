@@ -134,7 +134,6 @@ struct Run {
     blocks: Vec<Saved>,
     trace: Option<std::cell::RefCell<std::fs::File>>,
     norm: Normalized,
-    last: Option<Vec<i32>>,
 }
 
 enum Saved {
@@ -146,8 +145,6 @@ impl Run {
     fn output(&self, decoder: bool) -> Option<&[i32]> {
         if decoder {
             self.norm.values()
-        } else if let Some(last) = &self.last {
-            Some(last)
         } else if let Saved::InMemory(block) = self.blocks.last().unwrap() {
             block.output(false)
         } else {
@@ -158,9 +155,6 @@ impl Run {
     fn layer_output(&self, index: usize, decoder: bool) -> Result<Option<Cow<'_, [i32]>>> {
         match &self.blocks[index] {
             Saved::InMemory(b) => Ok(b.output(decoder).map(Cow::Borrowed)),
-            Saved::OnDisk { .. } if index + 1 == self.blocks.len() => {
-                Ok(self.last.as_deref().map(Cow::Borrowed))
-            }
             Saved::OnDisk { offset, .. } => self.read(*offset).map(|v| Some(Cow::Owned(v))),
         }
     }
@@ -327,11 +321,10 @@ impl<'a> Model<'a> {
         };
         let mut x = norm.as_ref().map_or(input, Normalized::values);
         let mut blocks: Vec<Saved> = Vec::with_capacity(self.layers.len());
-        let mut trace = if input.is_some() && self.shape.rows >= 128 {
-            Some(tempfile::tempfile().map_err(|_| "could not create trace file")?)
-        } else {
-            None
-        };
+        let mut trace = (input.is_some() && self.shape.rows >= 128 && self.layers.len() > 1)
+            .then(tempfile::tempfile)
+            .transpose()
+            .map_err(|_| "could not create trace file")?;
         let mut last = None;
         for (i, p) in self.layers.iter().enumerate() {
             let ctx = self.context(i);
@@ -372,7 +365,7 @@ impl<'a> Model<'a> {
                 mlp,
                 after_mlp,
             };
-            let saved = if let Some(file) = &mut trace {
+            let saved = if let Some(file) = trace.as_mut().filter(|_| i + 1 < self.layers.len()) {
                 let offset = file
                     .stream_position()
                     .map_err(|_| "could not locate layer trace")?;
@@ -406,7 +399,6 @@ impl<'a> Model<'a> {
             blocks,
             trace: trace.map(std::cell::RefCell::new),
             norm: norm.unwrap(),
-            last,
         })
     }
 

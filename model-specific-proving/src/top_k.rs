@@ -203,12 +203,7 @@ impl<'a> Top<'a> {
             let rw = basis(&row);
             let hidden = values.map(|input| {
                 let mut x = vec![F::zero(); stride];
-                add_rows(
-                    &mut x,
-                    &input[first.row * width..],
-                    width,
-                    rw.iter().copied(),
-                );
+                add_rows(&mut x, &input[first.row * width..], width, &rw);
                 x
             });
             let mut terms = Vec::with_capacity(blocks.len());
@@ -224,12 +219,7 @@ impl<'a> Top<'a> {
                 let mut weight = vec![F::zero(); stride];
                 let mut lower = F::zero();
                 let mut upper = F::zero();
-                add_rows(
-                    &mut weight,
-                    &self.tokens[check.col * width..],
-                    width,
-                    cw.iter().copied(),
-                );
+                add_rows(&mut weight, &self.tokens[check.col * width..], width, &cw);
                 for (r, &a) in rw.iter().enumerate() {
                     let (min, max) = self.eval_bounds(
                         &public[check.row + r - self.config.positions.start],

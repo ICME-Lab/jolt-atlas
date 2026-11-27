@@ -162,7 +162,7 @@ impl Input {
                     out,
                     q.projection.weights,
                     self.width,
-                    weights.iter().map(|&w| scale * w),
+                    &weights.iter().map(|&w| scale * w).collect::<Vec<_>>(),
                 );
             };
             if reuse {
@@ -212,7 +212,7 @@ impl Input {
                         &mut restricted,
                         input,
                         self.width,
-                        basis(&group.point),
+                        &basis(&group.point),
                     );
                     (restricted, group.public.clone())
                 })

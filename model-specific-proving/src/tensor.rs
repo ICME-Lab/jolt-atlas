@@ -1,5 +1,6 @@
 use crate::{field::F, fold::basis};
 use jolt_field::{Ring, Zero};
+use rayon::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Shape {
@@ -70,17 +71,35 @@ impl Shape {
     }
 }
 
-pub(crate) fn add_rows(
-    out: &mut [F],
-    matrix: &[i32],
-    width: usize,
-    weights: impl IntoIterator<Item = F>,
-) {
-    for (row, w) in matrix.chunks_exact(width).zip(weights) {
-        for (out, &x) in out.iter_mut().zip(row) {
-            *out += w.mul_integer(i128::from(x));
+pub(crate) fn add_rows(out: &mut [F], matrix: &[i32], width: usize, weights: &[F]) {
+    let add = |out: &mut [F], matrix: &[i32], weights: &[F]| {
+        for (row, &w) in matrix.chunks_exact(width).zip(weights) {
+            for (out, &x) in out.iter_mut().zip(row) {
+                *out += w.mul_integer(i128::from(x));
+            }
         }
+    };
+    let rows = weights.len().min(matrix.len() / width);
+    let chunk = (32_768 / width).max(16);
+    if rows <= chunk {
+        return add(out, matrix, weights);
     }
+    let sum = matrix[..rows * width]
+        .par_chunks(chunk * width)
+        .zip(weights[..rows].par_chunks(chunk))
+        .fold(
+            || vec![F::zero(); out.len()],
+            |mut sum, (matrix, weights)| {
+                add(&mut sum, matrix, weights);
+                sum
+            },
+        )
+        .reduce_with(|mut left, right| {
+            left.iter_mut().zip(right).for_each(|(a, b)| *a += b);
+            left
+        })
+        .unwrap();
+    out.iter_mut().zip(sum).for_each(|(a, b)| *a += b);
 }
 
 pub(crate) fn eval_rows(matrix: &[i32], width: usize, point: &[F], rows: usize) -> Vec<F> {

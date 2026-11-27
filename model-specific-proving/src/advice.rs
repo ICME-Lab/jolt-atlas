@@ -400,20 +400,17 @@ impl Buckets {
         })
     }
 
-    pub fn verify<'p>(
+    pub fn verify(
         &self,
         advice: &Advice,
         requests: Requests,
         roots: &[[u8; 32]],
         channel: &mut VerifierState<'_, Keccak>,
-        mut evaluation: impl FnMut(usize) -> Result<std::borrow::Cow<'p, crate::bitz::Proof>>,
+        mut evaluation: impl FnMut() -> Result<crate::bitz::Proof>,
     ) -> Result<()> {
         let requests = self.distribute(advice.columns.len(), requests)?;
-        for (i, (((group, _), &root), queries)) in
-            self.0.iter().zip(roots).zip(requests).enumerate()
-        {
-            let item = evaluation(i)?;
-            group.verify(root, &queries, &item, channel)?;
+        for (((group, _), &root), queries) in self.0.iter().zip(roots).zip(requests) {
+            group.verify(root, &queries, &evaluation()?, channel)?;
         }
         Ok(())
     }

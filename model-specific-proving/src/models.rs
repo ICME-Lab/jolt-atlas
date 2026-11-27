@@ -10,12 +10,11 @@ use crate::{
     channel::{Channel, Messages, Result},
     field::F,
     layers::{Attention, Mlp, NormalizationParameters},
-    linear,
     lookup::Lookups,
     mlp::{gate_fits, Feed},
     norm::{Claim, Normalized, Width},
     projection::Projection,
-    protocol::{Candidate, Header, Proof, TopKConfig},
+    protocol::{Candidate, Header, TopKConfig},
     residual,
     rounding::Rounded,
     tensor::Shape,
@@ -40,7 +39,6 @@ pub struct Layer<'a> {
 pub enum Architecture<'a> {
     Decoder {
         final_norm: NormalizationParameters<'a>,
-        logits_bias: &'a [i32],
     },
     Encoder {
         embedding_norm: NormalizationParameters<'a>,
@@ -55,7 +53,7 @@ pub struct Model<'a> {
     qk_norms: Vec<Option<[NormalizationParameters<'a>; 2]>>,
     bounded_gates: Vec<bool>,
     norm: NormalizationParameters<'a>,
-    decoder: Option<&'a [i32]>,
+    decoder: bool,
     digest: [u8; 32],
 }
 
@@ -240,24 +238,16 @@ impl<'a> Model<'a> {
             return Err("invalid model dimensions");
         }
         let (norm, decoder) = match architecture {
-            Architecture::Decoder {
-                final_norm,
-                logits_bias,
-            } => {
-                if embeddings.segments.is_some()
-                    || logits_bias.len() != embeddings.tokens.len() / shape.cols
-                    || logits_bias.iter().any(|&v| v != 0)
-                {
-                    return Err("invalid decoder logits");
-                }
-                (final_norm, Some(logits_bias))
+            Architecture::Decoder { final_norm } if embeddings.segments.is_none() => {
+                (final_norm, true)
             }
-            Architecture::Encoder { embedding_norm } => (embedding_norm, None),
+            Architecture::Decoder { .. } => return Err("decoder does not use segments"),
+            Architecture::Encoder { embedding_norm } => (embedding_norm, false),
         };
         let bounded_gates = layers
             .iter()
             .map(|p| {
-                decoder.is_some()
+                decoder
                     && p.mlp
                         .gate
                         .is_some_and(|gate| gate_fits(p.mlp_norm, gate, bits.into()))
@@ -324,7 +314,7 @@ impl<'a> Model<'a> {
 
     fn forward(&self, advice: &mut Advice, input: Option<&[i32]>) -> Result<Run> {
         let (shape, bits) = (self.shape, self.bits);
-        let pre = self.decoder.is_some();
+        let pre = self.decoder;
         let mut norm = if pre {
             None
         } else {
@@ -429,7 +419,7 @@ impl<'a> Model<'a> {
         mut claims: Vec<Claim<F>>,
         flush: &mut WindowFlush<'_, 'm>,
     ) -> Result<()> {
-        let pre = self.decoder.is_some();
+        let pre = self.decoder;
         let (shape, bits) = (self.shape, self.bits);
         let mut lookups = Lookups::default();
         let reduce_end_norm = |io: &mut Channel<'_, '_>,
@@ -583,7 +573,7 @@ impl<'a> Model<'a> {
             self.shape.rows as u64,
             self.shape.cols as u64,
             self.bits as u64,
-            self.decoder.is_some() as u64,
+            self.decoder as u64,
             self.layers.len() as u64,
         ]);
         integers(t, self.embeddings.tokens);
@@ -672,52 +662,20 @@ impl<'a> Model<'a> {
         }
     }
 
-    fn output_projection(&self) -> Option<Projection<'_>> {
-        self.decoder.map(|bias| Projection {
-            weights: self.embeddings.tokens,
-            bias,
-        })
+    pub fn is_decoder(&self) -> bool {
+        self.decoder
     }
 
-    fn logits(&self, advice: &mut Advice, value: Option<&[i32]>) -> Result<Option<Rounded>> {
-        self.output_projection()
-            .map(|p| linear::project(advice, self.shape, self.bits, p, value))
-            .transpose()
-    }
-
-    fn output_claims(
-        &self,
-        io: &mut Channel<'_, '_>,
-        requests: &mut Requests,
-        logits: Option<&Rounded>,
-        output: &[i32],
-        hidden: Option<&[i32]>,
-    ) -> Result<Vec<Claim<F>>> {
-        let shape = logits.map_or(self.shape, |m| m.shape);
-        if output.len() != shape.rows * shape.cols {
-            return Err("invalid model output dimensions");
-        }
-        let point = io.sample(shape.bits(), shape.bits())?;
-        let claim = Claim {
-            value: shape.eval(output, &point),
+    fn embedding_claim(&self, io: &mut Channel<'_, '_>, output: &[i32]) -> Result<Vec<Claim<F>>> {
+        let point = io.sample(self.shape.bits(), self.shape.bits())?;
+        Ok(vec![Claim {
+            value: self.shape.eval(output, &point),
             point,
-        };
-        if let Some((l, projection)) = logits.zip(self.output_projection()) {
-            linear::reverse(
-                io,
-                requests,
-                self.shape,
-                self.bits,
-                &[(l, projection, claim)],
-                hidden,
-            )
-        } else {
-            Ok(vec![claim])
-        }
+        }])
     }
 
     pub fn cls<'b>(&self, output: &'b [i32]) -> Result<&'b [i32]> {
-        if self.decoder.is_some() || output.len() != self.shape.rows * self.shape.cols {
+        if self.decoder || output.len() != self.shape.rows * self.shape.cols {
             return Err("invalid encoder output");
         }
         Ok(&output[..self.shape.cols])
@@ -736,84 +694,55 @@ impl<'a> Model<'a> {
         Ok((input, advice, run))
     }
 
-    pub fn prove(&self, tokens: &[usize], segments: Option<&[usize]>) -> Result<(Vec<i32>, Proof)> {
+    pub fn prove_to(
+        &self,
+        tokens: &[usize],
+        segments: Option<&[usize]>,
+        out: impl Write + Seek + Send,
+    ) -> Result<Vec<i32>> {
+        if self.decoder {
+            return Err("decoder requires Top-K");
+        }
         let (input, mut advice, run) = self.setup(tokens, segments, true)?;
-        let hidden = run.output(self.decoder.is_some());
-        let logits = self.logits(&mut advice, hidden)?;
-        let output = logits
-            .as_ref()
-            .and_then(|x| x.values.as_deref())
-            .unwrap_or(hidden.unwrap())
-            .to_vec();
-        let mut evaluations = Vec::new();
-        let expected = &output;
+        let output = run.output(false).unwrap().to_vec();
+        let mut file = ProofWriter::new(out)?;
         let header = self.prove_with(
             &mut advice,
             tokens,
             segments,
             Output::All(&output),
-            |one| {
-                evaluations.push(one);
-                Ok(())
-            },
-            move |io, requests, flush| {
-                let hidden = run.output(self.decoder.is_some());
-                let claims = self.output_claims(io, requests, logits.as_ref(), expected, hidden)?;
+            |group| file.group(group),
+            |io, requests, flush| {
+                let claims = self.embedding_claim(io, &output)?;
                 self.reverse(io, requests, &input, &run, claims, flush)
             },
         )?;
-        Ok((
-            output,
-            Proof {
-                header,
-                evaluations,
-            },
-        ))
+        file.finish(&header)?;
+        Ok(output)
     }
 
-    pub fn verify(
+    pub fn verify_from(
         &self,
         tokens: &[usize],
         segments: Option<&[usize]>,
         output: &[i32],
-        proof: &Proof,
+        input: impl Read + Seek,
     ) -> Result<()> {
-        if proof.evaluations.len() != proof.header.roots.len() {
-            return Err("wrong number of BitZ proofs");
-        }
+        self.cls(output)?;
+        let (header, mut groups) = read_proof(input)?;
         let (input, mut advice, run) = self.setup(tokens, segments, false)?;
-        let logits = self.logits(&mut advice, None)?;
         self.verify_with(
             &mut advice,
             tokens,
             segments,
             Output::All(output),
-            &proof.header,
-            |i| proof.evaluation(i),
+            &header,
+            &mut groups,
             |io, requests, flush| {
-                let claims = self.output_claims(io, requests, logits.as_ref(), output, None)?;
+                let claims = self.embedding_claim(io, output)?;
                 self.reverse(io, requests, &input, &run, claims, flush)
             },
         )
-    }
-
-    pub fn prove_top_k(
-        &self,
-        tokens: &[usize],
-        cfg: &TopKConfig,
-    ) -> Result<(Vec<Vec<Candidate>>, Proof)> {
-        let mut evaluations = Vec::new();
-        let (output, header) = self.prove_top_k_with(tokens, cfg, |one| {
-            evaluations.push(one);
-            Ok(())
-        })?;
-        Ok((
-            output,
-            Proof {
-                header,
-                evaluations,
-            },
-        ))
     }
 
     fn prove_top_k_with(
@@ -822,7 +751,7 @@ impl<'a> Model<'a> {
         cfg: &TopKConfig,
         emit: impl FnMut(crate::bitz::Proof) -> Result<()> + Send,
     ) -> Result<(Vec<Vec<Candidate>>, Header)> {
-        if self.decoder.is_none() {
+        if !self.decoder {
             return Err("Top-K requires decoder");
         }
         let top = Top::new(cfg, self.embeddings.tokens, self.shape, self.bits)?;
@@ -847,30 +776,17 @@ impl<'a> Model<'a> {
         Ok((results, proof))
     }
 
-    pub fn verify_top_k(
+    pub fn verify_top_k_from(
         &self,
         tokens: &[usize],
         cfg: &TopKConfig,
         results: &[Vec<Candidate>],
-        proof: &Proof,
+        file: impl Read + Seek,
     ) -> Result<()> {
-        if proof.evaluations.len() != proof.header.roots.len() {
-            return Err("wrong number of BitZ proofs");
-        }
-        self.verify_top_k_with(tokens, cfg, results, &proof.header, |i| proof.evaluation(i))
-    }
-
-    fn verify_top_k_with<'p>(
-        &self,
-        tokens: &[usize],
-        cfg: &TopKConfig,
-        results: &[Vec<Candidate>],
-        proof: &'p Header,
-        read: impl FnMut(usize) -> Result<Cow<'p, crate::bitz::Proof>>,
-    ) -> Result<()> {
-        if self.decoder.is_none() {
+        if !self.decoder {
             return Err("Top-K requires decoder");
         }
+        let (header, mut groups) = read_proof(file)?;
         let top = Top::new(cfg, self.embeddings.tokens, self.shape, self.bits)?;
         let (input, mut advice, run) = self.setup(tokens, None, false)?;
         let rank = top.record(&mut advice, results, None)?;
@@ -879,8 +795,8 @@ impl<'a> Model<'a> {
             tokens,
             None,
             Output::Top(cfg, results),
-            proof,
-            read,
+            &header,
+            &mut groups,
             |io, requests, flush| {
                 let claims = top.reverse(io, requests, &rank, results, None)?;
                 self.reverse(io, requests, &input, &run, claims, flush)
@@ -1050,14 +966,14 @@ impl<'a> Model<'a> {
         })
     }
 
-    fn verify_with<'m, 'p>(
+    fn verify_with<'m>(
         &'m self,
         advice: &mut Advice,
         tokens: &[usize],
         segments: Option<&[usize]>,
         expected: Output<'_>,
-        proof: &'p Header,
-        read: impl FnMut(usize) -> Result<Cow<'p, crate::bitz::Proof>>,
+        proof: &Header,
+        groups: &mut std::io::Take<impl Read>,
         work: impl FnOnce(&mut Channel<'_, '_>, &mut Requests, &mut WindowFlush<'_, 'm>) -> Result<()>,
     ) -> Result<()> {
         let tag = jolt_transcript::protocol_tag(b"atlas/window-bitz/v1");
@@ -1080,7 +996,6 @@ impl<'a> Model<'a> {
         let mut io = Channel::checking(&mut transcript, &proof.state);
         let mut requests = Requests(Vec::new());
         let mut digests = Vec::new();
-        let mut read = read;
         let mut index = 0;
         let mut root = 0;
         let advice = &*advice;
@@ -1099,7 +1014,7 @@ impl<'a> Model<'a> {
                     local,
                     &proof.roots[root..root + part.len()],
                     &mut bitz,
-                    |i| read(root + i),
+                    || decode(groups),
                 )?;
                 digests.push(bitz.verifier_message_as(32, |v| v.try_into().unwrap()));
                 bitz.check_eof()
@@ -1114,6 +1029,9 @@ impl<'a> Model<'a> {
         }
         io.bind_windows(&digests);
         io.finish()?;
+        if groups.limit() != 0 {
+            return Err("extra BitZ proofs");
+        }
         transcript.check_eof().map_err(|_| "extra transcript bytes")
     }
 
@@ -1121,76 +1039,12 @@ impl<'a> Model<'a> {
         &self,
         tokens: &[usize],
         cfg: &TopKConfig,
-        mut out: impl Write + Seek + Send,
+        out: impl Write + Seek + Send,
     ) -> Result<Vec<Vec<Candidate>>> {
-        if out
-            .seek(SeekFrom::End(0))
-            .map_err(|_| "could not inspect proof file")?
-            != 0
-        {
-            return Err("proof destination is not empty");
-        }
-        let mut out = BufWriter::with_capacity(256 * 1024, out);
-        out.write_all(&[0; 16])
-            .map_err(|_| "could not initialize proof file")?;
-        let (result, header) = self.prove_top_k_with(tokens, cfg, |one| {
-            codec()
-                .serialize_into(&mut out, &one)
-                .map_err(|_| "could not write BitZ proof")
-        })?;
-        let _metadata = tracing::info_span!("atlas proof metadata").entered();
-        let end = out
-            .stream_position()
-            .map_err(|_| "could not locate proof metadata")?;
-        codec()
-            .serialize_into(&mut out, &header)
-            .map_err(|_| "could not write proof metadata")?;
-        out.rewind()
-            .and_then(|_| out.write_all(MAGIC))
-            .and_then(|_| out.write_all(&end.to_le_bytes()))
-            .and_then(|_| out.flush())
-            .map_err(|_| "could not finalize proof")?;
+        let mut file = ProofWriter::new(out)?;
+        let (result, header) = self.prove_top_k_with(tokens, cfg, |group| file.group(group))?;
+        file.finish(&header)?;
         Ok(result)
-    }
-
-    pub fn verify_top_k_from(
-        &self,
-        tokens: &[usize],
-        cfg: &TopKConfig,
-        result: &[Vec<Candidate>],
-        mut input: impl Read + Seek,
-    ) -> Result<()> {
-        let size = input
-            .seek(SeekFrom::End(0))
-            .map_err(|_| "could not inspect proof file")?;
-        let mut prefix = [0; 16];
-        input
-            .rewind()
-            .and_then(|_| input.read_exact(&mut prefix))
-            .map_err(|_| "truncated proof")?;
-        let end = u64::from_le_bytes(prefix[8..].try_into().unwrap());
-        if &prefix[..8] != MAGIC || end < 16 || end > size {
-            return Err("invalid proof header");
-        }
-        input
-            .seek(SeekFrom::Start(end))
-            .map_err(|_| "could not locate proof metadata")?;
-        let mut metadata = (&mut input).take(size - end);
-        let header = decode(&mut metadata)?;
-        if metadata.limit() != 0 {
-            return Err("extra proof metadata");
-        }
-        input
-            .seek(SeekFrom::Start(16))
-            .map_err(|_| "could not locate BitZ proofs")?;
-        let mut groups = input.take(end - 16);
-        self.verify_top_k_with(tokens, cfg, result, &header, |_| {
-            decode(&mut groups).map(Cow::Owned)
-        })?;
-        if groups.limit() != 0 {
-            return Err("extra BitZ proofs");
-        }
-        Ok(())
     }
 }
 
@@ -1203,6 +1057,74 @@ fn integers(t: &mut impl Transcript, x: &[i32]) {
 }
 
 const MAGIC: &[u8; 8] = b"ATLASBW1";
+
+struct ProofWriter<W: Write>(BufWriter<W>);
+
+impl<W: Write + Seek> ProofWriter<W> {
+    fn new(mut out: W) -> Result<Self> {
+        if out
+            .seek(SeekFrom::End(0))
+            .map_err(|_| "could not inspect proof file")?
+            != 0
+        {
+            return Err("proof destination is not empty");
+        }
+        let mut out = BufWriter::with_capacity(256 * 1024, out);
+        out.write_all(&[0; 16])
+            .map_err(|_| "could not initialize proof file")?;
+        Ok(Self(out))
+    }
+
+    fn group(&mut self, proof: crate::bitz::Proof) -> Result<()> {
+        codec()
+            .serialize_into(&mut self.0, &proof)
+            .map_err(|_| "could not write BitZ proof")
+    }
+
+    fn finish(mut self, header: &Header) -> Result<()> {
+        let _span = tracing::info_span!("atlas proof metadata").entered();
+        let end = self
+            .0
+            .stream_position()
+            .map_err(|_| "could not locate proof metadata")?;
+        codec()
+            .serialize_into(&mut self.0, header)
+            .map_err(|_| "could not write proof metadata")?;
+        self.0
+            .rewind()
+            .and_then(|_| self.0.write_all(MAGIC))
+            .and_then(|_| self.0.write_all(&end.to_le_bytes()))
+            .and_then(|_| self.0.flush())
+            .map_err(|_| "could not finalize proof")
+    }
+}
+
+fn read_proof(mut input: impl Read + Seek) -> Result<(Header, std::io::Take<impl Read>)> {
+    let size = input
+        .seek(SeekFrom::End(0))
+        .map_err(|_| "could not inspect proof file")?;
+    let mut prefix = [0; 16];
+    input
+        .rewind()
+        .and_then(|_| input.read_exact(&mut prefix))
+        .map_err(|_| "truncated proof")?;
+    let end = u64::from_le_bytes(prefix[8..].try_into().unwrap());
+    if &prefix[..8] != MAGIC || end < 16 || end > size {
+        return Err("invalid proof header");
+    }
+    input
+        .seek(SeekFrom::Start(end))
+        .map_err(|_| "could not locate proof metadata")?;
+    let mut metadata = (&mut input).take(size - end);
+    let header = decode(&mut metadata)?;
+    if metadata.limit() != 0 {
+        return Err("extra proof metadata");
+    }
+    input
+        .seek(SeekFrom::Start(16))
+        .map_err(|_| "could not locate BitZ proofs")?;
+    Ok((header, input.take(end - 16)))
+}
 
 fn decode<T: serde::de::DeserializeOwned>(data: &mut std::io::Take<impl Read>) -> Result<T> {
     codec()

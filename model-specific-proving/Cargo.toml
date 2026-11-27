@@ -56,9 +56,6 @@ incremental = true
 lto = "off"
 overflow-checks = true
 
-[dev-dependencies]
-tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }
-
 [patch."https://github.com/worldfnd/BitZ.git"]
 gkr = { path = "vendor/world-bitz/gkr" }
 post_gkr = { path = "vendor/world-bitz/post_gkr" }

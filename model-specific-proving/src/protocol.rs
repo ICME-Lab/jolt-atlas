@@ -17,23 +17,6 @@ pub struct TopKConfig {
     pub vocab_per_block: usize,
 }
 
-pub struct Proof {
-    pub(crate) header: Header,
-    pub(crate) evaluations: Vec<crate::bitz::Proof>,
-}
-
-impl Proof {
-    pub(crate) fn evaluation(
-        &self,
-        index: usize,
-    ) -> Result<std::borrow::Cow<'_, crate::bitz::Proof>> {
-        self.evaluations
-            .get(index)
-            .map(std::borrow::Cow::Borrowed)
-            .ok_or("missing BitZ evaluation")
-    }
-}
-
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Header {
     pub(crate) widths: Vec<u8>,

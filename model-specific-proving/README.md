@@ -61,13 +61,12 @@ its claims as Rust values, and the model passes them directly to the proofs
 that consume them. Rust checks the types and arity at each call. The ONNX path
 routes claims through a runtime accumulator and checks for missing or unused
 claims at runtime. The direct proof chains Sumchecks through their evaluation
-claims, avoiding commitments to intermediate tensors at component boundaries.
-The prover collects the PCS opening requests for witness data such as
-remainders and one-hot vectors and opens them in a final batch.
+claims. For each four-layer window, the prover batches the PCS opening
+requests for witness data such as remainders and one-hot vectors.
 
 ## Implementation size
 
-The crate has under 6,500 lines of Rust source excluding tests and vendored dependencies, including
+The crate has about 7,000 lines of Rust source excluding tests and vendored dependencies, including
 model execution, model definitions, and proof generation and verification.
 The existing Atlas codebase has about 84,000 lines of
 Rust across its broader ONNX pipeline and supporting code. The direct approach
@@ -88,11 +87,12 @@ cargo run --release --manifest-path model-specific-proving/Cargo.toml \
 
 On Apple Silicon, add the `bitz-metal` feature to run the first two BitZ GKR
 leaf rounds for large groups on Metal. Building the feature requires the Xcode
-Metal toolchain. Set `ATLAS_BITZ_METAL=0` to run the same build on the CPU for
-comparison.
+Metal toolchain.
 
-For large Top-K proofs, `Model::prove_top_k_to` writes to an empty,
-seekable file and returns the selected candidates. Pass those candidates
-and the proof file to `Model::verify_top_k_from` with the same model,
-tokens, and Top-K configuration. The prover stores large layer traces and packed witness columns in temporary files. Both sides handle the BitZ proofs one group at a time.
-Provision disk space for the temporary data and the completed proof.
+The CLI proves and returns the Top-8 candidates for up to the last four
+positions of a decoder input. For an encoder, it returns the output tensor.
+`Model::prove_top_k_to` and `Model::prove_to` write their proofs to an empty,
+seekable file. Use `Model::verify_top_k_from` or `Model::verify_from` with the
+same inputs and the public output. The prover stores large layer traces and
+packed witness columns in temporary files. Both sides handle the BitZ proofs
+one group at a time. Provision disk space for the temporary data and the proof.

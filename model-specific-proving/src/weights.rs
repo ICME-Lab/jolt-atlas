@@ -71,7 +71,6 @@ pub struct ModelWeights {
     segments: Option<Vec<i32>>,
     blocks: Vec<Block>,
     norm: Affine,
-    bias: Vec<i32>,
     activation: (i32, Vec<i32>),
     softmax: softmax::SoftmaxTables,
     theta: Option<f64>,
@@ -418,7 +417,6 @@ impl ModelWeights {
             segments,
             blocks: layers,
             norm,
-            bias: vec![0; vocab],
             activation,
             softmax: softmax::softmax_tables(scale, SemVersion::V3),
             theta,
@@ -525,10 +523,7 @@ impl ModelWeights {
                 embedding_norm: norm,
             }
         } else {
-            Architecture::Decoder {
-                final_norm: norm,
-                logits_bias: &self.bias,
-            }
+            Architecture::Decoder { final_norm: norm }
         };
         Model::with_query_norms(
             rows,

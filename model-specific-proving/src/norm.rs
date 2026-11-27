@@ -43,13 +43,6 @@ impl Width {
     }
 }
 
-#[must_use = "discharge the input claim and all range evaluations"]
-pub struct Reduction<F> {
-    pub input: Claim<F>,
-    pub cells: Vec<(Width, F)>,
-    pub statistics: Vec<(Width, F)>,
-}
-
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Normalized {
     pub(crate) trace: Option<Witness>,
@@ -267,10 +260,6 @@ impl Norm<'_> {
         })
     }
 
-    pub fn execute(&self, input: &[i32]) -> Result<Vec<i32>> {
-        Ok(self.witness(input)?.result)
-    }
-
     fn check<F: Field + Encoding + 'static>(
         &self,
         domain: Domain,
@@ -380,15 +369,16 @@ impl Norm<'_> {
         let (end, terminal) = io.sumcheck(&check.claims, PRIVATE, witness, |w| {
             w.terminal().into_iter().take(PRIVATE).collect()
         })?;
-        let reduction = self.reduce(domain, &check, end, terminal.try_into().unwrap())?;
-        let point = &reduction.input.point;
-        for (&slot, (_, value)) in slots.iter().zip(reduction.cells) {
+        let input = self.reduce(domain, &check, end, terminal.as_slice().try_into().unwrap())?;
+        for (i, (&slot, &value)) in slots.iter().zip(&terminal[1..]).enumerate() {
+            let point = if i < 5 {
+                &input.point
+            } else {
+                &input.point[..domain.row_bits()]
+            };
             requests.push(slot, point, value);
         }
-        for (&slot, (_, value)) in slots.iter().skip(5).zip(reduction.statistics) {
-            requests.push(slot, &point[..domain.row_bits()], value);
-        }
-        Ok(reduction.input)
+        Ok(input)
     }
 
     fn polynomial<F: Field>(&self, a: &[F; 9], v: &[F; TOTAL]) -> F {
@@ -538,7 +528,7 @@ impl Norm<'_> {
         check: &Check<F>,
         end: jolt_sumcheck::single::SingleReduction<F>,
         terminal: [F; PRIVATE],
-    ) -> Result<Reduction<F>> {
+    ) -> Result<Claim<F>> {
         let (r, c) = end.challenges.split_at(domain.row_bits());
         let row = basis(r);
         let col = basis(c);
@@ -577,22 +567,9 @@ impl Norm<'_> {
         if self.polynomial(&check.coefficients, &values) != end.output_claim {
             return Err("invalid normalization terminal evaluation");
         }
-        let (cells, stats) = self.widths();
-        let cells = cells
-            .into_iter()
-            .zip(terminal[1..6].iter().copied())
-            .collect();
-        let statistics = stats
-            .into_iter()
-            .zip(terminal[6..].iter().copied())
-            .collect();
-        Ok(Reduction {
-            input: Claim {
-                point: end.challenges,
-                value: terminal[0],
-            },
-            cells,
-            statistics,
+        Ok(Claim {
+            point: end.challenges,
+            value: terminal[0],
         })
     }
 }
@@ -600,305 +577,94 @@ impl Norm<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{bitz, field::F};
+    use crate::{channel::Messages, field::F};
     use jolt_field::{One, Ring};
-    use jolt_transcript::{
-        prover_transcript, verifier_transcript, Keccak, ProverState, Transcript, VerifierState,
-    };
-
-    use jolt_sumcheck::single::{prove_single, verify_single, SingleSumcheckProof};
-    use jolt_transcript::ProverTranscript;
-
-    #[derive(serde::Serialize, serde::Deserialize)]
-    pub(crate) struct Proof<F> {
-        rounds: SingleSumcheckProof<F>,
-        terminal: [F; PRIVATE],
-    }
-
-    impl Norm<'_> {
-        pub(crate) fn prove<F: Field + Encoding + 'static>(
-            &self,
-            input: &[i32],
-            output: &[Claim<F>],
-            carry: &[Claim<F>],
-            channel: &mut (impl Mixing<F> + ProverTranscript),
-        ) -> Result<(Proof<F>, Reduction<F>)> {
-            let domain = self.domain()?;
-            let witness = self.witness(input)?;
-            self.prove_with(domain, input, &witness, output, carry, channel)
-        }
-
-        fn prove_with<F: Field + Encoding + 'static>(
-            &self,
-            domain: Domain,
-            input: &[i32],
-            witness: &Witness,
-            output: &[Claim<F>],
-            carry: &[Claim<F>],
-            channel: &mut (impl Mixing<F> + ProverTranscript),
-        ) -> Result<(Proof<F>, Reduction<F>)> {
-            let check = self.check(domain, channel, output, carry)?;
-            let mut fold = Fold {
-                columns: self.columns(domain, input, witness, &check),
-                degree: check.claims.degree,
-                relation: |v: &[F]| self.polynomial(&check.coefficients, v.try_into().unwrap()),
-            };
-            let (rounds, end) = prove_single(&mut fold, &check.claims, channel)
-                .map_err(|_: jolt_sumcheck::SumcheckError<F>| "normalization Sumcheck failed")?;
-            let values = fold.terminal();
-            let terminal = std::array::from_fn(|i| values[i]);
-            let proof = Proof { rounds, terminal };
-            let reduction = {
-                channel.append_values(&terminal);
-                self.reduce(domain, &check, end, terminal)?
-            };
-            Ok((proof, reduction))
-        }
-
-        pub(crate) fn verify<F: Field + Encoding + 'static>(
-            &self,
-            output: &[Claim<F>],
-            carry: &[Claim<F>],
-            proof: &Proof<F>,
-            channel: &mut impl Mixing<F>,
-        ) -> Result<Reduction<F>> {
-            let domain = self.domain()?;
-            let check = self.check(domain, channel, output, carry)?;
-            let end = verify_single(&check.claims, &proof.rounds, channel)
-                .map_err(|_| "invalid normalization Sumcheck")?;
-            channel.append_values(&proof.terminal);
-            self.reduce(domain, &check, end, proof.terminal)
-        }
-
-        fn group(&self, domain: Domain) -> Result<bitz::Group> {
-            let (cells, stats) = self.widths();
-            let columns: Vec<_> = cells
-                .into_iter()
-                .map(|width| bitz::RangeColumn {
-                    vars: domain.rounds(),
-                    width,
-                })
-                .chain(stats.into_iter().map(|width| bitz::RangeColumn {
-                    vars: domain.row_bits(),
-                    width,
-                }))
-                .collect();
-            bitz::Group::new(&columns)
-        }
-
-        /// Binds the integer columns and returns the one input claim for the previous operation.
-        fn prove_committed(
-            &self,
-            input: &[i32],
-            output: &[Claim<Scalar>],
-            carry: &[Claim<Scalar>],
-            channel: &mut ProverState<Keccak>,
-        ) -> Result<(CommittedProof, Claim<Scalar>)> {
-            let domain = self.domain()?;
-            let witness = self.witness(input)?;
-            let group = self.group(domain)?;
-            let source = |slot: usize, i: usize| {
-                if slot < 5 {
-                    self.cell(
-                        input,
-                        &witness,
-                        i / domain.stride,
-                        i % domain.stride,
-                        slot + 1,
-                    )
-                } else {
-                    witness.stats.get(i).map_or(0, |r| r[slot - 5])
-                }
-            };
-            let committed = group.commit_detached(source)?;
-            channel.append_bytes(&committed.root);
-            let root = committed.root;
-            let (relation, reduction) =
-                self.prove_with(domain, input, &witness, output, carry, channel)?;
-            let evaluations = group
-                .reduce(
-                    committed,
-                    &reduction.queries(domain.row_bits()),
-                    channel,
-                    source,
-                )?
-                .open(&mut std::collections::HashMap::new())?;
-            Ok((
-                CommittedProof {
-                    root,
-                    relation,
-                    evaluations,
-                },
-                reduction.input,
-            ))
-        }
-
-        fn verify_committed(
-            &self,
-            output: &[Claim<Scalar>],
-            carry: &[Claim<Scalar>],
-            proof: &CommittedProof,
-            channel: &mut VerifierState<'_, Keccak>,
-        ) -> Result<Claim<Scalar>> {
-            let domain = self.domain()?;
-            let group = self.group(domain)?;
-            group.bind_root(proof.root, channel);
-            let reduction = self.verify(output, carry, &proof.relation, channel)?;
-            group.verify(
-                proof.root,
-                &reduction.queries(domain.row_bits()),
-                &proof.evaluations,
-                channel,
-            )?;
-            Ok(reduction.input)
-        }
-    }
-
-    impl Reduction<Scalar> {
-        fn queries(&self, row_bits: usize) -> Vec<bitz::Query> {
-            let query = |(slot, (_, value)), point: &[Scalar]| bitz::Query {
-                slot,
-                planes: None,
-                claim: Claim {
-                    point: point.to_vec(),
-                    value,
-                },
-            };
-            self.cells
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|item| query(item, &self.input.point))
-                .chain(
-                    self.statistics
-                        .iter()
-                        .copied()
-                        .enumerate()
-                        .map(|(i, item)| {
-                            query((i + self.cells.len(), item), &self.input.point[..row_bits])
-                        }),
-                )
-                .collect()
-        }
-    }
-
-    struct CommittedProof {
-        root: [u8; 32],
-        relation: Proof<Scalar>,
-        evaluations: bitz::Proof,
-    }
-
-    fn evaluate(values: &[i32], point: &[F]) -> F {
-        let width = 3;
-        basis(point)
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, w)| {
-                let (row, col) = (i / 4, i % 4);
-                (row < 3 && col < width).then(|| F::from_i32(values[row * width + col]) * w)
-            })
-            .sum()
-    }
-
-    /// The caller sends `left_value` before any challenge that uses either child.
-    /// The two returned claims still have to be discharged by their producers.
-    fn split<F: Field + Encoding>(
-        output: Claim<F>,
-        left_value: F,
-        transcript: &mut impl Transcript,
-    ) -> (Claim<F>, Claim<F>) {
-        transcript.append_values(&[left_value]);
-        let left = Claim {
-            point: output.point.clone(),
-            value: left_value,
-        };
-        let right = Claim {
-            point: output.point,
-            value: output.value - left_value,
-        };
-        (left, right)
-    }
-
-    #[test]
-    fn residual_skip_reduces_with_norm_and_bit_z() {
-        let input = [21, -12, 4, -16, 13, 11, 4, -14, 3];
-        let norm = Norm {
-            rows: 3,
-            bits: 4,
-            epsilon: 5,
-            center: false,
-            gain: &[16, 16, 16],
-            bias: &[0, 0, 0],
-        };
-        let update = norm.execute(&input).unwrap();
-        let sum = crate::residual::add(&input, &update).unwrap();
-        let point = (2..6).map(F::from_u64).collect::<Vec<_>>();
-        let claim = Claim {
-            value: evaluate(&sum, &point),
-            point,
-        };
-        let left_value = evaluate(&input, &claim.point);
-        let tag = [0x42; 32];
-        let mut prover = prover_transcript::<Keccak>(&tag, b"");
-        let (carry, output) = split(claim.clone(), left_value, &mut prover);
-        let (proof, terminal) = norm
-            .prove_committed(&input, &[output], &[carry], &mut prover)
-            .unwrap();
-
-        let mut verifier = verifier_transcript::<Keccak>(&tag, b"", prover.narg_string());
-        let (carry, output) = split(claim, left_value, &mut verifier);
-        let checked = norm
-            .verify_committed(&[output], &[carry], &proof, &mut verifier)
-            .unwrap();
-        assert_eq!(checked, terminal);
-        assert_eq!(checked.value, evaluate(&input, &checked.point));
-        verifier.check_eof().unwrap();
-    }
+    use jolt_transcript::{prover_transcript, verifier_transcript, Keccak, Transcript};
 
     #[test]
     fn normalization_reduces_carry_and_outputs_at_distinct_points() {
         let input = [21, -12, 4, -16, 13, 11, 4, -14, 3];
-        let norm = Norm {
-            rows: 3,
-            bits: 4,
-            epsilon: 5,
-            center: false,
-            gain: &[16, 16, 16],
-            bias: &[0, 0, 0],
-        };
+        let shape = Shape::new(3, 3).unwrap();
         for center in [false, true] {
-            let norm = Norm { center, ..norm };
-            let actual = norm.execute(&input).unwrap();
-            let point = |start| (start..start + 4).map(F::from_u64).collect::<Vec<_>>();
-            let claim = |values, start| {
-                let point = point(start);
+            let norm = Norm {
+                rows: 3,
+                bits: 4,
+                epsilon: 5,
+                center,
+                gain: &[16; 3],
+                bias: &[0; 3],
+            };
+            let witness = norm.witness(&input).unwrap();
+            let claim = |values: &[i32], start| {
+                let point = (start..start + 4).map(F::from_u64).collect::<Vec<_>>();
                 Claim {
-                    value: evaluate(values, &point),
+                    value: shape.eval(values, &point),
                     point,
                 }
             };
             let carry = [claim(&input, 2)];
-            let output = [claim(&actual, 6), claim(&actual, 10)];
+            let outputs = [claim(&witness.result, 6), claim(&witness.result, 10)];
             let tag = [0x45; 32];
-            let mut prover = prover_transcript::<Keccak>(&tag, b"");
-            let (proof, reduction) = norm.prove(&input, &output, &carry, &mut prover).unwrap();
-            assert_eq!(
-                evaluate(&input, &reduction.input.point),
-                reduction.input.value
-            );
+            let mut transcript = prover_transcript::<Keccak>(&tag, b"");
+            let mut advice = Advice::new(true).unwrap();
+            advice.cut();
+            let slots = norm
+                .record(&mut advice, Some(&input), Some(&witness))
+                .unwrap();
+            advice.cut();
+            let widths = advice.widths();
+            transcript.append_bytes(&widths);
+            advice.seal().unwrap();
+            let plan = advice.windows(1).unwrap();
+            let roots = plan[0].commit(&advice, &mut transcript).unwrap();
+            let mut requests = Requests(Vec::new());
+            let mut messages = Messages::default();
+            let actual = norm
+                .reduce_model(
+                    &mut Channel::Send(&mut transcript, &mut messages, &advice),
+                    Some(&input),
+                    Some(&witness),
+                    &outputs,
+                    &carry,
+                    &slots,
+                    &mut requests,
+                )
+                .unwrap();
+            assert_eq!(actual.value, shape.eval(&input, &actual.point));
+            let mut proofs = Vec::new();
+            plan[0]
+                .prove(&advice, &roots, requests, &mut transcript, |item| {
+                    proofs.push(item);
+                    Ok(())
+                })
+                .unwrap();
 
-            let mut verifier = verifier_transcript::<Keccak>(&tag, b"", prover.narg_string());
-            let checked = norm.verify(&output, &carry, &proof, &mut verifier).unwrap();
-            assert_eq!(reduction.input, checked.input);
-            assert_eq!(reduction.cells, checked.cells);
-            assert_eq!(reduction.statistics, checked.statistics);
-
-            let mut false_carry = carry.clone();
-            false_carry[0].value += F::one();
-            let mut verifier = verifier_transcript::<Keccak>(&tag, b"", prover.narg_string());
-            assert!(norm
-                .verify(&output, &false_carry, &proof, &mut verifier)
-                .is_err());
+            let verify = |carry: &[Claim<F>]| -> Result<Claim<F>> {
+                let mut t = verifier_transcript::<Keccak>(&tag, b"", transcript.narg_string());
+                let mut advice = Advice::new(false)?;
+                advice.cut();
+                let slots = norm.record(&mut advice, None, None)?;
+                advice.cut();
+                advice.bind_widths(&widths)?;
+                t.append_bytes(&widths);
+                let plan = advice.windows(1)?;
+                plan[0].bind(&roots, &mut t)?;
+                let mut io = Channel::checking(&mut t, &messages);
+                let mut requests = Requests(Vec::new());
+                let result =
+                    norm.reduce_model(&mut io, None, None, &outputs, carry, &slots, &mut requests)?;
+                io.finish()?;
+                let mut groups = proofs.iter().cloned();
+                plan[0].verify(&advice, requests, &roots, &mut t, || {
+                    groups.next().ok_or("missing BitZ group")
+                })?;
+                t.check_eof().map_err(|_| "extra transcript bytes")?;
+                Ok(result)
+            };
+            assert_eq!(verify(&carry).unwrap(), actual);
+            let mut invalid = carry;
+            invalid[0].value += F::one();
+            assert!(verify(&invalid).is_err());
         }
     }
 }

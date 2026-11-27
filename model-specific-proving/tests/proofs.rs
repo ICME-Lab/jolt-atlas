@@ -1,3 +1,5 @@
+use std::io::Cursor;
+
 use model_specific_proving::{
     layers::{
         Activation, Attention, Mlp, NormalizationKind, NormalizationParameters, Projection,
@@ -92,10 +94,7 @@ fn fixture_with_scores(
         segments: (!decoder).then_some(&[0, 0, 8, -8]),
     };
     let arch = if decoder {
-        Architecture::Decoder {
-            final_norm: norm,
-            logits_bias: &[0; 6],
-        }
+        Architecture::Decoder { final_norm: norm }
     } else {
         Architecture::Encoder {
             embedding_norm: norm,
@@ -104,14 +103,29 @@ fn fixture_with_scores(
     Model::new(rows, 2, embeddings, layers, arch).unwrap()
 }
 
+fn config(positions: std::ops::Range<usize>) -> TopKConfig {
+    TopKConfig {
+        positions,
+        k: 2,
+        rows_per_block: 2,
+        vocab_per_block: 4,
+    }
+}
+
 #[test]
 fn proves_two_decoder_layers_with_grouped_advice() {
     let model = fixture(true, 3, 2, false);
     let tokens = [0, 1, 2];
-    let (output, proof) = model.prove(&tokens, None).unwrap();
-    assert_eq!(output.len(), 18);
-    model.verify(&tokens, None, &output, &proof).unwrap();
-    assert!(model.verify(&[0, 2, 2], None, &output, &proof).is_err());
+    let cfg = config(0..3);
+    let mut proof = Cursor::new(Vec::new());
+    let output = model.prove_top_k_to(&tokens, &cfg, &mut proof).unwrap();
+    assert_eq!(output.len(), 3);
+    model
+        .verify_top_k_from(&tokens, &cfg, &output, &mut proof)
+        .unwrap();
+    assert!(model
+        .verify_top_k_from(&[0, 2, 2], &cfg, &output, proof)
+        .is_err());
 }
 
 #[test]
@@ -119,68 +133,53 @@ fn proves_causal_attention_across_lookup_tile_boundary() {
     for (rows, varied) in [(65, false), (128, false), (128, true)] {
         let model = fixture_with_scores(true, rows, 1, false, varied);
         let tokens: Vec<_> = (0..rows).map(|i| i % 6).collect();
-        let (output, proof) = model.prove(&tokens, None).unwrap();
-        assert_eq!(output.len(), tokens.len() * 6);
-        model.verify(&tokens, None, &output, &proof).unwrap();
+        let cfg = config(rows - 1..rows);
+        let mut proof = Cursor::new(Vec::new());
+        let output = model.prove_top_k_to(&tokens, &cfg, &mut proof).unwrap();
+        model
+            .verify_top_k_from(&tokens, &cfg, &output, proof)
+            .unwrap();
     }
 }
 
 #[test]
 fn proves_encoder_with_public_segments() {
-    let model = fixture(false, 3, 2, false);
-    let tokens = [0, 1, 2];
-    let segments = [0, 1, 0];
-    let (output, proof) = model.prove(&tokens, Some(&segments)).unwrap();
-    assert_eq!(model.cls(&output).unwrap().len(), 2);
-    model
-        .verify(&tokens, Some(&segments), &output, &proof)
-        .unwrap();
-    assert!(model
-        .verify(&tokens, Some(&[0, 0, 0]), &output, &proof)
-        .is_err());
-
-    let rows = 128;
-    let model = fixture(false, rows, 2, false);
-    let tokens: Vec<_> = (0..rows).map(|i| i % 6).collect();
-    let segments = vec![0; rows];
-    let (output, proof) = model.prove(&tokens, Some(&segments)).unwrap();
-    model
-        .verify(&tokens, Some(&segments), &output, &proof)
-        .unwrap();
+    for rows in [3, 128] {
+        let model = fixture(false, rows, 2, false);
+        let tokens: Vec<_> = (0..rows).map(|i| i % 6).collect();
+        let mut segments = vec![0; rows];
+        segments[1] = 1;
+        let mut proof = Cursor::new(Vec::new());
+        let output = model
+            .prove_to(&tokens, Some(&segments), &mut proof)
+            .unwrap();
+        assert_eq!(model.cls(&output).unwrap().len(), 2);
+        model
+            .verify_from(&tokens, Some(&segments), &output, &mut proof)
+            .unwrap();
+        segments[1] = 0;
+        assert!(model
+            .verify_from(&tokens, Some(&segments), &output, proof)
+            .is_err());
+    }
 }
 
 #[test]
 fn proves_top_k_and_picks_the_lower_id_on_ties() {
     let model = fixture(true, 3, 1, false);
     let tokens = [0, 1, 2];
-    let (logits, _) = model.prove(&tokens, None).unwrap();
-    let cfg = TopKConfig {
-        positions: 0..3,
-        k: 2,
-        rows_per_block: 2,
-        vocab_per_block: 4,
-    };
-    let (mut candidates, proof) = model.prove_top_k(&tokens, &cfg).unwrap();
-    let expected: Vec<_> = logits
-        .chunks_exact(6)
-        .map(|row| {
-            let mut r: Vec<_> = row
-                .iter()
-                .enumerate()
-                .map(|(id, &logit)| Candidate { id, logit })
-                .collect();
-            r.sort_unstable_by_key(|c| (-i64::from(c.logit), c.id));
-            r.truncate(2);
-            r
-        })
-        .collect();
-    assert_eq!(candidates, expected);
+    let cfg = config(0..3);
+    let mut proof = Cursor::new(Vec::new());
+    let mut candidates = model.prove_top_k_to(&tokens, &cfg, &mut proof).unwrap();
+    let expected = [[(0, 9), (2, 9)], [(1, 9), (4, 9)], [(2, 11), (5, 11)]]
+        .map(|row| row.map(|(id, logit)| Candidate { id, logit }));
+    assert_eq!(candidates, expected.map(Vec::from));
     model
-        .verify_top_k(&tokens, &cfg, &candidates, &proof)
+        .verify_top_k_from(&tokens, &cfg, &candidates, &mut proof)
         .unwrap();
     candidates[0][0].logit += 1;
     assert!(model
-        .verify_top_k(&tokens, &cfg, &candidates, &proof)
+        .verify_top_k_from(&tokens, &cfg, &candidates, proof)
         .is_err());
 }
 
@@ -188,20 +187,12 @@ fn proves_top_k_and_picks_the_lower_id_on_ties() {
 fn streams_top_k_proof_and_reads_it_back() {
     let model = fixture(true, 3, 2, true);
     let tokens = [0, 1, 2];
-    let cfg = TopKConfig {
-        positions: 0..3,
-        k: 2,
-        rows_per_block: 2,
-        vocab_per_block: 4,
-    };
-    let (expected, _) = model.prove_top_k(&tokens, &cfg).unwrap();
-    let mut archive = std::io::Cursor::new(Vec::new());
+    let cfg = config(0..3);
+    let mut archive = Cursor::new(Vec::new());
     let actual = model.prove_top_k_to(&tokens, &cfg, &mut archive).unwrap();
-    assert_eq!(actual, expected);
     model
         .verify_top_k_from(&tokens, &cfg, &actual, &mut archive)
         .unwrap();
-
     archive.get_mut().push(0);
     assert!(model
         .verify_top_k_from(&tokens, &cfg, &actual, archive)
@@ -211,7 +202,12 @@ fn streams_top_k_proof_and_reads_it_back() {
 #[test]
 fn activates_gate_before_multiplying_by_up_projection() {
     let model = fixture(true, 1, 1, true);
-    let (output, proof) = model.prove(&[0], None).unwrap();
-    assert_eq!(output[0], -9);
-    model.verify(&[0], None, &output, &proof).unwrap();
+    let cfg = TopKConfig {
+        k: 6,
+        ..config(0..1)
+    };
+    let mut proof = Cursor::new(Vec::new());
+    let output = model.prove_top_k_to(&[0], &cfg, &mut proof).unwrap();
+    assert_eq!(output[0].iter().find(|c| c.id == 0).unwrap().logit, -9);
+    model.verify_top_k_from(&[0], &cfg, &output, proof).unwrap();
 }

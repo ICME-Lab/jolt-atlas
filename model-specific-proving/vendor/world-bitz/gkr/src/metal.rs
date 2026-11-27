@@ -21,13 +21,9 @@ pub(super) struct Leaves<'a> {
 impl<'a> Leaves<'a> {
     pub(super) fn new(lut: &'a LutLayers, point: &'a [Field]) -> Option<Self> {
         const LIBRARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/leaf.metallib"));
-        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let trees = 1 << lut.log_trees;
         let count = 1usize << (point.len() - 2);
-        if trees < 16384
-            || count < trees
-            || !*ENABLED.get_or_init(|| std::env::var("ATLAS_BITZ_METAL").as_deref() != Ok("0"))
-        {
+        if trees < 16384 || count < trees {
             return None;
         }
 
